@@ -1,0 +1,1 @@
+put TypeScript interfaces and type definitions here

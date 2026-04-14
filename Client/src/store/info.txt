@@ -1,0 +1,1 @@
+put state management here like redux, zustand, etc.
