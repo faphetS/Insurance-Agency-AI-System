@@ -48,7 +48,10 @@ export const whatsappController = {
     const inbound = inboundResult.data;
     const chatId = inbound.senderData.chatId;
     const senderName = inbound.senderData.senderName ?? null;
-    const textMessage = inbound.messageData.textMessageData?.textMessage ?? "";
+    const textMessage =
+      inbound.messageData.textMessageData?.textMessage ??
+      inbound.messageData.extendedTextMessageData?.text ??
+      "";
     const idMessage = inbound.idMessage;
 
     // Derive phone from chatId (format: "1234567890@c.us" or "group@g.us")
