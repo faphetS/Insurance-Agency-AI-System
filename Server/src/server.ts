@@ -18,6 +18,9 @@ import rateLimit from "express-rate-limit";
 
 const app = express();
 
+// Trust the first reverse proxy (Render / Vercel) so req.ip + rate-limit key work.
+app.set("trust proxy", 1);
+
 // --- Middleware stack (order matters) ---
 
 // 1. Request ID — trace every request
