@@ -118,7 +118,7 @@ export const whatsappController = {
                 phone: contactPhone,
                 status: "new",
                 pipeline_stage: "new_lead",
-                source_channel: "whatsapp",
+                source_channel: "wa",
                 inquiry_type: "general",
                 id_validated: false,
                 assigned_to: staffRow.id,
