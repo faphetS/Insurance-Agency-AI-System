@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Send, Bot, User, ExternalLink, Clock, CheckSquare, X } from "lucide-react";
+import { toast } from "sonner";
 import { useMessages, usePauseBotMutation, useClientTasks } from "@/features/pipeline/hooks";
 import { sendManualMessage } from "@/features/pipeline/api";
 import type { PipelineRow, ConversationRow, MessageRow } from "@/features/pipeline/types";
@@ -80,8 +81,11 @@ function ConversationBody({ conversation }: { conversation: ConversationRow }) {
     try {
       pauseBot({ conversationId: conversation.id, paused: true });
       await sendManualMessage({ chatId: conversation.whatsapp_chat_id, message: msg });
-    } catch {
-      // non-critical
+    } catch (err) {
+      toast.error("Failed to send message", {
+        description: err instanceof Error ? err.message : "Check the backend URL / login",
+      });
+      setReply(msg);
     } finally {
       setSending(false);
     }

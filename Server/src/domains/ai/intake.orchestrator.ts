@@ -301,6 +301,30 @@ export async function handleIntake(
   chatId: string,
   payload: MessagePayload,
 ): Promise<{ consumed: boolean }> {
+  // 0. Respect bot_settings.enabled — if bot is off, skip intake entirely
+  const { data: botSettings } = await supabaseAdmin
+    .from("bot_settings")
+    .select("enabled")
+    .eq("id", 1)
+    .single();
+
+  if (!botSettings?.enabled) {
+    logger.info({ conversationId }, "intake: bot disabled — skipping");
+    return { consumed: false };
+  }
+
+  // 0b. Respect per-conversation pause
+  const { data: conv } = await supabaseAdmin
+    .from("conversations")
+    .select("bot_paused")
+    .eq("id", conversationId)
+    .single();
+
+  if (conv?.bot_paused) {
+    logger.info({ conversationId }, "intake: conversation paused — skipping");
+    return { consumed: false };
+  }
+
   // 1. Load intake state
   const { data: client, error: clientErr } = await supabaseAdmin
     .from("clients")

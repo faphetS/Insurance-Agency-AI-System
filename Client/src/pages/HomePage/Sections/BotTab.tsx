@@ -93,18 +93,16 @@ function Toggle({
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className="relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors duration-200"
+        className="relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors duration-200"
         style={{
           backgroundColor: checked ? "#6366f1" : "rgba(255,255,255,0.08)",
-          border: "1px solid rgba(255,255,255,0.1)",
           boxSizing: "border-box",
         }}
       >
         <span
-          className="absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full shadow-sm transition-all duration-200"
+          className="block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200"
           style={{
-            backgroundColor: "#fff",
-            left: checked ? "calc(100% - 22px)" : "2px",
+            transform: checked ? "translateX(20px)" : "translateX(0)",
           }}
         />
       </button>

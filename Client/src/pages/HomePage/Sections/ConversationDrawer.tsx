@@ -3,6 +3,7 @@ import { Send, Bot, User, ExternalLink, Clock, CheckSquare } from "lucide-react"
 import { Drawer } from "@/components/ui/Drawer";
 import { Badge } from "@/components/ui/Badge";
 import { useMessages, usePauseBotMutation, useClientTasks } from "@/features/pipeline/hooks";
+import { toast } from "sonner";
 import { sendManualMessage } from "@/features/pipeline/api";
 import type { PipelineRow, ConversationRow, MessageRow } from "@/features/pipeline/types";
 import { STAGE_LABELS } from "@/features/pipeline/types";
@@ -81,8 +82,11 @@ function ConversationTab({
         chatId: conversation.whatsapp_chat_id,
         message: msg,
       });
-    } catch {
-      // silently fail — message send error is non-critical for this MVP
+    } catch (err) {
+      toast.error("Failed to send message", {
+        description: err instanceof Error ? err.message : "Check the backend URL / login",
+      });
+      setReply(msg);
     } finally {
       setSending(false);
     }
