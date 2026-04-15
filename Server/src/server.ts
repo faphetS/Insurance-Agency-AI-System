@@ -1,42 +1,132 @@
+import cookieParser from "cookie-parser";
 import cors from "cors";
-import express, { Application, ErrorRequestHandler, Request, Response } from "express";
+import express, { type Request, type Response } from "express";
+import { setWebhookSettings } from "./domains/whatsapp/whatsapp.service.js";
 import helmet from "helmet";
+import hpp from "hpp";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Options, HttpLogger } from "pino-http";
+import pinoHttpImport from "pino-http";
+const pinoHttp = pinoHttpImport as unknown as (opts?: Options) => HttpLogger<IncomingMessage, ServerResponse>;
 import { env } from "./config/env.js";
+import { logger } from "./config/logger.js";
+import { AppError, globalErrorHandler } from "./lib/errors.js";
+import { audit } from "./middleware/audit.js";
+import { requestId } from "./middleware/requestId.js";
 import apiRoutes from "./routes/index.js";
+import rateLimit from "express-rate-limit";
 
-const app: Application = express();
+const app = express();
 
-app.use(helmet());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(cors({
-  origin: env.FRONTEND_URL,
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+// --- Middleware stack (order matters) ---
 
-app.get("/", (req: Request, res: Response) => {
-  res.json({ status: "server is running good" });
-});
-app.get("/health", (req: Request, res: Response) => {
-  res.json({ status: "ok" });
+// 1. Request ID — trace every request
+app.use(requestId);
+
+// 2. CORS — must be before helmet to handle preflight correctly
+app.use(
+  cors({
+    origin: env.ALLOWED_ORIGINS,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
+
+// 3. Security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'", env.SUPABASE_URL],
+      },
+    },
+    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  }),
+);
+
+// 4. Structured logging
+app.use(
+  pinoHttp({
+    logger,
+    customProps: (req) => ({ requestId: (req as unknown as Request).id }),
+    autoLogging: { ignore: (req) => req.url === "/health" },
+  }),
+);
+
+// 5. Body parsing with size limits
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+
+// 6. Cookie parsing
+app.use(cookieParser());
+
+// 7. HTTP parameter pollution protection
+app.use(hpp());
+
+// 8. Rate limiting
+app.use(
+  "/api",
+  rateLimit({
+    windowMs: env.RATE_LIMIT_WINDOW_MS,
+    max: env.RATE_LIMIT_MAX,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { status: "error", code: "RATE_LIMITED", message: "Too many requests" },
+  }),
+);
+
+// 9. Audit logging for mutations
+app.use(audit);
+
+// --- Routes ---
+
+app.get("/health", (_req: Request, res: Response) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 app.use("/api", apiRoutes);
 
-const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: "Something went wrong" });
-};
+// --- 404 handler for unmatched routes ---
+app.use((_req: Request, _res: Response) => {
+  throw new AppError(404, "Route not found", "ROUTE_NOT_FOUND");
+});
 
-app.use(errorHandler);
+// --- Global error handler (must be last) ---
+app.use(globalErrorHandler);
 
-const startServer = async () => {
-  //await database();
-  app.listen(env.PORT, () => {
-    console.log(` Server is running on: ${env.BACKEND_URL}`);
+// --- Graceful shutdown ---
+const server = app.listen(env.PORT, () => {
+  logger.info(`Server running on ${env.BACKEND_URL} [${env.NODE_ENV}]`);
+
+  // Register GreenAPI webhook on boot (best-effort, non-blocking)
+  if (env.BACKEND_URL) {
+    const webhookUrl = `${env.BACKEND_URL}/api/whatsapp/webhook`;
+    setWebhookSettings(webhookUrl)
+      .then(() => logger.info({ webhookUrl }, "GreenAPI webhook registered"))
+      .catch((err: unknown) =>
+        logger.warn({ err, webhookUrl }, "GreenAPI webhook registration failed — continuing"),
+      );
+  }
+});
+
+function shutdown(signal: string) {
+  logger.info(`${signal} received — shutting down gracefully`);
+  server.close(() => {
+    logger.info("HTTP server closed");
+    process.exit(0);
   });
+
+  // Force exit after 10s if connections won't close
+  setTimeout(() => {
+    logger.error("Forced shutdown after timeout");
+    process.exit(1);
+  }, 10_000);
 }
 
-startServer();
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
