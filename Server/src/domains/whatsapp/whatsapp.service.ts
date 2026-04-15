@@ -59,6 +59,36 @@ export async function getQrCode(): Promise<{
   );
 }
 
+export async function sendInteractiveButtons(
+  chatId: string,
+  body: string,
+  buttons: { buttonId: string; buttonText: string }[],
+  footer?: string,
+): Promise<{ idMessage: string }> {
+  if (buttons.length === 0 || buttons.length > 3) {
+    throw new AppError(400, "buttons must have 1–3 items", "INVALID_BUTTONS");
+  }
+  for (const btn of buttons) {
+    if (btn.buttonText.length > 25) {
+      throw new AppError(
+        400,
+        `buttonText "${btn.buttonText}" exceeds 25 characters`,
+        "INVALID_BUTTON_TEXT",
+      );
+    }
+  }
+
+  return request<{ idMessage: string }>("POST", "sendInteractiveButtonsReply", {
+    chatId,
+    message: body,
+    footer: footer ?? "",
+    buttons: buttons.map((b) => ({
+      buttonId: b.buttonId,
+      buttonText: b.buttonText,
+    })),
+  });
+}
+
 export async function setWebhookSettings(webhookUrl: string): Promise<void> {
   await request<unknown>("POST", "setSettings", {
     webhookUrl,

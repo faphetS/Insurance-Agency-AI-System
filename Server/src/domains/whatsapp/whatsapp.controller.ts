@@ -4,8 +4,13 @@ import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { UnauthorizedError } from "../../lib/errors.js";
 import { handleIncomingMessage } from "../ai/ai.orchestrator.js";
+import { handleIntake } from "../ai/intake.orchestrator.js";
 import * as whatsappService from "./whatsapp.service.js";
-import { incomingMessageSchema, webhookPayloadSchema } from "./whatsapp.validator.js";
+import {
+  incomingMessageSchema,
+  webhookPayloadSchema,
+  extractPayload,
+} from "./whatsapp.validator.js";
 
 export const whatsappController = {
   /**
@@ -24,15 +29,18 @@ export const whatsappController = {
     // 2. Parse payload — on validation failure, still return 200 to stop retries
     const looseResult = webhookPayloadSchema.safeParse(req.body);
     if (!looseResult.success) {
-      logger.warn({ body: req.body, errors: looseResult.error.errors }, "Webhook parse failed — ignoring");
+      logger.warn(
+        { body: req.body, errors: looseResult.error.errors },
+        "Webhook parse failed — ignoring",
+      );
       res.status(200).json({ ok: true });
       return;
     }
 
-    const payload = looseResult.data;
+    const rawPayload = looseResult.data;
 
     // 3. Only act on inbound messages
-    if (payload.typeWebhook !== "incomingMessageReceived") {
+    if (rawPayload.typeWebhook !== "incomingMessageReceived") {
       res.status(200).json({ ok: true });
       return;
     }
@@ -40,7 +48,10 @@ export const whatsappController = {
     // Narrow to the full inbound schema
     const inboundResult = incomingMessageSchema.safeParse(req.body);
     if (!inboundResult.success) {
-      logger.warn({ errors: inboundResult.error.errors }, "incomingMessageReceived payload malformed — ignoring");
+      logger.warn(
+        { errors: inboundResult.error.errors },
+        "incomingMessageReceived payload malformed — ignoring",
+      );
       res.status(200).json({ ok: true });
       return;
     }
@@ -48,11 +59,18 @@ export const whatsappController = {
     const inbound = inboundResult.data;
     const chatId = inbound.senderData.chatId;
     const senderName = inbound.senderData.senderName ?? null;
-    const textMessage =
-      inbound.messageData.textMessageData?.textMessage ??
-      inbound.messageData.extendedTextMessageData?.text ??
-      "";
     const idMessage = inbound.idMessage;
+
+    // Extract normalised payload (text | image | document)
+    const payload = extractPayload(inbound);
+
+    // Derive the body to store in messages table
+    const messageBody =
+      payload.kind === "text"
+        ? payload.text
+        : payload.kind === "image"
+          ? payload.caption ?? "[image]"
+          : payload.caption ?? "[document]";
 
     // Derive phone from chatId (format: "1234567890@c.us" or "group@g.us")
     const contactPhone = chatId.split("@")[0] ?? chatId;
@@ -74,7 +92,6 @@ export const whatsappController = {
 
     if (convErr || !conversation) {
       logger.error({ chatId, convErr }, "Failed to upsert conversation");
-      // Still return 200 to avoid GreenAPI retries
       res.status(200).json({ ok: true });
       return;
     }
@@ -82,8 +99,8 @@ export const whatsappController = {
     const conversationId = conversation.id;
 
     // 3b. Link client if conversation has no client_id yet
-    // We re-fetch the full conversation row to check client_id, since upsert
-    // only returns id above.
+    let linkedClientId: string | null = null;
+
     try {
       const { data: convRow } = await supabaseAdmin
         .from("conversations")
@@ -127,13 +144,22 @@ export const whatsappController = {
               .single();
 
             if (clientErr) {
-              logger.warn({ contactPhone, clientErr }, "Failed to insert new client from webhook — skipping link");
+              logger.warn(
+                { contactPhone, clientErr },
+                "Failed to insert new client from webhook — skipping link",
+              );
             } else {
               clientId = newClient?.id ?? null;
-              logger.info({ contactPhone, clientId }, "Created new client from inbound WhatsApp");
+              logger.info(
+                { contactPhone, clientId },
+                "Created new client from inbound WhatsApp",
+              );
             }
           } else {
-            logger.warn({ contactPhone }, "No active staff found — cannot assign new client, skipping link");
+            logger.warn(
+              { contactPhone },
+              "No active staff found — cannot assign new client, skipping link",
+            );
           }
         }
 
@@ -144,14 +170,26 @@ export const whatsappController = {
             .eq("id", conversationId);
 
           if (linkErr) {
-            logger.warn({ conversationId, clientId, linkErr }, "Failed to link client_id to conversation");
+            logger.warn(
+              { conversationId, clientId, linkErr },
+              "Failed to link client_id to conversation",
+            );
           } else {
-            logger.info({ conversationId, clientId }, "Linked conversation to client");
+            logger.info(
+              { conversationId, clientId },
+              "Linked conversation to client",
+            );
+            linkedClientId = clientId;
           }
         }
+      } else if (convRow?.client_id) {
+        linkedClientId = convRow.client_id;
       }
     } catch (clientLinkErr) {
-      logger.error({ conversationId, clientLinkErr }, "Unexpected error during client link — continuing");
+      logger.error(
+        { conversationId, clientLinkErr },
+        "Unexpected error during client link — continuing",
+      );
     }
 
     // 3d. Insert inbound message
@@ -159,18 +197,44 @@ export const whatsappController = {
       conversation_id: conversationId,
       direction: "inbound",
       sent_by: "customer",
-      body: textMessage,
+      body: messageBody,
       whatsapp_message_id: idMessage,
       status: "received",
     });
 
     if (msgErr) {
-      logger.error({ conversationId, msgErr }, "Failed to insert inbound message");
+      logger.error(
+        { conversationId, msgErr },
+        "Failed to insert inbound message",
+      );
     }
 
-    // 3e. Fire-and-forget AI orchestration
+    // 3e. Run intake orchestrator if client is linked
+    if (linkedClientId) {
+      try {
+        const { consumed } = await handleIntake(
+          conversationId,
+          linkedClientId,
+          chatId,
+          payload,
+        );
+
+        if (consumed) {
+          res.status(200).json({ ok: true });
+          return;
+        }
+      } catch (intakeErr) {
+        logger.error(
+          { conversationId, intakeErr },
+          "Intake orchestrator unhandled error — falling through to AI",
+        );
+      }
+    }
+
+    // 3f. Fire-and-forget AI orchestration (only if intake did not consume)
+    const textForAi = payload.kind === "text" ? payload.text : "";
     setImmediate(() => {
-      handleIncomingMessage(conversationId, textMessage).catch((err: unknown) => {
+      handleIncomingMessage(conversationId, textForAi).catch((err: unknown) => {
         logger.error({ conversationId, err }, "AI orchestrator unhandled error");
       });
     });
@@ -215,7 +279,10 @@ export const whatsappController = {
       .single();
 
     if (convErr || !conversation) {
-      logger.error({ chatId, convErr }, "Failed to upsert conversation for manual send");
+      logger.error(
+        { chatId, convErr },
+        "Failed to upsert conversation for manual send",
+      );
       throw new Error("Failed to resolve conversation");
     }
 
