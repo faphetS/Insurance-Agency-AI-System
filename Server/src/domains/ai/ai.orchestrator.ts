@@ -12,7 +12,7 @@ import * as whatsappService from "../whatsapp/whatsapp.service.js";
  */
 export async function handleIncomingMessage(
   conversationId: string,
-  _incomingText: string,
+  incomingText: string,
 ): Promise<void> {
   // 1. Fetch conversation — check bot_paused
   const { data: conversation, error: convErr } = await supabaseAdmin
@@ -70,6 +70,18 @@ export async function handleIncomingMessage(
       role: m.direction === "inbound" ? "user" : "model",
       text: m.body as string,
     }));
+
+  // Guarantee at least one user turn — avoids "contents are required" from
+  // Gemma when history fetch races the insert or message has no text body.
+  const trimmed = incomingText?.trim();
+  if (trimmed && (history.length === 0 || history[history.length - 1]?.text !== trimmed)) {
+    history.push({ role: "user", text: trimmed });
+  }
+
+  if (history.length === 0) {
+    logger.warn({ conversationId }, "No usable text to reply to — skipping Gemma");
+    return;
+  }
 
   // 4. Generate reply
   let reply: string;
