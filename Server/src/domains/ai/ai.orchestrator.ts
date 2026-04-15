@@ -105,7 +105,7 @@ export async function handleIncomingMessage(
       direction: "outbound",
       sent_by: "bot",
       body: reply,
-      status: "sending",
+      status: "sent",
     })
     .select("id")
     .single();
