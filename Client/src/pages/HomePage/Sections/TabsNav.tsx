@@ -1,12 +1,13 @@
 import { useSearchParams } from "react-router-dom";
 
-export type DashTab = "overview" | "pipeline" | "conversations" | "alerts";
+export type DashTab = "overview" | "pipeline" | "conversations" | "alerts" | "bot";
 
 const TABS: { key: DashTab; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "pipeline", label: "Pipeline" },
   { key: "conversations", label: "Conversations" },
   { key: "alerts", label: "Alerts" },
+  { key: "bot", label: "Bot" },
 ];
 
 interface TabsNavProps {
