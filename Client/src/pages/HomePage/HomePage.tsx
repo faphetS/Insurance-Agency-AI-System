@@ -1,96 +1,88 @@
-import { useNavigate } from "react-router-dom";
-import { LogOut } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { useMemo } from "react";
 import { useRealtimePipeline } from "@/features/pipeline/hooks";
-import { useAuthStore } from "@/stores/auth.store";
-import { SystemStatusSection } from "./Sections/SystemStatusSection";
-import { ConversationsSection } from "./Sections/ConversationsSection";
+import { usePipeline, useConversations } from "@/features/pipeline/hooks";
+import { TopBar } from "./Sections/TopBar";
+import { TabsNav } from "./Sections/TabsNav";
+import { OverviewTab } from "./Sections/OverviewTab";
 import { PipelineKanbanSection } from "./Sections/PipelineKanbanSection";
-import { FunnelStatsSection } from "./Sections/FunnelStatsSection";
+import { ConversationsTab } from "./Sections/ConversationsTab";
 import { AlertsSection } from "./Sections/AlertsSection";
+import type { DashTab } from "./Sections/TabsNav";
+
+// ── Alert count derivation (for badge on nav) ─────────────────────────────
+
+function useAlertCount() {
+  const { data: pipeline } = usePipeline();
+  const { data: conversations } = useConversations();
+
+  return useMemo(() => {
+    if (!pipeline) return 0;
+    const now = Date.now();
+
+    const convMap = new Map<string, { last_message_at: string; status: string }>();
+    (conversations ?? []).forEach((c) => {
+      if (c.client_id) convMap.set(c.client_id, c);
+    });
+
+    let count = 0;
+    pipeline.forEach((client) => {
+      if (!client.id) return;
+      const conv = convMap.get(client.id);
+
+      if (conv && conv.status === "open") {
+        const minutes = (now - new Date(conv.last_message_at).getTime()) / 60_000;
+        if (minutes > 30) count++;
+      }
+      if (client.time_in_stage_hours != null && client.time_in_stage_hours > 168) count++;
+      if (client.last_service_date) {
+        const due = new Date(client.last_service_date);
+        due.setMonth(due.getMonth() + 24);
+        const days = (due.getTime() - now) / 86_400_000;
+        if (days >= 0 && days <= 30) count++;
+      }
+    });
+    return count;
+  }, [pipeline, conversations]);
+}
+
+// ── Main component ────────────────────────────────────────────────────────
 
 export default function HomePage() {
   // Enable real-time subscriptions for the whole dashboard
   useRealtimePipeline();
 
-  const navigate = useNavigate();
-  const signOut = useAuthStore((s) => s.signOut);
-  const user = useAuthStore((s) => s.user);
-
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/login", { replace: true });
-  };
+  const [params] = useSearchParams();
+  const activeTab = (params.get("tab") ?? "overview") as DashTab;
+  const alertCount = useAlertCount();
 
   return (
-    <div className="min-h-screen bg-neutral-50">
-      {/* Sticky top bar */}
-      <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/90 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-screen-2xl items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-neutral-900">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <rect x="2" y="2" width="6" height="6" rx="1.5" fill="white" />
-                <rect x="10" y="2" width="6" height="6" rx="1.5" fill="white" opacity="0.6" />
-                <rect x="2" y="10" width="6" height="6" rx="1.5" fill="white" opacity="0.6" />
-                <rect x="10" y="10" width="6" height="6" rx="1.5" fill="white" opacity="0.3" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-sm font-bold leading-tight text-neutral-900">Pipeline Dashboard</p>
-              <p className="text-[11px] leading-tight text-neutral-400">Insurance Agency AI</p>
-            </div>
+    <div className="min-h-screen" style={{ backgroundColor: "#020617" }}>
+      <TopBar />
+      <TabsNav alertCount={alertCount} />
+
+      <main>
+        {activeTab === "overview" && <OverviewTab />}
+
+        {activeTab === "pipeline" && (
+          <div className="mx-auto max-w-screen-2xl px-5 py-6">
+            <p
+              className="mb-4 text-xs font-bold uppercase tracking-widest"
+              style={{ color: "#475569" }}
+            >
+              Client Pipeline
+            </p>
+            <PipelineKanbanSection />
           </div>
+        )}
 
-          {/* Right side: system status + sign out */}
-          <div className="flex items-center gap-4">
-            {/* Compact system status inside header */}
-            <div className="hidden sm:block">
-              <SystemStatusSection />
-            </div>
+        {activeTab === "conversations" && <ConversationsTab />}
 
-            {/* Sign out */}
-            <div className="flex items-center gap-2.5">
-              {user?.email && (
-                <span className="hidden font-mono text-[10px] uppercase tracking-widest text-neutral-400 md:block">
-                  {user.email}
-                </span>
-              )}
-              <button
-                onClick={handleSignOut}
-                title="Sign out"
-                className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 font-sans text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:bg-neutral-50 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-neutral-900"
-              >
-                <LogOut size={13} aria-hidden="true" />
-                <span className="hidden sm:inline">Sign out</span>
-              </button>
-            </div>
+        {activeTab === "alerts" && (
+          <div className="mx-auto max-w-screen-2xl px-5 py-6">
+            <AlertsSection />
           </div>
-        </div>
-
-        {/* Mobile system status row */}
-        <div className="border-t border-neutral-100 px-4 py-3 sm:hidden">
-          <SystemStatusSection />
-        </div>
-      </header>
-
-      {/* Main content */}
-      <main className="mx-auto max-w-screen-2xl px-4 py-6 md:px-6">
-        {/* Recent Conversations — primary "what's happening now" panel */}
-        <section className="mb-6">
-          <ConversationsSection />
-        </section>
-
-        {/* Kanban — full width, own horizontal scroll */}
-        <section className="mb-6">
-          <h2 className="mb-3 text-xs font-bold uppercase tracking-widest text-neutral-400">Client Pipeline</h2>
-          <PipelineKanbanSection />
-        </section>
-
-        {/* Bottom grid: Funnel Stats + Alerts */}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <FunnelStatsSection />
-          <AlertsSection />
-        </div>
+        )}
       </main>
     </div>
   );
