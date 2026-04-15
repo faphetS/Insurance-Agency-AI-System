@@ -1,27 +1,44 @@
 import { create } from "zustand";
-
-export interface AuthUser {
-  id: string;
-  email: string;
-  role: string;
-}
+import type { Session, User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 
 interface AuthState {
-  user: AuthUser | null;
-  accessToken: string | null;
+  session: Session | null;
+  user: User | null;
+  isAdmin: boolean;
   isLoading: boolean;
-  setUser: (user: AuthUser | null) => void;
-  setAccessToken: (token: string | null) => void;
-  setLoading: (loading: boolean) => void;
+  setSession: (session: Session | null) => void;
+  signOut: () => Promise<void>;
+  /** Derived access token — convenience getter for Axios interceptor */
+  get accessToken(): string | null;
+  /** Reset to unauthenticated state (used by Axios 401 handler) */
   clear: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
+  session: null,
   user: null,
-  accessToken: null,
+  isAdmin: false,
   isLoading: true,
-  setUser: (user) => set({ user }),
-  setAccessToken: (accessToken) => set({ accessToken }),
-  setLoading: (isLoading) => set({ isLoading }),
-  clear: () => set({ user: null, accessToken: null, isLoading: false }),
+
+  get accessToken() {
+    return get().session?.access_token ?? null;
+  },
+
+  setSession: (session) =>
+    set({
+      session,
+      user: session?.user ?? null,
+      isAdmin: session?.user?.app_metadata?.["role"] === "admin",
+      isLoading: false,
+    }),
+
+  signOut: async () => {
+    await supabase.auth.signOut();
+    set({ session: null, user: null, isAdmin: false, isLoading: false });
+  },
+
+  clear: () => {
+    set({ session: null, user: null, isAdmin: false, isLoading: false });
+  },
 }));

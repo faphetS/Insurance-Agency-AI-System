@@ -1,4 +1,7 @@
+import { useNavigate } from "react-router-dom";
+import { LogOut } from "lucide-react";
 import { useRealtimePipeline } from "@/features/pipeline/hooks";
+import { useAuthStore } from "@/stores/auth.store";
 import { SystemStatusSection } from "./Sections/SystemStatusSection";
 import { ConversationsSection } from "./Sections/ConversationsSection";
 import { PipelineKanbanSection } from "./Sections/PipelineKanbanSection";
@@ -8,6 +11,15 @@ import { AlertsSection } from "./Sections/AlertsSection";
 export default function HomePage() {
   // Enable real-time subscriptions for the whole dashboard
   useRealtimePipeline();
+
+  const navigate = useNavigate();
+  const signOut = useAuthStore((s) => s.signOut);
+  const user = useAuthStore((s) => s.user);
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate("/login", { replace: true });
+  };
 
   return (
     <div className="min-h-screen bg-neutral-50">
@@ -29,9 +41,29 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Compact system status inside header */}
-          <div className="hidden sm:block">
-            <SystemStatusSection />
+          {/* Right side: system status + sign out */}
+          <div className="flex items-center gap-4">
+            {/* Compact system status inside header */}
+            <div className="hidden sm:block">
+              <SystemStatusSection />
+            </div>
+
+            {/* Sign out */}
+            <div className="flex items-center gap-2.5">
+              {user?.email && (
+                <span className="hidden font-mono text-[10px] uppercase tracking-widest text-neutral-400 md:block">
+                  {user.email}
+                </span>
+              )}
+              <button
+                onClick={handleSignOut}
+                title="Sign out"
+                className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 font-sans text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:bg-neutral-50 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-neutral-900"
+              >
+                <LogOut size={13} aria-hidden="true" />
+                <span className="hidden sm:inline">Sign out</span>
+              </button>
+            </div>
           </div>
         </div>
 
