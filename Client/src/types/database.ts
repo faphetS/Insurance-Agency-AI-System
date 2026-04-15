@@ -92,6 +92,9 @@ export type Database = {
           id_photo_url: string | null
           id_validated: boolean
           inquiry_type: string
+          intake_completed_at: string | null
+          intake_current_slot: string | null
+          intake_state: string
           last_service_date: string | null
           notes: string | null
           phone: string
@@ -110,6 +113,9 @@ export type Database = {
           id_photo_url?: string | null
           id_validated?: boolean
           inquiry_type: string
+          intake_completed_at?: string | null
+          intake_current_slot?: string | null
+          intake_state?: string
           last_service_date?: string | null
           notes?: string | null
           phone: string
@@ -128,6 +134,9 @@ export type Database = {
           id_photo_url?: string | null
           id_validated?: boolean
           inquiry_type?: string
+          intake_completed_at?: string | null
+          intake_current_slot?: string | null
+          intake_state?: string
           last_service_date?: string | null
           notes?: string | null
           phone?: string
@@ -506,6 +515,8 @@ export type Database = {
           id_photo_url: string | null
           id_validated: boolean | null
           inquiry_type: string | null
+          intake_current_slot: string | null
+          intake_state: string | null
           last_service_date: string | null
           latest_meeting_start_at: string | null
           notes: string | null
@@ -529,6 +540,8 @@ export type Database = {
           id_photo_url?: string | null
           id_validated?: boolean | null
           inquiry_type?: string | null
+          intake_current_slot?: string | null
+          intake_state?: string | null
           last_service_date?: string | null
           latest_meeting_start_at?: never
           notes?: string | null
@@ -552,6 +565,8 @@ export type Database = {
           id_photo_url?: string | null
           id_validated?: boolean | null
           inquiry_type?: string | null
+          intake_current_slot?: string | null
+          intake_state?: string | null
           last_service_date?: string | null
           latest_meeting_start_at?: never
           notes?: string | null

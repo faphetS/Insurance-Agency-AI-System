@@ -10,7 +10,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, ListChecks } from "lucide-react";
 import { usePipeline, useUpdateClientStage, useConversations } from "@/features/pipeline/hooks";
 import { ConversationDrawer } from "./ConversationDrawer";
 import type { PipelineRow, PipelineStage, ConversationRow } from "@/features/pipeline/types";
@@ -20,6 +20,54 @@ import {
   STAGE_COLORS,
   STAGE_STRIPE,
 } from "@/features/pipeline/types";
+
+// ── Intake slot maps ──────────────────────────────────────────────────────
+
+type IntakeSlot = "full_name" | "email" | "inquiry_type" | "id_photo" | "poa" | "done";
+
+const SLOT_INDEX: Record<IntakeSlot, number> = {
+  full_name: 1,
+  email: 2,
+  inquiry_type: 3,
+  id_photo: 4,
+  poa: 5,
+  done: 0,
+};
+
+const SLOT_LABEL: Record<IntakeSlot, string> = {
+  full_name: "name",
+  email: "email",
+  inquiry_type: "inquiry",
+  id_photo: "ID photo",
+  poa: "POA doc",
+  done: "",
+};
+
+// ── Intake chip ───────────────────────────────────────────────────────────
+
+function IntakeChip({ client }: { client: PipelineRow }) {
+  const row = client as any;
+  const state: string | null = row.intake_state ?? null;
+  const slot: IntakeSlot | null = row.intake_current_slot ?? null;
+
+  if (state !== "collecting" || !slot || slot === "done") return null;
+
+  const n = SLOT_INDEX[slot];
+  const label = SLOT_LABEL[slot];
+
+  return (
+    <span
+      className="mt-1.5 inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-300"
+      style={{
+        background: "rgba(99,102,241,0.12)",
+        borderColor: "rgba(99,102,241,0.3)",
+      }}
+    >
+      <ListChecks size={10} className="shrink-0" />
+      INTAKE {n}/5 · {label}
+    </span>
+  );
+}
 
 // ── Time-in-stage chip ────────────────────────────────────────────────────
 
@@ -84,8 +132,11 @@ function ClientCard({ client, stage, overlay = false, onClick }: ClientCardProps
         )}
       </div>
       <p className="mb-2 text-xs text-neutral-400 truncate">{client.inquiry_type ?? ""}</p>
-      <div className="flex items-center justify-between gap-2">
-        <TimeChip hours={client.time_in_stage_hours} />
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-col items-start">
+          <TimeChip hours={client.time_in_stage_hours} />
+          <IntakeChip client={client} />
+        </div>
         <div className="flex items-center gap-1.5">
           {client.open_tasks_count != null && client.open_tasks_count > 0 && (
             <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-amber-700">
@@ -181,9 +232,17 @@ function KanbanColumn({ stage, clients, onCardClick, isCollapsed, onToggle, isMo
         <span className="text-xs font-bold uppercase tracking-wide text-neutral-500">
           {STAGE_LABELS[stage]}
         </span>
-        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1.5 text-xs font-bold tabular-nums text-neutral-700 shadow-sm ring-1 ring-neutral-200">
-          {clients.length}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {stage === "new_lead" && (() => {
+            const inIntake = clients.filter((c) => (c as any).intake_state === "collecting").length;
+            return inIntake > 0 ? (
+              <span className="text-[10px] tabular-nums text-slate-500">({inIntake} in intake)</span>
+            ) : null;
+          })()}
+          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1.5 text-xs font-bold tabular-nums text-neutral-700 shadow-sm ring-1 ring-neutral-200">
+            {clients.length}
+          </span>
+        </div>
       </div>
 
       {/* Cards */}
