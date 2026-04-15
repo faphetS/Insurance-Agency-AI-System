@@ -11,9 +11,15 @@ const senderDataSchema = z.object({
 });
 
 const textMessageDataSchema = z.object({
+  typeMessage: z.string().optional(),
   textMessageData: z
     .object({
       textMessage: z.string(),
+    })
+    .optional(),
+  extendedTextMessageData: z
+    .object({
+      text: z.string(),
     })
     .optional(),
 });
