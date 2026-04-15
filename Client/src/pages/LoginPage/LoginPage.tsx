@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Lock, Mail, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAuthStore } from "@/stores/auth.store";
 
 const loginSchema = z.object({
   email: z.string().min(1, "Email is required").email("Invalid email address"),
@@ -27,7 +28,7 @@ export default function LoginPage() {
 
   const onSubmit = async (values: LoginFormValues) => {
     setServerError(null);
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: values.email,
       password: values.password,
     });
@@ -40,6 +41,12 @@ export default function LoginPage() {
           : error.message,
       );
       return;
+    }
+
+    // Push the session into the store synchronously so AuthGuard sees it
+    // on the very next render — avoids a race with the async onAuthStateChange.
+    if (data.session) {
+      useAuthStore.getState().setSession(data.session);
     }
 
     navigate("/", { replace: true });
