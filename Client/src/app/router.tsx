@@ -1,17 +1,34 @@
 /* eslint-disable react-refresh/only-export-components */
 import { lazy } from "react";
+import type { ComponentType } from "react";
 import { createBrowserRouter } from "react-router-dom";
 import App from "@/app/App";
 import { AuthGuard } from "@/app/AuthGuard";
+import { RouteError } from "@/app/RouteError";
 
-const HomePage = lazy(() => import("@/pages/HomePage/HomePage"));
-const NotFoundPage = lazy(() => import("@/pages/NotFoundPage"));
-const LoginPage = lazy(() => import("@/pages/LoginPage/LoginPage"));
+const lazyWithReload = <T extends ComponentType<unknown>>(
+  importer: () => Promise<{ default: T }>,
+) =>
+  lazy(() =>
+    importer().catch((err) => {
+      const key = "__chunk_reload_attempted";
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, "1");
+        window.location.reload();
+      }
+      throw err;
+    }),
+  );
+
+const HomePage = lazyWithReload(() => import("@/pages/HomePage/HomePage"));
+const NotFoundPage = lazyWithReload(() => import("@/pages/NotFoundPage"));
+const LoginPage = lazyWithReload(() => import("@/pages/LoginPage/LoginPage"));
 
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <App />,
+    errorElement: <RouteError />,
     children: [
       // Public routes
       {
