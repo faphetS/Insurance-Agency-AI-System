@@ -81,7 +81,80 @@ export const whatsappController = {
 
     const conversationId = conversation.id;
 
-    // 3b. Insert inbound message
+    // 3b. Link client if conversation has no client_id yet
+    // We re-fetch the full conversation row to check client_id, since upsert
+    // only returns id above.
+    try {
+      const { data: convRow } = await supabaseAdmin
+        .from("conversations")
+        .select("client_id")
+        .eq("id", conversationId)
+        .single();
+
+      if (convRow && convRow.client_id === null) {
+        // Look for an existing client keyed by phone
+        const { data: existingClient } = await supabaseAdmin
+          .from("clients")
+          .select("id")
+          .eq("phone", contactPhone)
+          .maybeSingle();
+
+        let clientId: string | null = existingClient?.id ?? null;
+
+        if (!clientId) {
+          // Need a valid assigned_to staff id — grab any active staff member as fallback
+          const { data: staffRow } = await supabaseAdmin
+            .from("staff")
+            .select("id")
+            .eq("is_active", true)
+            .limit(1)
+            .maybeSingle();
+
+          if (staffRow) {
+            const { data: newClient, error: clientErr } = await supabaseAdmin
+              .from("clients")
+              .insert({
+                full_name: senderName ?? contactPhone,
+                phone: contactPhone,
+                status: "new",
+                pipeline_stage: "new_lead",
+                source_channel: "whatsapp",
+                inquiry_type: "general",
+                id_validated: false,
+                assigned_to: staffRow.id,
+              })
+              .select("id")
+              .single();
+
+            if (clientErr) {
+              logger.warn({ contactPhone, clientErr }, "Failed to insert new client from webhook — skipping link");
+            } else {
+              clientId = newClient?.id ?? null;
+              logger.info({ contactPhone, clientId }, "Created new client from inbound WhatsApp");
+            }
+          } else {
+            logger.warn({ contactPhone }, "No active staff found — cannot assign new client, skipping link");
+          }
+        }
+
+        if (clientId) {
+          const { error: linkErr } = await supabaseAdmin
+            .from("conversations")
+            .update({ client_id: clientId })
+            .eq("id", conversationId);
+
+          if (linkErr) {
+            logger.warn({ conversationId, clientId, linkErr }, "Failed to link client_id to conversation");
+          } else {
+            logger.info({ conversationId, clientId }, "Linked conversation to client");
+          }
+        }
+      }
+    } catch (clientLinkErr) {
+      logger.error({ conversationId, clientLinkErr }, "Unexpected error during client link — continuing");
+    }
+
+    // 3d. Insert inbound message
     const { error: msgErr } = await supabaseAdmin.from("messages").insert({
       conversation_id: conversationId,
       direction: "inbound",
@@ -95,7 +168,7 @@ export const whatsappController = {
       logger.error({ conversationId, msgErr }, "Failed to insert inbound message");
     }
 
-    // 3c. Fire-and-forget AI orchestration
+    // 3e. Fire-and-forget AI orchestration
     setImmediate(() => {
       handleIncomingMessage(conversationId, textMessage).catch((err: unknown) => {
         logger.error({ conversationId, err }, "AI orchestrator unhandled error");
