@@ -32,6 +32,75 @@ export async function fetchConversations() {
   return data ?? [];
 }
 
+export interface ConversationWithLastMessage {
+  id: string;
+  contact_name: string | null;
+  contact_phone: string | null;
+  whatsapp_chat_id: string;
+  bot_paused: boolean;
+  status: string;
+  last_message_at: string;
+  client_id: string | null;
+  created_at: string;
+  last_message_body: string | null;
+  last_message_direction: string | null;
+  has_pending_reply: boolean;
+}
+
+export async function fetchConversationsWithLastMessage(
+  limit = 20,
+): Promise<ConversationWithLastMessage[]> {
+  // Fetch conversations ordered by recency
+  const { data: convs, error: convErr } = await supabase
+    .from("conversations")
+    .select("*")
+    .order("last_message_at", { ascending: false })
+    .limit(limit);
+  if (convErr) throw convErr;
+  if (!convs || convs.length === 0) return [];
+
+  const convIds = convs.map((c) => c.id);
+
+  // Fetch the latest message per conversation in one query
+  const { data: msgs, error: msgErr } = await supabase
+    .from("messages")
+    .select("id, conversation_id, body, direction, created_at")
+    .in("conversation_id", convIds)
+    .order("created_at", { ascending: false });
+  if (msgErr) throw msgErr;
+
+  // Build a map: conversation_id → latest message (first hit per conv since ordered DESC)
+  const latestMsgMap = new Map<
+    string,
+    { body: string | null; direction: string; created_at: string }
+  >();
+  for (const msg of msgs ?? []) {
+    if (!latestMsgMap.has(msg.conversation_id)) {
+      latestMsgMap.set(msg.conversation_id, {
+        body: msg.body,
+        direction: msg.direction,
+        created_at: msg.created_at,
+      });
+    }
+  }
+
+  // Build pending-reply map: true if the latest message is inbound (no outbound after it)
+  const pendingMap = new Map<string, boolean>();
+  for (const [convId, msg] of latestMsgMap) {
+    pendingMap.set(convId, msg.direction === "inbound");
+  }
+
+  return convs.map((c) => {
+    const latest = latestMsgMap.get(c.id);
+    return {
+      ...c,
+      last_message_body: latest?.body ?? null,
+      last_message_direction: latest?.direction ?? null,
+      has_pending_reply: pendingMap.get(c.id) ?? false,
+    };
+  });
+}
+
 export async function fetchMessages(conversationId: string) {
   const { data, error } = await supabase
     .from("messages")

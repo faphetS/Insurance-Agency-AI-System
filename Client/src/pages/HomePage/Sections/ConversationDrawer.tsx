@@ -15,6 +15,10 @@ interface ConversationDrawerProps {
   conversation: ConversationRow | null;
   open: boolean;
   onClose: () => void;
+  /** Display name override — used when client is null (contact came directly via WhatsApp) */
+  contactName?: string | null;
+  /** Phone override — used when client is null */
+  contactPhone?: string | null;
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────
@@ -217,34 +221,57 @@ function TasksTab({ clientId }: { clientId: string }) {
 
 // ── Main Component ────────────────────────────────────────────────────────
 
-export function ConversationDrawer({ client, conversation, open, onClose }: ConversationDrawerProps) {
+export function ConversationDrawer({
+  client,
+  conversation,
+  open,
+  onClose,
+  contactName,
+  contactPhone,
+}: ConversationDrawerProps) {
   const [activeTab, setActiveTab] = useState<Tab>("conversation");
 
-  if (!client) return null;
+  // Resolve display values — prefer client fields, fall back to conversation contact fields
+  const displayName =
+    client?.full_name ?? contactName ?? conversation?.contact_name ?? "Unknown";
+  const displayPhone =
+    client?.phone ?? contactPhone ?? conversation?.contact_phone ?? undefined;
 
-  const stage = (client.derived_stage ?? client.pipeline_stage ?? "") as keyof typeof STAGE_LABELS;
-  const stageLabel = STAGE_LABELS[stage] ?? stage;
+  // Without a client, only show the conversation tab
+  const hasClient = client !== null;
+  const stage = hasClient
+    ? ((client.derived_stage ?? client.pipeline_stage ?? "") as keyof typeof STAGE_LABELS)
+    : null;
+  const stageLabel = stage ? (STAGE_LABELS[stage] ?? stage) : null;
 
-  const tabs: { key: Tab; label: string }[] = [
-    { key: "conversation", label: "Conversation" },
-    { key: "details", label: "Client Details" },
-    { key: "tasks", label: "Tasks" },
-  ];
+  const tabs: { key: Tab; label: string }[] = hasClient
+    ? [
+        { key: "conversation", label: "Conversation" },
+        { key: "details", label: "Client Details" },
+        { key: "tasks", label: "Tasks" },
+      ]
+    : [{ key: "conversation", label: "Conversation" }];
+
+  // If the current activeTab is not available in the current tab list, reset to conversation
+  const resolvedTab: Tab =
+    tabs.some((t) => t.key === activeTab) ? activeTab : "conversation";
+
+  if (!open) return null;
 
   return (
     <Drawer
       open={open}
       onClose={onClose}
-      title={client.full_name ?? "Unknown"}
-      subtitle={client.phone ?? undefined}
+      title={displayName}
+      subtitle={displayPhone}
     >
       <div className="mb-5 flex items-center gap-2 flex-wrap">
-        <Badge variant="info">{stageLabel}</Badge>
-        {client.sla_breached && <Badge variant="warning">SLA Breached</Badge>}
+        {stageLabel && <Badge variant="info">{stageLabel}</Badge>}
+        {hasClient && client.sla_breached && <Badge variant="warning">SLA Breached</Badge>}
         {conversation?.bot_paused && <Badge variant="warning">Bot Paused</Badge>}
-        {client.phone && (
+        {displayPhone && (
           <a
-            href={`https://wa.me/${client.phone.replace(/\D/g, "")}`}
+            href={`https://wa.me/${displayPhone.replace(/\D/g, "")}`}
             target="_blank"
             rel="noreferrer"
             className="ml-auto flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
@@ -255,39 +282,44 @@ export function ConversationDrawer({ client, conversation, open, onClose }: Conv
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="mb-5 flex rounded-xl bg-neutral-100 p-1">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-colors ${
-              activeTab === tab.key
-                ? "bg-white text-neutral-900 shadow-sm"
-                : "text-neutral-500 hover:text-neutral-700"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      {/* Tabs — only rendered when there's more than one */}
+      {tabs.length > 1 && (
+        <div className="mb-5 flex rounded-xl bg-neutral-100 p-1">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-colors ${
+                resolvedTab === tab.key
+                  ? "bg-white text-neutral-900 shadow-sm"
+                  : "text-neutral-500 hover:text-neutral-700"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Tab content */}
       <div className="min-h-0 flex-1">
-        {activeTab === "conversation" ? (
+        {resolvedTab === "conversation" ? (
           conversation ? (
-            <ConversationTab conversation={conversation} client={client} />
+            <ConversationTab
+              conversation={conversation}
+              client={client ?? ({ full_name: displayName, phone: displayPhone } as PipelineRow)}
+            />
           ) : (
             <div className="flex flex-col items-center gap-2 py-10 text-neutral-400">
               <User size={28} />
-              <p className="text-sm">No conversation found for this client</p>
+              <p className="text-sm">No conversation found</p>
             </div>
           )
-        ) : activeTab === "details" ? (
+        ) : resolvedTab === "details" && hasClient ? (
           <DetailsTab client={client} />
-        ) : (
-          client.id ? <TasksTab clientId={client.id} /> : null
-        )}
+        ) : hasClient && client.id ? (
+          <TasksTab clientId={client.id} />
+        ) : null}
       </div>
     </Drawer>
   );

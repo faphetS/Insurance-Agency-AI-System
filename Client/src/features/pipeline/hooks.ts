@@ -5,6 +5,7 @@ import {
   fetchPipeline,
   updateClientStage,
   fetchConversations,
+  fetchConversationsWithLastMessage,
   fetchMessages,
   fetchBotSettings,
   updateBotSettings,
@@ -19,6 +20,7 @@ import type { BotSettingsRow } from "./types";
 
 export const PIPELINE_KEY = ["pipeline"] as const;
 export const CONVERSATIONS_KEY = ["conversations"] as const;
+export const CONVERSATIONS_WITH_LAST_MSG_KEY = ["conversations-with-last-msg"] as const;
 export const BOT_SETTINGS_KEY = ["bot-settings"] as const;
 export const WHATSAPP_STATE_KEY = ["whatsapp-state"] as const;
 
@@ -64,6 +66,14 @@ export function useConversations() {
     queryKey: CONVERSATIONS_KEY,
     queryFn: fetchConversations,
     staleTime: 30_000,
+  });
+}
+
+export function useConversationsWithLastMessage() {
+  return useQuery({
+    queryKey: CONVERSATIONS_WITH_LAST_MSG_KEY,
+    queryFn: () => fetchConversationsWithLastMessage(20),
+    staleTime: 20_000,
   });
 }
 
@@ -165,6 +175,7 @@ export function useRealtimePipeline() {
             qc.invalidateQueries({ queryKey: ["messages", convId] });
           }
           qc.invalidateQueries({ queryKey: PIPELINE_KEY });
+          qc.invalidateQueries({ queryKey: CONVERSATIONS_WITH_LAST_MSG_KEY });
         },
       )
       .on(
@@ -172,6 +183,7 @@ export function useRealtimePipeline() {
         { event: "*", schema: "public", table: "conversations" },
         () => {
           qc.invalidateQueries({ queryKey: CONVERSATIONS_KEY });
+          qc.invalidateQueries({ queryKey: CONVERSATIONS_WITH_LAST_MSG_KEY });
           qc.invalidateQueries({ queryKey: PIPELINE_KEY });
         },
       )

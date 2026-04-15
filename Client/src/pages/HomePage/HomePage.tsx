@@ -1,5 +1,6 @@
 import { useRealtimePipeline } from "@/features/pipeline/hooks";
 import { SystemStatusSection } from "./Sections/SystemStatusSection";
+import { ConversationsSection } from "./Sections/ConversationsSection";
 import { PipelineKanbanSection } from "./Sections/PipelineKanbanSection";
 import { FunnelStatsSection } from "./Sections/FunnelStatsSection";
 import { AlertsSection } from "./Sections/AlertsSection";
@@ -42,6 +43,11 @@ export default function HomePage() {
 
       {/* Main content */}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 md:px-6">
+        {/* Recent Conversations — primary "what's happening now" panel */}
+        <section className="mb-6">
+          <ConversationsSection />
+        </section>
+
         {/* Kanban — full width, own horizontal scroll */}
         <section className="mb-6">
           <h2 className="mb-3 text-xs font-bold uppercase tracking-widest text-neutral-400">Client Pipeline</h2>
