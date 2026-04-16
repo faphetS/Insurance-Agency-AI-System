@@ -1,6 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import { jwtVerify, type JWTPayload } from "jose";
-import { env } from "../config/env.js";
+import { supabaseAdmin } from "../config/supabase.js";
 import { ForbiddenError, UnauthorizedError } from "../lib/errors.js";
 
 export interface AuthUser {
@@ -17,11 +16,9 @@ declare global {
   }
 }
 
-const secret = new TextEncoder().encode(env.JWT_SECRET);
-
 /**
- * Extracts and verifies the JWT from the Authorization header.
- * Attaches the decoded user to req.user.
+ * Verifies the JWT from the Authorization header via Supabase's authoritative
+ * getUser call. Attaches the decoded user to req.user.
  */
 export async function authenticate(
   req: Request,
@@ -35,13 +32,19 @@ export async function authenticate(
 
   const token = header.slice(7);
 
-  try {
-    const { payload } = await jwtVerify(token, secret);
-    req.user = extractUser(payload);
-    next();
-  } catch {
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data.user) {
     throw new UnauthorizedError("Invalid or expired token");
   }
+
+  req.user = {
+    id: data.user.id,
+    email: data.user.email ?? "",
+    role:
+      (data.user.app_metadata?.role as string | undefined) ?? "authenticated",
+  };
+
+  next();
 }
 
 /**
@@ -57,13 +60,5 @@ export function authorize(...allowedRoles: string[]) {
       throw new ForbiddenError("Insufficient permissions");
     }
     next();
-  };
-}
-
-function extractUser(payload: JWTPayload): AuthUser {
-  return {
-    id: payload.sub ?? "",
-    email: (payload.email as string) ?? "",
-    role: (payload.role as string) ?? "customer",
   };
 }

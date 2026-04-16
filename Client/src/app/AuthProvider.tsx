@@ -31,11 +31,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
     });
 
     // Keep store in sync with supabase auth events (sign in, sign out, token refresh)
+    const HANDLED_EVENTS = new Set([
+      "SIGNED_IN",
+      "SIGNED_OUT",
+      "TOKEN_REFRESHED",
+      "USER_UPDATED",
+    ]);
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      logAuth("authState:change", { event: _event, hasSession: !!session });
-      setSession(session);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      logAuth("authState:change", { event, hasSession: !!session });
+      if (HANDLED_EVENTS.has(event)) {
+        setSession(session);
+      }
     });
 
     return () => {
