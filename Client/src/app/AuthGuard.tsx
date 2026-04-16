@@ -1,5 +1,6 @@
 import { Navigate, Outlet } from "react-router-dom";
 import { useAuthStore } from "@/stores/auth.store";
+import { logAuth } from "@/lib/authDebug";
 
 /**
  * Protects routes that require an authenticated session.
@@ -20,6 +21,7 @@ export function AuthGuard() {
   }
 
   if (!session) {
+    logAuth("guard:redirect", { isLoading, hasSession: !!session });
     return <Navigate to="/login" replace />;
   }
 

@@ -1,4 +1,5 @@
 import { useRouteError } from "react-router-dom";
+import { logAuth } from "@/lib/authDebug";
 
 export function RouteError() {
   const err = useRouteError();
@@ -13,6 +14,7 @@ export function RouteError() {
     const key = "__chunk_reload_attempted";
     if (!sessionStorage.getItem(key)) {
       sessionStorage.setItem(key, "1");
+      logAuth("routeError:chunkReload", { message });
       window.location.reload();
       return null;
     }

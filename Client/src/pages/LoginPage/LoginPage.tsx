@@ -1,11 +1,13 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Lock, Mail, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useAuthStore } from "@/stores/auth.store";
+import { logAuth, getAuthDebugLog, clearAuthDebugLog } from "@/lib/authDebug";
 
 const loginSchema = z.object({
   email: z.string().min(1, "Email is required").email("Invalid email address"),
@@ -16,7 +18,11 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [serverError, setServerError] = useState<string | null>(null);
+  const [debugVersion, setDebugVersion] = useState(0);
+
+  const debugMode = searchParams.get("debug") === "1";
 
   const {
     register,
@@ -27,13 +33,16 @@ export default function LoginPage() {
   });
 
   const onSubmit = async (values: LoginFormValues) => {
+    logAuth("login:submit", { email: values.email });
     setServerError(null);
+
     const { data, error } = await supabase.auth.signInWithPassword({
       email: values.email,
       password: values.password,
     });
 
     if (error) {
+      logAuth("login:error", { message: error.message });
       // Surface a clean message — Supabase returns "Invalid login credentials" for bad creds
       setServerError(
         error.message === "Invalid login credentials"
@@ -49,7 +58,21 @@ export default function LoginPage() {
       useAuthStore.getState().setSession(data.session);
     }
 
+    logAuth("login:success", { userId: data.session?.user?.id });
     navigate("/", { replace: true });
+  };
+
+  const handleClearDebugLog = () => {
+    clearAuthDebugLog();
+    setDebugVersion((v) => v + 1);
+  };
+
+  const handleCopyDebugLog = () => {
+    const log = getAuthDebugLog();
+    navigator.clipboard
+      .writeText(JSON.stringify(log, null, 2))
+      .then(() => toast.success("Copied"))
+      .catch(() => toast.error("Copy failed"));
   };
 
   return (
@@ -157,6 +180,39 @@ export default function LoginPage() {
             )}
           </button>
         </form>
+
+        {/* Debug panel — visible only at ?debug=1 */}
+        {debugMode && (
+          <div className="mt-6 flex flex-col gap-2" data-testid="debug-panel">
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[10px] uppercase tracking-widest text-neutral-400">
+                Auth Debug Log
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyDebugLog}
+                  className="rounded border border-neutral-200 bg-neutral-50 px-2 py-1 font-mono text-[10px] text-neutral-600 transition hover:bg-neutral-100"
+                >
+                  Copy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearDebugLog}
+                  className="rounded border border-neutral-200 bg-neutral-50 px-2 py-1 font-mono text-[10px] text-neutral-600 transition hover:bg-neutral-100"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <pre
+              key={debugVersion}
+              className="max-h-60 overflow-auto rounded-lg border border-neutral-200 bg-neutral-50 p-3 font-mono text-[10px] leading-relaxed text-neutral-700"
+            >
+              {JSON.stringify(getAuthDebugLog(), null, 2)}
+            </pre>
+          </div>
+        )}
       </div>
 
       <p className="mt-6 font-mono text-[10px] uppercase tracking-widest text-neutral-400">

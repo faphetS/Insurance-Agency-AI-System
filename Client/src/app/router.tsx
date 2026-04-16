@@ -5,6 +5,7 @@ import { createBrowserRouter } from "react-router-dom";
 import App from "@/app/App";
 import { AuthGuard } from "@/app/AuthGuard";
 import { RouteError } from "@/app/RouteError";
+import { logAuth } from "@/lib/authDebug";
 
 const lazyWithReload = <T extends ComponentType<unknown>>(
   importer: () => Promise<{ default: T }>,
@@ -14,6 +15,7 @@ const lazyWithReload = <T extends ComponentType<unknown>>(
       const key = "__chunk_reload_attempted";
       if (!sessionStorage.getItem(key)) {
         sessionStorage.setItem(key, "1");
+        logAuth("chunk:reload", { message: err?.message ?? String(err) });
         window.location.reload();
       }
       throw err;

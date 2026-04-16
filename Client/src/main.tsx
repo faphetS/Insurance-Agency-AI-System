@@ -1,6 +1,4 @@
 import { StrictMode, Suspense } from "react";
-
-sessionStorage.removeItem("__chunk_reload_attempted");
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";

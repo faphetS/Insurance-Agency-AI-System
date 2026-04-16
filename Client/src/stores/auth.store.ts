@@ -7,7 +7,9 @@ interface AuthState {
   user: User | null;
   isAdmin: boolean;
   isLoading: boolean;
+  hasHydrated: boolean;
   setSession: (session: Session | null) => void;
+  markHydrated: () => void;
   signOut: () => Promise<void>;
   /** Derived access token — convenience getter for Axios interceptor */
   get accessToken(): string | null;
@@ -20,6 +22,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   isAdmin: false,
   isLoading: true,
+  hasHydrated: false,
 
   get accessToken() {
     return get().session?.access_token ?? null;
@@ -31,7 +34,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       user: session?.user ?? null,
       isAdmin: session?.user?.app_metadata?.["role"] === "admin",
       isLoading: false,
+      hasHydrated: true,
     }),
+
+  markHydrated: () => set({ hasHydrated: true }),
 
   signOut: async () => {
     await supabase.auth.signOut();
