@@ -114,11 +114,6 @@ function SvgFunnel({ pipeline }: { pipeline: ReturnType<typeof usePipeline>["dat
   }, [pipeline]);
 
   const max = Math.max(...stages.map((s) => s.count), 1);
-  const W = 480;
-  const H = 180;
-  const slotH = H / stages.length;
-  const minW = 80;
-
   const COLORS = ["#6366f1", "#818cf8", "#a5b4fc", "#c7d2fe", "#34d399"];
 
   return (
@@ -129,55 +124,26 @@ function SvgFunnel({ pipeline }: { pipeline: ReturnType<typeof usePipeline>["dat
       <p className="mb-4 text-xs font-bold uppercase tracking-widest" style={{ color: "#475569" }}>
         Pipeline Funnel
       </p>
-      <div className="overflow-x-auto">
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          width="100%"
-          height={H}
-          aria-label="Pipeline funnel chart"
-          style={{ display: "block" }}
-        >
-          {stages.map((stage, i) => {
-            const barW = minW + ((stage.count / max) * (W - minW - 120));
-            const y = i * slotH + slotH * 0.15;
-            const h = slotH * 0.7;
-            const x = (W - 80 - barW) / 2;
-            return (
-              <g key={stage.key}>
-                <rect
-                  x={x}
-                  y={y}
-                  width={barW}
-                  height={h}
-                  rx={4}
-                  fill={COLORS[i % COLORS.length]}
-                  fillOpacity={0.8}
-                />
-                <text
-                  x={x - 8}
-                  y={y + h / 2 + 1}
-                  textAnchor="end"
-                  dominantBaseline="middle"
-                  fontSize={10}
-                  fill="#64748b"
-                >
-                  {stage.label}
-                </text>
-                <text
-                  x={x + barW + 8}
-                  y={y + h / 2 + 1}
-                  textAnchor="start"
-                  dominantBaseline="middle"
-                  fontSize={11}
-                  fontWeight={700}
-                  fill="#e2e8f0"
-                >
-                  {stage.count}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
+      <div className="flex flex-col gap-3">
+        {stages.map((stage, i) => (
+          <div key={stage.key} className="flex items-center gap-3">
+            <span className="w-20 shrink-0 text-right text-xs font-medium text-slate-500">
+              {stage.label}
+            </span>
+            <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-800/60">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${(stage.count / max) * 100}%`,
+                  backgroundColor: COLORS[i % COLORS.length],
+                }}
+              />
+            </div>
+            <span className="w-6 shrink-0 text-left text-xs font-bold tabular-nums text-slate-200">
+              {stage.count}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
