@@ -24,6 +24,11 @@ const documentMessageDataSchema = z.object({
   mimeType: z.string().optional(),
 });
 
+const buttonsResponseMessageSchema = z.object({
+  selectedButtonId: z.string().optional(),
+  selectedButtonText: z.string().optional(),
+});
+
 const messageDataSchema = z.object({
   typeMessage: z.string().optional(),
   textMessageData: z
@@ -38,6 +43,7 @@ const messageDataSchema = z.object({
     .optional(),
   imageMessageData: imageMessageDataSchema.optional(),
   documentMessageData: documentMessageDataSchema.optional(),
+  buttonsResponseMessage: buttonsResponseMessageSchema.optional(),
 });
 
 export const incomingMessageSchema = z.object({
@@ -116,6 +122,8 @@ export function extractPayload(
   }
 
   const text =
+    md.buttonsResponseMessage?.selectedButtonId ??
+    md.buttonsResponseMessage?.selectedButtonText ??
     md.extendedTextMessageData?.text ??
     md.textMessageData?.textMessage ??
     "";
