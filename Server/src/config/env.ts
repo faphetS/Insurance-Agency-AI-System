@@ -40,9 +40,9 @@ const envSchema = z.object({
   GREENAPI_BASE_URL: z.string().url(),
   GREENAPI_WEBHOOK_TOKEN: z.string().min(16),
 
-  // Google Gemini / Gemma
-  GEMINI_API_KEY: z.string().min(1),
-  GEMMA_MODEL: z.string().default("gemma-4-26b-a4b-it"),
+  // OpenRouter AI
+  OPENROUTER_API_KEY: z.string().min(1),
+  AI_MODEL: z.string().default("google/gemini-3.1-pro-preview"),
 });
 
 const parsed = envSchema.safeParse(process.env);

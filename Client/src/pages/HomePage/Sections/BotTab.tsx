@@ -13,8 +13,6 @@ import { formatDistanceToNow } from "date-fns";
 const schema = z.object({
   system_prompt: z.string().min(1, "System prompt is required"),
   model_name: z.string().min(1, "Model name is required"),
-  enabled: z.boolean(),
-  auto_reply: z.boolean(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -49,11 +47,14 @@ function useSaveBotSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (values: FormValues) => {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("bot_settings")
         .update({ ...values, updated_at: new Date().toISOString() })
-        .eq("id", 1);
+        .eq("id", 1)
+        .select()
+        .single();
       if (error) throw error;
+      if (!data) throw new Error("Update failed — no rows affected");
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["bot_settings"] });
@@ -61,6 +62,47 @@ function useSaveBotSettings() {
     },
     onError: () => {
       toast.error("Failed to save settings");
+    },
+  });
+}
+
+function useToggleBotSetting() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      field,
+      value,
+    }: {
+      field: "enabled" | "auto_reply";
+      value: boolean;
+    }) => {
+      const { data, error } = await supabase
+        .from("bot_settings")
+        .update({ [field]: value, updated_at: new Date().toISOString() })
+        .eq("id", 1)
+        .select()
+        .single();
+      if (error) throw error;
+      if (!data || (data as BotSettings)[field] !== value) {
+        throw new Error("Toggle update was blocked or did not apply");
+      }
+    },
+    onMutate: async ({ field, value }) => {
+      await qc.cancelQueries({ queryKey: ["bot_settings"] });
+      const previous = qc.getQueryData<BotSettings>(["bot_settings"]);
+      qc.setQueryData<BotSettings>(["bot_settings"], (old) =>
+        old ? { ...old, [field]: value } : old,
+      );
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        qc.setQueryData(["bot_settings"], context.previous);
+      }
+      toast.error("Failed to update toggle — change reverted");
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["bot_settings"] });
     },
   });
 }
@@ -113,30 +155,28 @@ function Toggle({
 // ── Main tab ──────────────────────────────────────────────────────────────────
 
 const KNOWN_MODELS = [
-  "gemma-4-26b-a4b-it",
-  "gemma-4-31b-it",
-  "gemma-4-e4b-it",
-  "gemma-4-e2b-it",
+  "google/gemini-3.1-pro-preview",
+  "google/gemini-2.5-pro-preview",
+  "google/gemini-2.5-flash-preview",
+  "google/gemini-2.0-flash-001",
 ];
 
 export function BotTab() {
   const { data, isLoading, isError } = useBotSettings();
   const save = useSaveBotSettings();
+  const toggleSetting = useToggleBotSetting();
 
   const {
     register,
     handleSubmit,
     reset,
-    watch,
     setValue,
     formState: { errors, isDirty },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
       system_prompt: "",
-      model_name: "gemma-4-26b-a4b-it",
-      enabled: false,
-      auto_reply: false,
+      model_name: "google/gemini-3.1-pro-preview",
     },
   });
 
@@ -145,16 +185,11 @@ export function BotTab() {
       reset({
         system_prompt: data.system_prompt,
         model_name: data.model_name,
-        enabled: data.enabled,
-        auto_reply: data.auto_reply,
       });
     }
   }, [data, reset]);
 
   const onSubmit = (values: FormValues) => save.mutate(values);
-
-  const enabled = watch("enabled");
-  const autoReply = watch("auto_reply");
 
   const hairline = "1px solid rgba(255,255,255,0.07)";
   const panelBg = "#0f172a";
@@ -207,15 +242,15 @@ export function BotTab() {
           style={{ backgroundColor: panelBg, border: hairline }}
         >
           <Toggle
-            checked={enabled}
-            onChange={(v) => setValue("enabled", v, { shouldDirty: true })}
+            checked={data?.enabled ?? false}
+            onChange={(v) => toggleSetting.mutate({ field: "enabled", value: v })}
             label="Bot enabled"
             description="Master switch — when off, the bot will not process any inbound messages."
           />
           <div style={{ borderTop: hairline }} />
           <Toggle
-            checked={autoReply}
-            onChange={(v) => setValue("auto_reply", v, { shouldDirty: true })}
+            checked={data?.auto_reply ?? false}
+            onChange={(v) => toggleSetting.mutate({ field: "auto_reply", value: v })}
             label="Auto-reply"
             description="Automatically send AI-generated replies to new inbound messages."
           />
@@ -294,7 +329,7 @@ export function BotTab() {
                 ? "1px solid #f43f5e"
                 : hairline;
             }}
-            placeholder="gemma-4-26b-a4b-it"
+            placeholder="google/gemini-3.1-pro-preview"
           />
           {errors.model_name && (
             <p className="mt-1 text-xs" style={{ color: "#f43f5e" }}>

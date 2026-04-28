@@ -1,13 +1,13 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { generateReply, type ChatTurn } from "./ai.gemma.service.js";
+import { generateReply, type ChatTurn } from "./ai.service.js";
 import * as whatsappService from "../whatsapp/whatsapp.service.js";
 
 /**
  * Handles an inbound WhatsApp message end-to-end:
  * 1. Guards: bot_paused, bot disabled, auto_reply disabled
  * 2. Builds conversation history
- * 3. Generates reply via Gemma
+ * 3. Generates reply via AI
  * 4. Persists outbound message row and sends via GreenAPI
  */
 export async function handleIncomingMessage(
@@ -34,7 +34,7 @@ export async function handleIncomingMessage(
   // 2. Fetch bot_settings (singleton row id=1)
   const { data: botSettings, error: settingsErr } = await supabaseAdmin
     .from("bot_settings")
-    .select("enabled, auto_reply, system_prompt")
+    .select("enabled, auto_reply, system_prompt, model_name")
     .eq("id", 1)
     .single();
 
@@ -72,28 +72,28 @@ export async function handleIncomingMessage(
     }));
 
   // Guarantee at least one user turn — avoids "contents are required" from
-  // Gemma when history fetch races the insert or message has no text body.
+  // the AI model when history fetch races the insert or message has no text body.
   const trimmed = incomingText?.trim();
   if (trimmed && (history.length === 0 || history[history.length - 1]?.text !== trimmed)) {
     history.push({ role: "user", text: trimmed });
   }
 
   if (history.length === 0) {
-    logger.warn({ conversationId }, "No usable text to reply to — skipping Gemma");
+    logger.warn({ conversationId }, "No usable text to reply to — skipping AI");
     return;
   }
 
   // 4. Generate reply
   let reply: string;
   try {
-    reply = await generateReply(history, botSettings.system_prompt);
+    reply = await generateReply(history, botSettings.system_prompt, botSettings.model_name);
   } catch (err) {
     logger.error({ conversationId, err }, "generateReply failed");
     return;
   }
 
   if (!reply.trim()) {
-    logger.warn({ conversationId }, "Gemma returned empty reply — skipping send");
+    logger.warn({ conversationId }, "AI returned empty reply — skipping send");
     return;
   }
 

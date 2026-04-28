@@ -86,7 +86,7 @@ function BotSettingsCard() {
         </div>
         <div>
           <p className="text-sm font-semibold text-neutral-900">AI Bot</p>
-          <p className="text-xs text-neutral-400">{settings?.model_name ?? "Gemma"}</p>
+          <p className="text-xs text-neutral-400">{settings?.model_name ?? "Gemini"}</p>
         </div>
       </div>
 

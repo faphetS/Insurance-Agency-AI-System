@@ -350,7 +350,7 @@ export async function handleIntake(
   const state = row.intake_state;
   const slot = row.intake_current_slot;
 
-  // 2. If already completed or at done slot, fall through to Gemma
+  // 2. If already completed or at done slot, fall through to AI
   if (state === "completed" || slot === "done") {
     return { consumed: false };
   }
