@@ -77,6 +77,10 @@ export const whatsappController = {
     }
 
     const inbound = inboundResult.data;
+
+    // Log raw messageData to diagnose button response structure
+    logger.info({ messageData: req.body.messageData }, "Incoming messageData (raw)");
+
     const chatId = inbound.senderData.chatId;
 
     if (chatId.endsWith("@g.us")) {
@@ -89,7 +93,7 @@ export const whatsappController = {
     const idMessage = inbound.idMessage;
 
     // Extract normalised payload (text | image | document)
-    const payload = extractPayload(inbound);
+    const payload = extractPayload(inbound, req.body as Record<string, unknown>);
 
     // Derive the body to store in messages table
     const messageBody =

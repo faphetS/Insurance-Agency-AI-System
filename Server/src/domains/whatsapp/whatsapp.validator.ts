@@ -94,10 +94,13 @@ export type MessagePayload =
 
 /**
  * Extract a normalised MessagePayload from a validated inbound message.
- * Priority: image > document > text (extended then plain).
+ * Priority: image > document > button response > text.
+ * rawBody is the unvalidated webhook body — used to read fields that
+ * Zod's strict parsing may have stripped.
  */
 export function extractPayload(
   inbound: IncomingMessagePayload,
+  rawBody?: Record<string, unknown>,
 ): MessagePayload {
   const md = inbound.messageData;
 
@@ -121,9 +124,23 @@ export function extractPayload(
     };
   }
 
-  const text =
+  // Button click responses — check both parsed schema and raw body
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawMd = (rawBody?.messageData ?? {}) as any;
+  const buttonText =
     md.buttonsResponseMessage?.selectedButtonId ??
     md.buttonsResponseMessage?.selectedButtonText ??
+    rawMd.buttonsResponseMessage?.selectedButtonId ??
+    rawMd.buttonsResponseMessage?.selectedButtonText ??
+    rawMd.buttonsMessage?.selectedButtonId ??
+    rawMd.buttonsMessage?.selectedButtonText ??
+    "";
+
+  if (buttonText) {
+    return { kind: "text", text: String(buttonText) };
+  }
+
+  const text =
     md.extendedTextMessageData?.text ??
     md.textMessageData?.textMessage ??
     "";
