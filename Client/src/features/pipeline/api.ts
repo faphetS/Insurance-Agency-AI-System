@@ -143,13 +143,13 @@ export async function updateBotSettings(patch: Partial<BotSettingsRow>): Promise
 // ── WhatsApp (via Express) ────────────────────────────────────────────────
 
 export async function fetchWhatsappState(): Promise<WhatsAppState> {
-  const { data } = await api.get<WhatsAppState>("/whatsapp/state");
-  return data;
+  const { data } = await api.get<{ data: WhatsAppState }>("/whatsapp/state");
+  return data.data;
 }
 
 export async function fetchQrCode(): Promise<QrCodeResponse> {
-  const { data } = await api.get<QrCodeResponse>("/whatsapp/qr");
-  return data;
+  const { data } = await api.get<{ data: QrCodeResponse }>("/whatsapp/qr");
+  return data.data;
 }
 
 export async function sendManualMessage(payload: SendMessagePayload): Promise<void> {
