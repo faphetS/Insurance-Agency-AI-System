@@ -29,6 +29,11 @@ const buttonsResponseMessageSchema = z.object({
   selectedButtonText: z.string().optional(),
 });
 
+const templateButtonReplyMessageSchema = z.object({
+  selectedId: z.string().optional(),
+  selectedDisplayText: z.string().optional(),
+});
+
 const messageDataSchema = z.object({
   typeMessage: z.string().optional(),
   textMessageData: z
@@ -44,6 +49,7 @@ const messageDataSchema = z.object({
   imageMessageData: imageMessageDataSchema.optional(),
   documentMessageData: documentMessageDataSchema.optional(),
   buttonsResponseMessage: buttonsResponseMessageSchema.optional(),
+  templateButtonReplyMessage: templateButtonReplyMessageSchema.optional(),
 });
 
 export const incomingMessageSchema = z.object({
@@ -124,16 +130,21 @@ export function extractPayload(
     };
   }
 
-  // Button click responses — check both parsed schema and raw body
+  // Button click responses — check parsed schema + raw body for all button types
+  // GreenAPI sends different shapes depending on the button method used:
+  //   buttonsResponseMessage  → selectedButtonId / selectedButtonText
+  //   templateButtonReplyMessage → selectedId / selectedDisplayText
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawMd = (rawBody?.messageData ?? {}) as any;
   const buttonText =
     md.buttonsResponseMessage?.selectedButtonId ??
     md.buttonsResponseMessage?.selectedButtonText ??
+    md.templateButtonReplyMessage?.selectedId ??
+    md.templateButtonReplyMessage?.selectedDisplayText ??
     rawMd.buttonsResponseMessage?.selectedButtonId ??
     rawMd.buttonsResponseMessage?.selectedButtonText ??
-    rawMd.buttonsMessage?.selectedButtonId ??
-    rawMd.buttonsMessage?.selectedButtonText ??
+    rawMd.templateButtonReplyMessage?.selectedId ??
+    rawMd.templateButtonReplyMessage?.selectedDisplayText ??
     "";
 
   if (buttonText) {
