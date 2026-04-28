@@ -219,29 +219,30 @@ export const whatsappController = {
       );
     }
 
-    // 3d. Atomic dedup — unique index on whatsapp_message_id rejects races
+    // 3d. Insert inbound message — unique index rejects duplicate whatsapp_message_id
     const { data: inserted, error: msgErr } = await supabaseAdmin
       .from("messages")
-      .upsert(
-        {
-          conversation_id: conversationId,
-          direction: "inbound" as const,
-          sent_by: "customer",
-          body: messageBody,
-          whatsapp_message_id: idMessage,
-          status: "received",
-        },
-        { onConflict: "whatsapp_message_id", ignoreDuplicates: true },
-      )
+      .insert({
+        conversation_id: conversationId,
+        direction: "inbound",
+        sent_by: "customer",
+        body: messageBody,
+        whatsapp_message_id: idMessage,
+        status: "received",
+      })
       .select("id")
       .maybeSingle();
 
     if (msgErr) {
+      if (msgErr.code === "23505") {
+        logger.debug({ idMessage }, "Duplicate webhook — skipping");
+        res.sendStatus(200);
+        return;
+      }
       logger.error({ conversationId, msgErr }, "Failed to insert inbound message");
     }
 
     if (!inserted) {
-      logger.debug({ idMessage }, "Duplicate webhook — skipping");
       res.sendStatus(200);
       return;
     }
