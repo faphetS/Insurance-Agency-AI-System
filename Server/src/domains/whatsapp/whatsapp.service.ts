@@ -80,7 +80,7 @@ export async function sendInteractiveButtons(
 
   return request<{ idMessage: string }>("POST", "sendInteractiveButtonsReply", {
     chatId,
-    message: body,
+    body,
     footer: footer ?? "",
     buttons: buttons.map((b) => ({
       buttonId: b.buttonId,
