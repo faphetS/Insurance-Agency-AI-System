@@ -192,7 +192,21 @@ export const whatsappController = {
       );
     }
 
-    // 3d. Insert inbound message
+    // 3d. Deduplicate — GreenAPI may deliver the same webhook more than once
+    const { data: existing } = await supabaseAdmin
+      .from("messages")
+      .select("id")
+      .eq("whatsapp_message_id", idMessage)
+      .limit(1)
+      .maybeSingle();
+
+    if (existing) {
+      logger.debug({ idMessage }, "Duplicate webhook — skipping");
+      res.sendStatus(200);
+      return;
+    }
+
+    // 3e. Insert inbound message
     const { error: msgErr } = await supabaseAdmin.from("messages").insert({
       conversation_id: conversationId,
       direction: "inbound",
