@@ -84,6 +84,8 @@ async function sendInquiryPrompt(
   chatId: string,
 ): Promise<void> {
   const prompt = INTAKE_PROMPTS.inquiry_type;
+  const fullText = `${prompt.text}\n${prompt.footer}`;
+
   try {
     const { idMessage } = await sendInteractiveButtons(
       chatId,
@@ -91,16 +93,25 @@ async function sendInquiryPrompt(
       [...prompt.buttons],
       prompt.footer,
     );
-    await persistOutbound(
-      conversationId,
-      `${prompt.text}\n${prompt.footer}`,
-      idMessage,
-    );
+    await persistOutbound(conversationId, fullText, idMessage);
   } catch (err) {
-    logger.error(
+    logger.warn(
       { conversationId, err },
-      "intake: sendInquiryPrompt failed",
+      "intake: interactive buttons failed — falling back to plain text",
     );
+    try {
+      const buttonList = prompt.buttons
+        .map((b) => `• ${b.buttonText}`)
+        .join("\n");
+      const fallback = `${prompt.text}\n\n${buttonList}\n\n${prompt.footer}`;
+      const { idMessage } = await sendMessage(chatId, fallback);
+      await persistOutbound(conversationId, fallback, idMessage);
+    } catch (fallbackErr) {
+      logger.error(
+        { conversationId, fallbackErr },
+        "intake: sendInquiryPrompt fallback also failed",
+      );
+    }
   }
 }
 

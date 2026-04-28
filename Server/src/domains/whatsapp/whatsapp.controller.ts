@@ -219,35 +219,31 @@ export const whatsappController = {
       );
     }
 
-    // 3d. Deduplicate — GreenAPI may deliver the same webhook more than once
-    const { data: existing } = await supabaseAdmin
+    // 3d. Atomic dedup — unique index on whatsapp_message_id rejects races
+    const { data: inserted, error: msgErr } = await supabaseAdmin
       .from("messages")
+      .upsert(
+        {
+          conversation_id: conversationId,
+          direction: "inbound" as const,
+          sent_by: "customer",
+          body: messageBody,
+          whatsapp_message_id: idMessage,
+          status: "received",
+        },
+        { onConflict: "whatsapp_message_id", ignoreDuplicates: true },
+      )
       .select("id")
-      .eq("whatsapp_message_id", idMessage)
-      .limit(1)
       .maybeSingle();
 
-    if (existing) {
+    if (msgErr) {
+      logger.error({ conversationId, msgErr }, "Failed to insert inbound message");
+    }
+
+    if (!inserted) {
       logger.debug({ idMessage }, "Duplicate webhook — skipping");
       res.sendStatus(200);
       return;
-    }
-
-    // 3e. Insert inbound message
-    const { error: msgErr } = await supabaseAdmin.from("messages").insert({
-      conversation_id: conversationId,
-      direction: "inbound",
-      sent_by: "customer",
-      body: messageBody,
-      whatsapp_message_id: idMessage,
-      status: "received",
-    });
-
-    if (msgErr) {
-      logger.error(
-        { conversationId, msgErr },
-        "Failed to insert inbound message",
-      );
     }
 
     // 3e. Run intake orchestrator if client is linked
