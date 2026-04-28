@@ -137,6 +137,7 @@ export function ConversationsSection() {
         contact_phone: selectedConv.contact_phone,
         whatsapp_chat_id: selectedConv.whatsapp_chat_id,
         bot_paused: selectedConv.bot_paused,
+        bot_paused_until: selectedConv.bot_paused_until ?? null,
         status: selectedConv.status,
         last_message_at: selectedConv.last_message_at,
         client_id: selectedConv.client_id,

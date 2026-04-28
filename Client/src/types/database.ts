@@ -159,6 +159,7 @@ export type Database = {
       conversations: {
         Row: {
           bot_paused: boolean
+          bot_paused_until: string | null
           client_id: string | null
           contact_name: string | null
           contact_phone: string | null
@@ -170,6 +171,7 @@ export type Database = {
         }
         Insert: {
           bot_paused?: boolean
+          bot_paused_until?: string | null
           client_id?: string | null
           contact_name?: string | null
           contact_phone?: string | null
@@ -181,6 +183,7 @@ export type Database = {
         }
         Update: {
           bot_paused?: boolean
+          bot_paused_until?: string | null
           client_id?: string | null
           contact_name?: string | null
           contact_phone?: string | null

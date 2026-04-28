@@ -316,13 +316,21 @@ export async function handleIntake(
   // 0b. Respect per-conversation pause
   const { data: conv } = await supabaseAdmin
     .from("conversations")
-    .select("bot_paused")
+    .select("bot_paused, bot_paused_until")
     .eq("id", conversationId)
     .single();
 
   if (conv?.bot_paused) {
-    logger.info({ conversationId }, "intake: conversation paused — skipping");
-    return { consumed: false };
+    if (conv.bot_paused_until && new Date(conv.bot_paused_until) <= new Date()) {
+      await supabaseAdmin
+        .from("conversations")
+        .update({ bot_paused: false, bot_paused_until: null })
+        .eq("id", conversationId);
+      logger.info({ conversationId }, "intake: cooldown expired — auto-resumed");
+    } else {
+      logger.info({ conversationId }, "intake: conversation paused — skipping");
+      return { consumed: false };
+    }
   }
 
   // 1. Load intake state

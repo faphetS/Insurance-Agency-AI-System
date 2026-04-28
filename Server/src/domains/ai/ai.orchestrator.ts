@@ -17,7 +17,7 @@ export async function handleIncomingMessage(
   // 1. Fetch conversation — check bot_paused
   const { data: conversation, error: convErr } = await supabaseAdmin
     .from("conversations")
-    .select("id, whatsapp_chat_id, bot_paused")
+    .select("id, whatsapp_chat_id, bot_paused, bot_paused_until")
     .eq("id", conversationId)
     .single();
 
@@ -27,8 +27,16 @@ export async function handleIncomingMessage(
   }
 
   if (conversation.bot_paused) {
-    logger.info({ conversationId }, "Bot paused — skipping auto-reply");
-    return;
+    if (conversation.bot_paused_until && new Date(conversation.bot_paused_until) <= new Date()) {
+      await supabaseAdmin
+        .from("conversations")
+        .update({ bot_paused: false, bot_paused_until: null })
+        .eq("id", conversationId);
+      logger.info({ conversationId }, "Bot cooldown expired — auto-resumed");
+    } else {
+      logger.info({ conversationId }, "Bot paused — skipping auto-reply");
+      return;
+    }
   }
 
   // 2. Fetch bot_settings (singleton row id=1)

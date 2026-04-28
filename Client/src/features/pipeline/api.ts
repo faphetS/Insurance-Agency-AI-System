@@ -38,6 +38,7 @@ export interface ConversationWithLastMessage {
   contact_phone: string | null;
   whatsapp_chat_id: string;
   bot_paused: boolean;
+  bot_paused_until: string | null;
   status: string;
   last_message_at: string;
   client_id: string | null;

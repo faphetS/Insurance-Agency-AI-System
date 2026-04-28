@@ -39,6 +39,26 @@ export const whatsappController = {
 
     const rawPayload = looseResult.data;
 
+    // Handle manual messages sent from WhatsApp phone — set cooldown
+    if (rawPayload.typeWebhook === "outgoingMessageReceived") {
+      const outboundResult = incomingMessageSchema.safeParse(req.body);
+      if (!outboundResult.success) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      const outChatId = outboundResult.data.senderData.chatId;
+      if (!outChatId.endsWith("@g.us")) {
+        const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        await supabaseAdmin
+          .from("conversations")
+          .update({ bot_paused: true, bot_paused_until: pausedUntil })
+          .eq("whatsapp_chat_id", outChatId);
+        logger.info({ chatId: outChatId, pausedUntil }, "Manual WhatsApp send — bot paused for 1 hour");
+      }
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     // 3. Only act on inbound messages
     if (rawPayload.typeWebhook !== "incomingMessageReceived") {
       res.status(200).json({ ok: true });
@@ -58,6 +78,13 @@ export const whatsappController = {
 
     const inbound = inboundResult.data;
     const chatId = inbound.senderData.chatId;
+
+    if (chatId.endsWith("@g.us")) {
+      logger.debug({ chatId }, "Group chat message — ignoring");
+      res.sendStatus(200);
+      return;
+    }
+
     const senderName = inbound.senderData.senderName ?? null;
     const idMessage = inbound.idMessage;
 
@@ -310,6 +337,13 @@ export const whatsappController = {
       whatsapp_message_id: idMessage,
       status: "sent",
     });
+
+    // Set 1-hour cooldown
+    const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await supabaseAdmin
+      .from("conversations")
+      .update({ bot_paused: true, bot_paused_until: pausedUntil })
+      .eq("id", conversation.id);
 
     res.json({ status: "success", data: { idMessage } });
   },
