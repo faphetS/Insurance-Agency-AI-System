@@ -1,21 +1,31 @@
 export const INTAKE_PROMPTS = {
-  full_name: { text: "Hi! What is your full name?" },
-  email: { text: 'What is your email? (reply "skip" to skip)' },
+  welcome: {
+    text: "Hi! Before we schedule your consultation, I need to collect a few details and documents. Let's start — what is your full name?",
+  },
+  full_name: { text: "What is your full name?" },
+  email: { text: 'What is your email address? (reply "skip" to skip)' },
   inquiry_type: {
-    text: "What is your inquiry type?",
+    text: "What type of insurance are you interested in?",
     buttons: [
       { buttonId: "life", buttonText: "Life" },
       { buttonId: "health", buttonText: "Health" },
       { buttonId: "vehicle", buttonText: "Vehicle" },
     ],
     footer:
-      "Not shown? Reply: property, liability, business, pension, travel, mortgage, or general.",
+      "Not listed? Reply: property, liability, business, pension, travel, mortgage, or general.",
   },
-  id_photo: { text: "Please send a photo of your ID." },
+  id_photo: {
+    text: "Please send a clear photo of your government-issued ID (front side). Make sure the text is readable.",
+  },
+  id_photo_invalid: {
+    text: "I couldn't verify that ID photo — {reason}. Please send another clear photo of your ID.",
+  },
   poa: {
-    text: 'Please send your power of attorney document. (reply "skip" to skip)',
+    text: 'If you have a power of attorney document, please send it now. Otherwise reply "skip".',
   },
-  done: { text: "Thanks, we've received your details." },
+  done: {
+    text: "Thanks! We have everything we need. We'll be in touch shortly to schedule your consultation.",
+  },
 } as const;
 
 export const INQUIRY_TYPES = [
@@ -33,8 +43,8 @@ export const INQUIRY_TYPES = [
 
 export type InquiryType = (typeof INQUIRY_TYPES)[number];
 
-// Slot order
 export const SLOT_ORDER = [
+  "welcome",
   "full_name",
   "email",
   "inquiry_type",

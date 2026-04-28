@@ -11,6 +11,7 @@ import {
   type InquiryType,
   type IntakeSlot,
 } from "./intake.prompts.js";
+import { analyzeImage } from "./ai.service.js";
 
 // ---------------------------------------------------------------------------
 // Type helpers — the DB types file predates the migration; cast as needed
@@ -22,6 +23,7 @@ interface ClientIntakeUpdate {
   email?: string | null;
   inquiry_type?: string;
   id_photo_url?: string;
+  id_validated?: boolean;
   poa_doc_url?: string;
   intake_state?: string;
   intake_current_slot?: string;
@@ -169,6 +171,15 @@ async function finalize(
 // Per-slot handlers
 // ---------------------------------------------------------------------------
 
+async function handleWelcome(
+  conversationId: string,
+  chatId: string,
+  clientId: string,
+): Promise<void> {
+  await sendTextPrompt(conversationId, chatId, "welcome");
+  await updateClient(clientId, { intake_current_slot: "full_name" });
+}
+
 async function handleFullName(
   conversationId: string,
   chatId: string,
@@ -181,6 +192,11 @@ async function handleFullName(
   }
 
   const name = payload.text.trim();
+  if (/^\d+$/.test(name)) {
+    await sendTextPrompt(conversationId, chatId, "full_name");
+    return;
+  }
+
   await updateClient(clientId, { full_name: name });
   await advanceTo(conversationId, chatId, clientId, "email");
 }
@@ -247,7 +263,6 @@ async function handleIdPhoto(
     return;
   }
 
-  // Insert document record
   await supabaseAdmin.from("documents").insert({
     client_id: clientId,
     type: "id_photo",
@@ -256,9 +271,36 @@ async function handleIdPhoto(
     mime_type: payload.mimeType ?? null,
   });
 
-  // Update client id_photo_url (id_validated stays false — OCR pending)
   await updateClient(clientId, { id_photo_url: payload.fileUrl });
 
+  // OCR validation via Gemini
+  try {
+    const ocrResult = await analyzeImage(
+      payload.fileUrl,
+      'Is this a valid, readable government-issued ID document? Check: (1) Is the image clear and not blurry? (2) Can you read a name and ID number? (3) Is it an actual ID document? Respond ONLY with JSON: {"valid": true, "reason": "short explanation"} or {"valid": false, "reason": "short explanation"}',
+    );
+
+    const cleaned = ocrResult.replace(/```json\n?|\n?```/g, "").trim();
+    const parsed = JSON.parse(cleaned) as { valid: boolean; reason: string };
+
+    if (!parsed.valid) {
+      const rePrompt = INTAKE_PROMPTS.id_photo_invalid.text.replace(
+        "{reason}",
+        parsed.reason,
+      );
+      try {
+        const { idMessage } = await sendMessage(chatId, rePrompt);
+        await persistOutbound(conversationId, rePrompt, idMessage);
+      } catch (sendErr) {
+        logger.error({ sendErr }, "intake: failed to send OCR rejection");
+      }
+      return;
+    }
+  } catch (err) {
+    logger.warn({ err }, "OCR validation failed — accepting photo and continuing");
+  }
+
+  await updateClient(clientId, { id_validated: true });
   await advanceTo(conversationId, chatId, clientId, "poa");
 }
 
@@ -367,6 +409,9 @@ export async function handleIntake(
 
   // 3. Dispatch
   switch (slot as IntakeSlot) {
+    case "welcome":
+      await handleWelcome(conversationId, chatId, clientId);
+      break;
     case "full_name":
       await handleFullName(conversationId, chatId, clientId, payload);
       break;
