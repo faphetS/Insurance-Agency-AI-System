@@ -101,7 +101,9 @@ function ConvRow({ conv, isSelected, onClick }: RowProps) {
             className="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide"
             style={{ backgroundColor: "rgba(245,158,11,0.15)", color: "#fbbf24" }}
           >
-            Paused
+            {conv.bot_paused_until
+              ? `Paused · ${formatDistanceToNow(new Date(conv.bot_paused_until))}`
+              : "Paused"}
           </span>
         )}
       </div>

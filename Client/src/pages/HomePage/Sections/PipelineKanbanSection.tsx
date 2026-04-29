@@ -78,7 +78,10 @@ function TimeChip({ hours }: { hours: number | null }) {
     : hours < 24 ? `${Math.round(hours)}h`
     : `${Math.round(hours / 24)}d`;
   return (
-    <span className="rounded-md bg-neutral-100 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-neutral-500">
+    <span
+      className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+      style={{ backgroundColor: "rgba(255,255,255,0.07)", color: "#64748b" }}
+    >
       {display}
     </span>
   );
@@ -121,17 +124,28 @@ function ClientCard({ client, stage, overlay = false, onClick }: ClientCardProps
   return (
     <div
       onClick={onClick}
-      className={`group cursor-pointer rounded-xl border border-l-[3px] border-neutral-200 bg-white px-3 py-3 shadow-sm transition-all hover:border-neutral-300 hover:shadow-md ${stripeColor} ${overlay ? "rotate-1 shadow-xl ring-2 ring-neutral-900/10" : ""}`}
+      className={`group cursor-pointer rounded-xl border-l-[3px] px-3 py-3 shadow-sm transition-all ${stripeColor} ${overlay ? "rotate-1 shadow-xl ring-2 ring-slate-400/20" : ""}`}
+      style={{
+        backgroundColor: "#1e293b",
+        borderTopColor: "rgba(255,255,255,0.07)",
+        borderRightColor: "rgba(255,255,255,0.07)",
+        borderBottomColor: "rgba(255,255,255,0.07)",
+        borderTopWidth: 1,
+        borderRightWidth: 1,
+        borderBottomWidth: 1,
+        borderLeftWidth: 3,
+        borderStyle: "solid",
+      }}
     >
       <div className="mb-1.5 flex items-start justify-between gap-2">
-        <p className="text-sm font-semibold leading-tight text-neutral-900 group-hover:text-neutral-700">
+        <p className="text-sm font-semibold leading-tight" style={{ color: "#e2e8f0" }}>
           {client.full_name ?? "Unknown"}
         </p>
         {client.sla_breached && (
           <AlertCircle size={14} className="mt-0.5 shrink-0 text-rose-500" />
         )}
       </div>
-      <p className="mb-2 text-xs text-neutral-400 truncate">{client.inquiry_type ?? ""}</p>
+      <p className="mb-2 truncate text-xs" style={{ color: "#475569" }}>{client.inquiry_type ?? ""}</p>
       <div className="flex items-start justify-between gap-2">
         <div className="flex flex-col items-start">
           <TimeChip hours={client.time_in_stage_hours} />
@@ -195,16 +209,22 @@ function KanbanColumn({ stage, clients, onCardClick, isCollapsed, onToggle, isMo
 
   if (isMobile) {
     return (
-      <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+      <div
+        className="rounded-2xl shadow-sm"
+        style={{ backgroundColor: "#0f172a", border: "1px solid rgba(255,255,255,0.07)" }}
+      >
         <button
           onClick={onToggle}
           className="flex w-full items-center gap-3 px-4 py-3"
         >
           <div className={`h-3 w-1.5 rounded-full border-l-4 ${borderColor.replace("border-t-", "border-l-")}`} />
-          <span className="flex-1 text-left text-sm font-semibold text-neutral-800">
+          <span className="flex-1 text-left text-sm font-semibold" style={{ color: "#e2e8f0" }}>
             {STAGE_LABELS[stage]}
           </span>
-          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-neutral-100 px-1.5 text-xs font-bold tabular-nums text-neutral-600">
+          <span
+            className="flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-bold tabular-nums"
+            style={{ backgroundColor: "rgba(255,255,255,0.07)", color: "#94a3b8" }}
+          >
             {clients.length}
           </span>
           {isCollapsed ? <ChevronRight size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
@@ -219,17 +239,30 @@ function KanbanColumn({ stage, clients, onCardClick, isCollapsed, onToggle, isMo
           </div>
         )}
         {!isCollapsed && clients.length === 0 && (
-          <p className="px-4 pb-3 text-xs text-neutral-400">No clients</p>
+          <p className="px-4 pb-3 text-xs" style={{ color: "#334155" }}>No clients</p>
         )}
       </div>
     );
   }
 
   return (
-    <div className={`flex w-56 shrink-0 flex-col rounded-2xl border-t-4 bg-neutral-50 ${borderColor}`}>
+    <div
+      className={`flex w-56 shrink-0 flex-col rounded-2xl border-t-4 ${borderColor}`}
+      style={{
+        backgroundColor: "#0f172a",
+        borderLeftColor: "rgba(255,255,255,0.07)",
+        borderRightColor: "rgba(255,255,255,0.07)",
+        borderBottomColor: "rgba(255,255,255,0.07)",
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderBottomWidth: 1,
+        borderTopWidth: 4,
+        borderStyle: "solid",
+      }}
+    >
       {/* Column header */}
       <div className="flex items-center justify-between px-3 py-3">
-        <span className="text-xs font-bold uppercase tracking-wide text-neutral-500">
+        <span className="text-xs font-bold uppercase tracking-wide" style={{ color: "#475569" }}>
           {STAGE_LABELS[stage]}
         </span>
         <div className="flex items-center gap-1.5">
@@ -239,7 +272,10 @@ function KanbanColumn({ stage, clients, onCardClick, isCollapsed, onToggle, isMo
               <span className="text-[10px] tabular-nums text-slate-500">({inIntake} in intake)</span>
             ) : null;
           })()}
-          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1.5 text-xs font-bold tabular-nums text-neutral-700 shadow-sm ring-1 ring-neutral-200">
+          <span
+            className="flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-bold tabular-nums"
+            style={{ backgroundColor: "rgba(255,255,255,0.07)", color: "#94a3b8" }}
+          >
             {clients.length}
           </span>
         </div>
@@ -249,7 +285,7 @@ function KanbanColumn({ stage, clients, onCardClick, isCollapsed, onToggle, isMo
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-3">
         <SortableContext items={ids} strategy={verticalListSortingStrategy}>
           {clients.length === 0 ? (
-            <p className="py-4 text-center text-xs text-neutral-400">Empty</p>
+            <p className="py-4 text-center text-xs" style={{ color: "#334155" }}>Empty</p>
           ) : (
             clients.map((c) => (
               <SortableClientCard key={c.id} client={c} stage={stage} onClick={() => onCardClick(c)} />
@@ -335,8 +371,14 @@ export function PipelineKanbanSection() {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center rounded-2xl border border-rose-200 bg-rose-50 py-12">
-        <p className="text-sm text-rose-600">Failed to load pipeline. Check Supabase connection.</p>
+      <div
+        className="flex items-center justify-center rounded-2xl py-12"
+        style={{
+          backgroundColor: "rgba(244,63,94,0.1)",
+          border: "1px solid rgba(244,63,94,0.2)",
+        }}
+      >
+        <p className="text-sm" style={{ color: "#fb7185" }}>Failed to load pipeline. Check Supabase connection.</p>
       </div>
     );
   }
@@ -349,7 +391,7 @@ export function PipelineKanbanSection() {
           <div className="flex gap-3 overflow-x-auto pb-4" style={{ minHeight: 480 }}>
             {isLoading
               ? Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="h-80 w-56 shrink-0 animate-pulse rounded-2xl bg-neutral-100" />
+                  <div key={i} className="h-80 w-56 shrink-0 animate-pulse rounded-2xl bg-slate-800" />
                 ))
               : PIPELINE_STAGES.map((stage) => (
                   <KanbanColumn

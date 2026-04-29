@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { usePipeline, useConversations, useConversationsWithLastMessage } from "@/features/pipeline/hooks";
 import type { ConversationWithLastMessage } from "@/features/pipeline/api";
+import { PIPELINE_STAGES, STAGE_LABELS } from "@/features/pipeline/types";
 import { format } from "date-fns";
 import { Bot, MessageSquare, AlertTriangle, Users, TrendingUp } from "lucide-react";
 
@@ -102,19 +103,11 @@ function SvgFunnel({ pipeline }: { pipeline: ReturnType<typeof usePipeline>["dat
       const s = c.derived_stage ?? c.pipeline_stage ?? "new_lead";
       counts[s] = (counts[s] ?? 0) + 1;
     });
-    const ORDERED = ["new_lead", "docs_pending", "meeting_scheduled", "awaiting_approval", "completed"];
-    const LABELS: Record<string, string> = {
-      new_lead: "New Lead",
-      docs_pending: "Docs",
-      meeting_scheduled: "Meeting",
-      awaiting_approval: "Approval",
-      completed: "Completed",
-    };
-    return ORDERED.map((key) => ({ key, label: LABELS[key] ?? key, count: counts[key] ?? 0 }));
+    return PIPELINE_STAGES.map((key) => ({ key, label: STAGE_LABELS[key], count: counts[key] ?? 0 }));
   }, [pipeline]);
 
   const max = Math.max(...stages.map((s) => s.count), 1);
-  const COLORS = ["#6366f1", "#818cf8", "#a5b4fc", "#c7d2fe", "#34d399"];
+  const COLORS = ["#6366f1", "#818cf8", "#a5b4fc", "#f59e0b", "#f97316", "#f43f5e", "#facc15", "#2dd4bf", "#10b981", "#3b82f6"];
 
   return (
     <div

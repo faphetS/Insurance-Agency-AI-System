@@ -105,7 +105,12 @@ function ConversationBody({ conversation }: { conversation: ConversationRow }) {
           className="mb-3 flex items-center justify-between rounded-lg px-3 py-2 text-xs"
           style={{ backgroundColor: "rgba(245,158,11,0.1)", color: "#fbbf24" }}
         >
-          <span>Bot is paused for this chat</span>
+          <span>
+              Bot is paused for this chat
+              {conversation.bot_paused_until && (
+                <> · resumes {formatDistanceToNow(new Date(conversation.bot_paused_until), { addSuffix: true })}</>
+              )}
+            </span>
           <button
             onClick={() => pauseBot({ conversationId: conversation.id, paused: false })}
             className="font-semibold underline"
