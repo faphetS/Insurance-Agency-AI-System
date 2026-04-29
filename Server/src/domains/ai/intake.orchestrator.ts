@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../../config/supabase.js";
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import {
   sendMessage,
@@ -167,7 +168,22 @@ async function finalize(
     return;
   }
 
-  const doneText = INTAKE_PROMPTS.done.text;
+  // Insert pending meeting row so booking-sync can match it when the event arrives
+  const now = new Date().toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabaseAdmin as any)
+    .from("meetings")
+    .insert({
+      client_id: clientId,
+      conversation_id: conversationId,
+      type: "google_meet",
+      scheduled_at: now,
+      status: "pending_booking",
+      created_at: now,
+      updated_at: now,
+    });
+
+  const doneText = `${INTAKE_PROMPTS.done.text}\n\nBook your consultation here: ${env.GOOGLE_CALENDAR_BOOKING_URL}`;
   try {
     const { idMessage } = await sendMessage(chatId, doneText);
     await persistOutbound(conversationId, doneText, idMessage);

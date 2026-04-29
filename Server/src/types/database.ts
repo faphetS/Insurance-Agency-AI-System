@@ -271,6 +271,7 @@ export type Database = {
           calendar_event_id: string | null
           client_confirmed: boolean
           client_id: string
+          conversation_id: string | null
           created_at: string
           id: string
           recording_url: string | null
@@ -289,6 +290,7 @@ export type Database = {
           calendar_event_id?: string | null
           client_confirmed?: boolean
           client_id: string
+          conversation_id?: string | null
           created_at?: string
           id?: string
           recording_url?: string | null
@@ -307,6 +309,7 @@ export type Database = {
           calendar_event_id?: string | null
           client_confirmed?: boolean
           client_id?: string
+          conversation_id?: string | null
           created_at?: string
           id?: string
           recording_url?: string | null
@@ -334,6 +337,13 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "v_client_pipeline"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meetings_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
             referencedColumns: ["id"]
           },
         ]

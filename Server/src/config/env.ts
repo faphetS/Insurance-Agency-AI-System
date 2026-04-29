@@ -43,6 +43,13 @@ const envSchema = z.object({
   // OpenRouter AI
   OPENROUTER_API_KEY: z.string().min(1),
   AI_MODEL: z.string().default("google/gemini-3.1-pro-preview"),
+
+  // Google Calendar (OAuth 2.0)
+  GOOGLE_CLIENT_ID: z.string().min(1),
+  GOOGLE_CLIENT_SECRET: z.string().min(1),
+  GOOGLE_REDIRECT_URI: z.string().url(),
+  GOOGLE_CALENDAR_ID: z.string().min(1),
+  GOOGLE_CALENDAR_BOOKING_URL: z.string().url(),
 });
 
 const parsed = envSchema.safeParse(process.env);

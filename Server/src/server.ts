@@ -2,6 +2,8 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
 import { setWebhookSettings } from "./domains/whatsapp/whatsapp.service.js";
+import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
+import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import helmet from "helmet";
 import hpp from "hpp";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -115,6 +117,25 @@ const server = app.listen(env.PORT, () => {
         logger.warn({ err, webhookUrl }, "GreenAPI webhook registration failed — continuing"),
       );
   }
+
+  // Calendar sync: initial run after 30s, then every 5 minutes
+  setTimeout(() => {
+    syncNewBookings().catch((err: unknown) =>
+      logger.error({ err }, "booking-sync: initial run failed"),
+    );
+  }, 30_000);
+  setInterval(() => {
+    syncNewBookings().catch((err: unknown) =>
+      logger.error({ err }, "booking-sync: scheduled run failed"),
+    );
+  }, 5 * 60 * 1000);
+
+  // Reminder check: every 15 minutes
+  setInterval(() => {
+    checkAndSendReminders().catch((err: unknown) =>
+      logger.error({ err }, "reminder: scheduled check failed"),
+    );
+  }, 15 * 60 * 1000);
 });
 
 function shutdown(signal: string) {
