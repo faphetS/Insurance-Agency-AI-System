@@ -55,6 +55,12 @@ const messageDataSchema = z.object({
     .optional(),
   imageMessageData: imageMessageDataSchema.optional(),
   documentMessageData: documentMessageDataSchema.optional(),
+  fileMessageData: z.object({
+    downloadUrl: z.string(),
+    caption: z.string().optional(),
+    fileName: z.string().optional(),
+    mimeType: z.string().optional(),
+  }).optional(),
   buttonsResponseMessage: buttonsResponseMessageSchema.optional(),
   templateButtonReplyMessage: templateButtonReplyMessageSchema.optional(),
   interactiveButtonsResponse: interactiveButtonsResponseSchema.optional(),
@@ -135,6 +141,19 @@ export function extractPayload(
       mimeType: md.documentMessageData.mimeType,
       fileName: md.documentMessageData.fileName,
       caption: md.documentMessageData.caption,
+    };
+  }
+
+  // GreenAPI sends images & docs under fileMessageData — use typeMessage to distinguish
+  const fmd = md.fileMessageData;
+  if (fmd?.downloadUrl) {
+    const isDoc = md.typeMessage === "documentMessage";
+    return {
+      kind: isDoc ? "document" : "image",
+      fileUrl: fmd.downloadUrl,
+      mimeType: fmd.mimeType,
+      fileName: fmd.fileName,
+      caption: fmd.caption,
     };
   }
 
