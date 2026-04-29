@@ -11,7 +11,7 @@ import {
   type InquiryType,
   type IntakeSlot,
 } from "./intake.prompts.js";
-import { analyzeImage } from "./ai.service.js";
+import { analyzeImage, classifyIntakeResponse } from "./ai.service.js";
 
 // ---------------------------------------------------------------------------
 // Type helpers — the DB types file predates the migration; cast as needed
@@ -202,13 +202,19 @@ async function handleFullName(
     return;
   }
 
-  const name = payload.text.trim();
-  if (/^\d+$/.test(name)) {
+  const result = await classifyIntakeResponse(
+    payload.text.trim(),
+    "full_name",
+    INTAKE_PROMPTS.full_name.text,
+    "A person's full name (first and last name). Not a greeting, question, or sentence.",
+  );
+
+  if (!result.valid) {
     await sendTextPrompt(conversationId, chatId, "full_name");
     return;
   }
 
-  await updateClient(clientId, { full_name: name });
+  await updateClient(clientId, { full_name: result.extracted });
   await advanceTo(conversationId, chatId, clientId, "email");
 }
 
@@ -225,20 +231,39 @@ async function handleEmail(
 
   const raw = payload.text.trim();
 
-  if (raw.toLowerCase() === "skip") {
-    await updateClient(clientId, { email: null });
-    await advanceTo(conversationId, chatId, clientId, "inquiry_type");
-    return;
-  }
-
+  // Fast path: valid email regex — no need for LLM
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
     await updateClient(clientId, { email: raw });
     await advanceTo(conversationId, chatId, clientId, "inquiry_type");
     return;
   }
 
-  // Invalid — resend same question
-  await sendTextPrompt(conversationId, chatId, "email");
+  // Fast path: explicit skip
+  if (raw.toLowerCase() === "skip") {
+    await updateClient(clientId, { email: null });
+    await advanceTo(conversationId, chatId, clientId, "inquiry_type");
+    return;
+  }
+
+  // LLM decides: maybe they said "I don't have one" (→ skip) or asked a question (→ re-ask)
+  const result = await classifyIntakeResponse(
+    raw,
+    "email",
+    INTAKE_PROMPTS.email.text,
+    'A valid email address, or "skip" if they want to skip. If they indicate they don\'t have email or want to skip, extracted should be "skip".',
+  );
+
+  if (!result.valid) {
+    await sendTextPrompt(conversationId, chatId, "email");
+    return;
+  }
+
+  if (result.extracted.toLowerCase() === "skip") {
+    await updateClient(clientId, { email: null });
+  } else {
+    await updateClient(clientId, { email: result.extracted });
+  }
+  await advanceTo(conversationId, chatId, clientId, "inquiry_type");
 }
 
 async function handleInquiryType(
@@ -252,10 +277,24 @@ async function handleInquiryType(
     return;
   }
 
-  const value = payload.text.trim().toLowerCase() as InquiryType;
-
+  // Fast path: exact match against known types
+  const value = payload.text.trim().toLowerCase();
   if ((INQUIRY_TYPES as readonly string[]).includes(value)) {
-    await updateClient(clientId, { inquiry_type: value });
+    await updateClient(clientId, { inquiry_type: value as InquiryType });
+    await advanceTo(conversationId, chatId, clientId, "id_photo");
+    return;
+  }
+
+  // LLM: "I need car insurance" → "vehicle", "life insurance please" → "life"
+  const result = await classifyIntakeResponse(
+    payload.text.trim(),
+    "inquiry_type",
+    INTAKE_PROMPTS.inquiry_type.text,
+    `One of these insurance types: ${INQUIRY_TYPES.join(", ")}. Extract the matching type keyword.`,
+  );
+
+  if (result.valid && (INQUIRY_TYPES as readonly string[]).includes(result.extracted.toLowerCase())) {
+    await updateClient(clientId, { inquiry_type: result.extracted.toLowerCase() as InquiryType });
     await advanceTo(conversationId, chatId, clientId, "id_photo");
     return;
   }
