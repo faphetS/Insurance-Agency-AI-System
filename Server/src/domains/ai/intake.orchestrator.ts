@@ -188,7 +188,13 @@ async function handleWelcome(
   clientId: string,
 ): Promise<void> {
   await sendTextPrompt(conversationId, chatId, "welcome");
-  await updateClient(clientId, { intake_current_slot: "full_name" });
+  const { error } = await updateClient(clientId, { intake_current_slot: "full_name" });
+  if (error) {
+    logger.error(
+      { conversationId, clientId, error },
+      "intake: handleWelcome failed to advance slot to full_name",
+    );
+  }
 }
 
 async function handleFullName(

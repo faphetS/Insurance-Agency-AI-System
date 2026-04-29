@@ -4,6 +4,7 @@ import { logger } from "../../config/logger.js";
 import { AppError } from "../../lib/errors.js";
 
 const openai = new OpenAI({ apiKey: env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api/v1" });
+const FALLBACK_MODEL = "google/gemini-2.5-flash";
 
 export interface ChatTurn {
   role: "user" | "model";
@@ -26,11 +27,24 @@ export async function generateReply(
   ];
 
   try {
-    const response = await openai.chat.completions.create({ model: resolvedModel, messages });
+    const response = await openai.chat.completions.create(
+      { model: resolvedModel, messages },
+      { timeout: 30_000 },
+    );
     const text = response.choices[0]?.message?.content ?? "";
     logger.debug({ model: resolvedModel, chars: text.length }, "AI reply generated");
     return text;
   } catch (err) {
+    if (resolvedModel !== FALLBACK_MODEL) {
+      logger.warn({ model: resolvedModel, err }, "Primary model failed — retrying with fallback");
+      const response = await openai.chat.completions.create(
+        { model: FALLBACK_MODEL, messages },
+        { timeout: 30_000 },
+      );
+      const text = response.choices[0]?.message?.content ?? "";
+      logger.debug({ model: FALLBACK_MODEL, chars: text.length }, "AI reply generated (fallback)");
+      return text;
+    }
     logger.error({ err }, "OpenRouter chat completion failed");
     throw new AppError(502, "AI model failed to generate a reply", "AI_ERROR");
   }
@@ -80,15 +94,31 @@ Examples for an "insurance type" question:
 Respond ONLY with the JSON object, nothing else.`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: resolvedModel,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-    });
+    const messages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ];
 
-    const raw = response.choices[0]?.message?.content ?? "";
+    let raw: string;
+    try {
+      const response = await openai.chat.completions.create(
+        { model: resolvedModel, messages },
+        { timeout: 15_000 },
+      );
+      raw = response.choices[0]?.message?.content ?? "";
+    } catch (err) {
+      if (resolvedModel !== FALLBACK_MODEL) {
+        logger.warn({ model: resolvedModel, err }, "Primary model failed — retrying with fallback");
+        const response = await openai.chat.completions.create(
+          { model: FALLBACK_MODEL, messages },
+          { timeout: 15_000 },
+        );
+        raw = response.choices[0]?.message?.content ?? "";
+      } else {
+        throw err;
+      }
+    }
+
     const cleaned = raw.replace(/```json\n?|\n?```/g, "").trim();
     const parsed = JSON.parse(cleaned) as { valid: boolean; extracted?: string };
 
@@ -120,7 +150,10 @@ export async function analyzeImage(
   ];
 
   try {
-    const response = await openai.chat.completions.create({ model: resolvedModel, messages });
+    const response = await openai.chat.completions.create(
+      { model: resolvedModel, messages },
+      { timeout: 30_000 },
+    );
     const text = response.choices[0]?.message?.content ?? "";
     logger.debug({ model: resolvedModel, chars: text.length }, "AI image analysis complete");
     return text;

@@ -40,6 +40,12 @@ export const whatsappController = {
 
     const rawPayload = looseResult.data;
 
+    // API-sent messages (bot outbound) — never pause
+    if (rawPayload.typeWebhook === "outgoingAPIMessageReceived") {
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     // Handle manual messages sent from WhatsApp phone — set cooldown
     if (rawPayload.typeWebhook === "outgoingMessageReceived") {
       const outboundResult = outgoingMessageSchema.safeParse(req.body);
@@ -52,6 +58,23 @@ export const whatsappController = {
         res.status(200).json({ ok: true });
         return;
       }
+
+      // Check if this outgoing message was sent by our bot — don't self-pause
+      const idMessage = outboundResult.data.idMessage ?? (req.body as Record<string, any>)?.idMessage;
+      if (idMessage) {
+        const { data: existing } = await supabaseAdmin
+          .from("messages")
+          .select("id")
+          .eq("whatsapp_message_id", idMessage)
+          .eq("sent_by", "bot")
+          .maybeSingle();
+        if (existing) {
+          logger.debug({ chatId: outChatId, idMessage }, "Outgoing message is bot-sent — skipping pause");
+          res.status(200).json({ ok: true });
+          return;
+        }
+      }
+
       if (!outChatId.endsWith("@g.us")) {
         const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
         await supabaseAdmin
@@ -276,6 +299,14 @@ export const whatsappController = {
         await handleIncomingMessage(conversationId, textForAi);
       } catch (err) {
         logger.error({ conversationId, err }, "Async message processing error");
+        try {
+          await whatsappService.sendMessage(
+            chatId,
+            "Sorry, I'm having trouble processing your message right now. A team member will be with you shortly.",
+          );
+        } catch (sendErr) {
+          logger.error({ conversationId, sendErr }, "Failed to send error fallback message");
+        }
       }
     });
   },

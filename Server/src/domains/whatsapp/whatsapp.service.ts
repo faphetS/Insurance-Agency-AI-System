@@ -96,5 +96,6 @@ export async function setWebhookSettings(webhookUrl: string): Promise<void> {
     incomingWebhook: "yes",
     stateWebhook: "yes",
     outgoingMessageWebhook: "yes",
+    outgoingAPIMessageWebhook: "no",
   });
 }
