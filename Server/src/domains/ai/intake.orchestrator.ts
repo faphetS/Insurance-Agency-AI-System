@@ -333,7 +333,7 @@ async function handleIdPhoto(
   try {
     const ocrResult = await analyzeImage(
       payload.fileUrl,
-      'Is this a valid, readable government-issued ID document? Check: (1) Is the image clear and not blurry? (2) Can you read a name and ID number? (3) Is it an actual ID document? Respond ONLY with JSON: {"valid": true, "reason": "short explanation"} or {"valid": false, "reason": "short explanation"}',
+      'Is this a government-issued ID document (passport, driver\'s license, national ID card, etc.)? Only check that the image shows an ID document and is readable. Do NOT judge authenticity or check expiration dates. Respond ONLY with JSON: {"valid": true, "reason": "short explanation"} or {"valid": false, "reason": "short explanation"}',
     );
 
     const cleaned = ocrResult.replace(/```json\n?|\n?```/g, "").trim();
