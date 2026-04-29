@@ -256,37 +256,28 @@ export const whatsappController = {
       return;
     }
 
-    // 3e. Run intake orchestrator if client is linked
-    if (linkedClientId) {
-      try {
-        const { consumed } = await handleIntake(
-          conversationId,
-          linkedClientId,
-          chatId,
-          payload,
-        );
-
-        if (consumed) {
-          res.status(200).json({ ok: true });
-          return;
-        }
-      } catch (intakeErr) {
-        logger.error(
-          { conversationId, intakeErr },
-          "Intake orchestrator unhandled error — falling through to AI",
-        );
-      }
-    }
-
-    // 3f. Fire-and-forget AI orchestration (only if intake did not consume)
-    const textForAi = payload.kind === "text" ? payload.text : "";
-    setImmediate(() => {
-      handleIncomingMessage(conversationId, textForAi).catch((err: unknown) => {
-        logger.error({ conversationId, err }, "AI orchestrator unhandled error");
-      });
-    });
-
+    // 3e. Respond 200 immediately — intake/AI processing runs async to avoid
+    // Render's 30s request timeout (LLM classification can take 15s+).
     res.status(200).json({ ok: true });
+
+    const textForAi = payload.kind === "text" ? payload.text : "";
+
+    setImmediate(async () => {
+      try {
+        if (linkedClientId) {
+          const { consumed } = await handleIntake(
+            conversationId,
+            linkedClientId,
+            chatId,
+            payload,
+          );
+          if (consumed) return;
+        }
+        await handleIncomingMessage(conversationId, textForAi);
+      } catch (err) {
+        logger.error({ conversationId, err }, "Async message processing error");
+      }
+    });
   },
 
   /**
