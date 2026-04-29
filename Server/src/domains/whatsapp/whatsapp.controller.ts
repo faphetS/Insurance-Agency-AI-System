@@ -8,6 +8,7 @@ import { handleIntake } from "../ai/intake.orchestrator.js";
 import * as whatsappService from "./whatsapp.service.js";
 import {
   incomingMessageSchema,
+  outgoingMessageSchema,
   webhookPayloadSchema,
   extractPayload,
 } from "./whatsapp.validator.js";
@@ -41,12 +42,16 @@ export const whatsappController = {
 
     // Handle manual messages sent from WhatsApp phone — set cooldown
     if (rawPayload.typeWebhook === "outgoingMessageReceived") {
-      const outboundResult = incomingMessageSchema.safeParse(req.body);
+      const outboundResult = outgoingMessageSchema.safeParse(req.body);
       if (!outboundResult.success) {
         res.status(200).json({ ok: true });
         return;
       }
-      const outChatId = outboundResult.data.senderData.chatId;
+      const outChatId = outboundResult.data.senderData?.chatId ?? (req.body as Record<string, any>)?.senderData?.chatId;
+      if (!outChatId) {
+        res.status(200).json({ ok: true });
+        return;
+      }
       if (!outChatId.endsWith("@g.us")) {
         const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
         await supabaseAdmin

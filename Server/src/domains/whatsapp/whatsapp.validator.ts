@@ -34,6 +34,13 @@ const templateButtonReplyMessageSchema = z.object({
   selectedDisplayText: z.string().optional(),
 });
 
+const interactiveButtonsResponseSchema = z.object({
+  selectedId: z.string().optional(),
+  selectedDisplayText: z.string().optional(),
+  selectedButtonId: z.string().optional(),
+  selectedButtonText: z.string().optional(),
+});
+
 const messageDataSchema = z.object({
   typeMessage: z.string().optional(),
   textMessageData: z
@@ -50,7 +57,8 @@ const messageDataSchema = z.object({
   documentMessageData: documentMessageDataSchema.optional(),
   buttonsResponseMessage: buttonsResponseMessageSchema.optional(),
   templateButtonReplyMessage: templateButtonReplyMessageSchema.optional(),
-});
+  interactiveButtonsResponse: interactiveButtonsResponseSchema.optional(),
+}).passthrough();
 
 export const incomingMessageSchema = z.object({
   typeWebhook: z.literal("incomingMessageReceived"),
@@ -137,10 +145,18 @@ export function extractPayload(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawMd = (rawBody?.messageData ?? {}) as any;
   const buttonText =
+    md.interactiveButtonsResponse?.selectedButtonId ??
+    md.interactiveButtonsResponse?.selectedButtonText ??
+    md.interactiveButtonsResponse?.selectedId ??
+    md.interactiveButtonsResponse?.selectedDisplayText ??
     md.buttonsResponseMessage?.selectedButtonId ??
     md.buttonsResponseMessage?.selectedButtonText ??
     md.templateButtonReplyMessage?.selectedId ??
     md.templateButtonReplyMessage?.selectedDisplayText ??
+    rawMd.interactiveButtonsResponse?.selectedButtonId ??
+    rawMd.interactiveButtonsResponse?.selectedButtonText ??
+    rawMd.interactiveButtonsResponse?.selectedId ??
+    rawMd.interactiveButtonsResponse?.selectedDisplayText ??
     rawMd.buttonsResponseMessage?.selectedButtonId ??
     rawMd.buttonsResponseMessage?.selectedButtonText ??
     rawMd.templateButtonReplyMessage?.selectedId ??
