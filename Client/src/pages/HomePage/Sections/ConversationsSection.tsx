@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { MessageSquare } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { useConversationsWithLastMessage } from "@/features/pipeline/hooks";
+import { useConversationsWithLastMessage, usePauseBotMutation } from "@/features/pipeline/hooks";
 import { Badge } from "@/components/ui/Badge";
 import { ConversationDrawer } from "./ConversationDrawer";
 import type { ConversationWithLastMessage } from "@/features/pipeline/api";
@@ -65,6 +65,52 @@ function RowSkeleton() {
   );
 }
 
+// ── Pause toggle button ───────────────────────────────────────────────────
+
+function PauseToggleButton({ conv }: { conv: ConversationWithLastMessage }) {
+  const { mutate, isPending } = usePauseBotMutation();
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    mutate({ conversationId: conv.id, paused: !conv.bot_paused });
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={isPending}
+      title={conv.bot_paused ? "Resume bot" : "Pause bot"}
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors disabled:opacity-40"
+      style={{
+        backgroundColor: conv.bot_paused ? "rgba(245,158,11,0.12)" : "rgba(0,0,0,0.04)",
+        color: conv.bot_paused ? "#d97706" : "#9ca3af",
+      }}
+      onMouseEnter={(e) => {
+        if (!isPending)
+          (e.currentTarget as HTMLButtonElement).style.backgroundColor = conv.bot_paused
+            ? "rgba(245,158,11,0.2)"
+            : "rgba(0,0,0,0.08)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.backgroundColor = conv.bot_paused
+          ? "rgba(245,158,11,0.12)"
+          : "rgba(0,0,0,0.04)";
+      }}
+    >
+      {conv.bot_paused ? (
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <polygon points="2,1 9,5 2,9" />
+        </svg>
+      ) : (
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <rect x="1.5" y="1" width="3" height="8" rx="0.5" />
+          <rect x="5.5" y="1" width="3" height="8" rx="0.5" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 // ── Conversation row ──────────────────────────────────────────────────────
 
 interface ConvRowProps {
@@ -103,7 +149,10 @@ function ConvRow({ conv, onClick }: ConvRowProps) {
 
       {/* Right-side meta */}
       <div className="flex shrink-0 flex-col items-end gap-1">
-        <RelativeTime iso={conv.last_message_at} />
+        <div className="flex items-center gap-1.5">
+          <RelativeTime iso={conv.last_message_at} />
+          <PauseToggleButton conv={conv} />
+        </div>
         {conv.bot_paused && (
           <Badge variant="warning" className="text-[9px]">
             {conv.bot_paused_until && new Date(conv.bot_paused_until) > new Date()
