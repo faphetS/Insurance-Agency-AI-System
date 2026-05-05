@@ -12,6 +12,7 @@ export async function getRecentEvents(
   const res = await calendar.events.list({
     calendarId,
     updatedMin: since.toISOString(),
+    timeMin: since.toISOString(),
     singleEvents: true,
     orderBy: "startTime",
     maxResults: 50,
