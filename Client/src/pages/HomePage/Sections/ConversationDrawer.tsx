@@ -105,7 +105,7 @@ function ConversationTab({
         <div className="mb-3 flex items-center justify-between rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
           <span>
               Bot is paused for this chat
-              {conversation.bot_paused_until && (
+              {conversation.bot_paused_until && new Date(conversation.bot_paused_until) > new Date() && (
                 <> · resumes {formatDistanceToNow(new Date(conversation.bot_paused_until), { addSuffix: true })}</>
               )}
             </span>

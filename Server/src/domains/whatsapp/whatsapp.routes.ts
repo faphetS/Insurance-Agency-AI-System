@@ -10,6 +10,12 @@ const router = express.Router();
 router.post("/webhook", whatsappController.handleWebhook);
 
 // Admin-only routes
+router.patch(
+  "/conversations/:id/bot-pause",
+  authenticate,
+  authorize("admin"),
+  whatsappController.setBotPause,
+);
 router.get("/state", authenticate, authorize("admin"), whatsappController.getState);
 router.get("/qr", authenticate, authorize("admin"), whatsappController.getQrCode);
 router.post(

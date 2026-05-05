@@ -312,6 +312,31 @@ export const whatsappController = {
   },
 
   /**
+   * PATCH /api/whatsapp/conversations/:id/bot-pause — admin only
+   */
+  async setBotPause(req: Request, res: Response): Promise<void> {
+    const { id } = req.params as { id: string };
+    const { paused } = req.body as { paused: boolean };
+
+    const update =
+      paused
+        ? { bot_paused: true }
+        : { bot_paused: false, bot_paused_until: null };
+
+    const { error } = await supabaseAdmin
+      .from("conversations")
+      .update(update)
+      .eq("id", id);
+
+    if (error) {
+      logger.error({ conversationId: id, error }, "Failed to update bot_paused");
+      throw new Error("Failed to update conversation");
+    }
+
+    res.json({ ok: true });
+  },
+
+  /**
    * GET /api/whatsapp/state — admin only
    */
   async getState(_req: Request, res: Response): Promise<void> {

@@ -107,7 +107,7 @@ function ConversationBody({ conversation }: { conversation: ConversationRow }) {
         >
           <span>
               Bot is paused for this chat
-              {conversation.bot_paused_until && (
+              {conversation.bot_paused_until && new Date(conversation.bot_paused_until) > new Date() && (
                 <> · resumes {formatDistanceToNow(new Date(conversation.bot_paused_until), { addSuffix: true })}</>
               )}
             </span>

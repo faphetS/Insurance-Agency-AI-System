@@ -113,11 +113,7 @@ export async function fetchMessages(conversationId: string) {
 }
 
 export async function pauseBotForConversation(conversationId: string, paused: boolean): Promise<void> {
-  const { error } = await supabase
-    .from("conversations")
-    .update(paused ? { bot_paused: paused } : { bot_paused: paused, bot_paused_until: null })
-    .eq("id", conversationId);
-  if (error) throw error;
+  await api.patch(`/whatsapp/conversations/${conversationId}/bot-pause`, { paused });
 }
 
 // ── Bot Settings ──────────────────────────────────────────────────────────

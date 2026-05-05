@@ -106,7 +106,7 @@ function ConvRow({ conv, onClick }: ConvRowProps) {
         <RelativeTime iso={conv.last_message_at} />
         {conv.bot_paused && (
           <Badge variant="warning" className="text-[9px]">
-            {conv.bot_paused_until
+            {conv.bot_paused_until && new Date(conv.bot_paused_until) > new Date()
               ? `Bot paused · resumes ${formatDistanceToNow(new Date(conv.bot_paused_until), { addSuffix: true })}`
               : "Bot paused"}
           </Badge>
