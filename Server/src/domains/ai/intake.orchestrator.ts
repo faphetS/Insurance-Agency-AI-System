@@ -191,6 +191,11 @@ async function finalize(
     logger.error({ conversationId, err }, "intake: failed to send done message");
   }
 
+  await supabaseAdmin
+    .from("conversations")
+    .update({ bot_paused: true })
+    .eq("id", conversationId);
+
   logger.info({ conversationId, clientId }, "intake: completed");
 }
 
