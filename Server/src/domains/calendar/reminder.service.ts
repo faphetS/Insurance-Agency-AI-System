@@ -70,16 +70,13 @@ async function sendReminder(
 export async function checkAndSendReminders(): Promise<void> {
   const now = new Date();
 
-  // 24-hour reminders
-  const in25h = new Date(now.getTime() + 25 * 60 * 60 * 1000);
+  // 24-hour reminders — TEST MODE: no time filter
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: meetings24h } = await (supabaseAdmin as any)
     .from("meetings")
     .select("id, conversation_id, scheduled_at")
     .eq("status", "scheduled")
-    .eq("reminder_24h_sent", false)
-    .gte("scheduled_at", now.toISOString())
-    .lte("scheduled_at", in25h.toISOString());
+    .eq("reminder_24h_sent", false);
 
   for (const m of meetings24h ?? []) {
     if (!m.conversation_id) continue;
@@ -90,16 +87,13 @@ export async function checkAndSendReminders(): Promise<void> {
     }
   }
 
-  // 1-hour reminders
-  const in90min = new Date(now.getTime() + 90 * 60 * 1000);
+  // 1-hour reminders — TEST MODE: no time filter
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: meetings1h } = await (supabaseAdmin as any)
     .from("meetings")
     .select("id, conversation_id, scheduled_at")
     .eq("status", "scheduled")
-    .eq("reminder_1h_sent", false)
-    .gte("scheduled_at", now.toISOString())
-    .lte("scheduled_at", in90min.toISOString());
+    .eq("reminder_1h_sent", false);
 
   for (const m of meetings1h ?? []) {
     if (!m.conversation_id) continue;

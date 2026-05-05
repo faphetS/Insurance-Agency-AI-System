@@ -118,7 +118,7 @@ const server = app.listen(env.PORT, () => {
       );
   }
 
-  // Calendar sync: initial run after 30s, then every 5 minutes
+  // Calendar sync: initial run after 30s, then every 3 minutes
   setTimeout(() => {
     syncNewBookings().catch((err: unknown) =>
       logger.error({ err }, "booking-sync: initial run failed"),
@@ -128,14 +128,14 @@ const server = app.listen(env.PORT, () => {
     syncNewBookings().catch((err: unknown) =>
       logger.error({ err }, "booking-sync: scheduled run failed"),
     );
-  }, 5 * 60 * 1000);
+  }, 3 * 60 * 1000);
 
-  // Reminder check: every 15 minutes
+  // Reminder check: every 10 minutes
   setInterval(() => {
     checkAndSendReminders().catch((err: unknown) =>
       logger.error({ err }, "reminder: scheduled check failed"),
     );
-  }, 15 * 60 * 1000);
+  }, 10 * 60 * 1000);
 });
 
 function shutdown(signal: string) {

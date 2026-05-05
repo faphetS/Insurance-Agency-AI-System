@@ -81,8 +81,8 @@ Examples for a "full name" question:
 
 Examples for an "email" question:
 - "test@gmail.com" → {"valid":true,"extracted":"test@gmail.com"}
-- "skip" → {"valid":true,"extracted":"skip"}
-- "I don't have one" → {"valid":true,"extracted":"skip"}
+- "skip" → {"valid":false}
+- "I don't have one" → {"valid":false}
 - "what is this for" → {"valid":false}
 
 Examples for an "insurance type" question:

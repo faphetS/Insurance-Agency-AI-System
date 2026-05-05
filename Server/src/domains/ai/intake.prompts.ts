@@ -3,7 +3,7 @@ export const INTAKE_PROMPTS = {
     text: "Hi! Before we schedule your consultation, I need to collect a few details and documents. Let's start — what is your full name?",
   },
   full_name: { text: "What is your full name?" },
-  email: { text: 'What is your email address? (reply "skip" to skip)' },
+  email: { text: 'What is your email address?' },
   inquiry_type: {
     text: "What type of insurance are you interested in?",
     buttons: [

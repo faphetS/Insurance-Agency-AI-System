@@ -260,19 +260,11 @@ async function handleEmail(
     return;
   }
 
-  // Fast path: explicit skip
-  if (raw.toLowerCase() === "skip") {
-    await updateClient(clientId, { email: null });
-    await advanceTo(conversationId, chatId, clientId, "inquiry_type");
-    return;
-  }
-
-  // LLM decides: maybe they said "I don't have one" (→ skip) or asked a question (→ re-ask)
   const result = await classifyIntakeResponse(
     raw,
     "email",
     INTAKE_PROMPTS.email.text,
-    'A valid email address, or "skip" if they want to skip. If they indicate they don\'t have email or want to skip, extracted should be "skip".',
+    'A valid email address.',
   );
 
   if (!result.valid) {
@@ -280,11 +272,7 @@ async function handleEmail(
     return;
   }
 
-  if (result.extracted.toLowerCase() === "skip") {
-    await updateClient(clientId, { email: null });
-  } else {
-    await updateClient(clientId, { email: result.extracted });
-  }
+  await updateClient(clientId, { email: result.extracted });
   await advanceTo(conversationId, chatId, clientId, "inquiry_type");
 }
 
