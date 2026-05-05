@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install Client dependencies
+        run: npm install -w Client
+
+      - name: Install Server dependencies
+        run: npm install -w Server
+
+      - name: Lint Client
+        run: npm run lint -w Client
+
+      - name: Lint Server
+        run: npm run lint -w Server
+
+      - name: Typecheck Client
+        run: npm run typecheck -w Client
+
+      - name: Typecheck Server
+        run: npm run typecheck -w Server
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install Client dependencies
+        run: npm install -w Client
+
+      - name: Install Server dependencies
+        run: npm install -w Server
+
+      - name: Test Server
+        run: npm test -w Server
+
+      - name: Test Client
+        run: npm test -w Client
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install Client dependencies
+        run: npm install -w Client
+
+      - name: Install Server dependencies
+        run: npm install -w Server
+
+      - name: Build Client
+        run: npm run build -w Client
+
+      - name: Build Server
+        run: npm run build -w Server
