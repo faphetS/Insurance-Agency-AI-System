@@ -171,15 +171,36 @@ export async function syncNewBookings(): Promise<void> {
 
     if (pendingMeeting) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any)
+      const { error: updateErr } = await (supabaseAdmin as any)
         .from("meetings")
         .update(meetingUpdate)
         .eq("id", pendingMeeting.id);
+      if (updateErr) {
+        logger.error({ err: updateErr, meetingId: pendingMeeting.id }, "booking-sync: failed to update meeting");
+        continue;
+      }
     } else {
+      const now = new Date().toISOString();
+      const { data: convRow } = await supabaseAdmin
+        .from("conversations")
+        .select("id")
+        .eq("client_id", client.id)
+        .order("last_message_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any)
+      const { error: insertErr } = await (supabaseAdmin as any)
         .from("meetings")
-        .insert({ ...meetingUpdate, client_id: client.id });
+        .insert({
+          ...meetingUpdate,
+          client_id: client.id,
+          conversation_id: convRow?.id ?? null,
+          created_at: now,
+        });
+      if (insertErr) {
+        logger.error({ err: insertErr, clientId: client.id }, "booking-sync: failed to insert meeting");
+        continue;
+      }
     }
 
     // Update client pipeline
@@ -190,7 +211,17 @@ export async function syncNewBookings(): Promise<void> {
       .eq("id", client.id);
 
     // Send WhatsApp confirmation
-    const conversationId = pendingMeeting?.conversation_id;
+    let conversationId = pendingMeeting?.conversation_id ?? null;
+    if (!conversationId) {
+      const { data: convLookup } = await supabaseAdmin
+        .from("conversations")
+        .select("id")
+        .eq("client_id", client.id)
+        .order("last_message_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      conversationId = convLookup?.id ?? null;
+    }
     if (conversationId) {
       const { data: conv } = await supabaseAdmin
         .from("conversations")
