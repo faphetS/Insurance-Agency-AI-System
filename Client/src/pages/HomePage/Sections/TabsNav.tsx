@@ -1,12 +1,14 @@
 import { useSearchParams } from "react-router-dom";
+import { useUnreadCount } from "@/features/notifications/hooks";
 
-export type DashTab = "overview" | "pipeline" | "conversations" | "alerts" | "bot";
+export type DashTab = "overview" | "pipeline" | "conversations" | "alerts" | "notifications" | "bot";
 
 const TABS: { key: DashTab; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "pipeline", label: "Pipeline" },
   { key: "conversations", label: "Conversations" },
   { key: "alerts", label: "Alerts" },
+  { key: "notifications", label: "Notifications" },
   { key: "bot", label: "Bot" },
 ];
 
@@ -17,6 +19,8 @@ interface TabsNavProps {
 export function TabsNav({ alertCount = 0 }: TabsNavProps) {
   const [params, setParams] = useSearchParams();
   const active = (params.get("tab") ?? "overview") as DashTab;
+  const { data: unreadData } = useUnreadCount();
+  const unreadCount = unreadData?.count ?? 0;
 
   const setTab = (tab: DashTab) => {
     setParams({ tab }, { replace: true });
@@ -65,6 +69,14 @@ export function TabsNav({ alertCount = 0 }: TabsNavProps) {
                 style={{ backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "#f43f5e", color: "#fff" }}
               >
                 {alertCount}
+              </span>
+            )}
+            {key === "notifications" && unreadCount > 0 && (
+              <span
+                className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums"
+                style={{ backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "#f43f5e", color: "#fff" }}
+              >
+                {unreadCount}
               </span>
             )}
           </button>

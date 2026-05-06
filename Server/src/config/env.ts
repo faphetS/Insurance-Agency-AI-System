@@ -44,6 +44,11 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().min(1),
   AI_MODEL: z.string().default("google/gemini-3.1-pro-preview"),
 
+  // Bafi (Insurance CRM) — optional until API access is resolved
+  BAFI_API_URL: z.string().url().optional(),
+  BAFI_API_TOKEN: z.string().optional(),
+  BAFI_EXT_URL: z.string().url().optional(),
+
   // Google Calendar (OAuth 2.0)
   GOOGLE_CLIENT_ID: z.string().min(1),
   GOOGLE_CLIENT_SECRET: z.string().min(1),

@@ -4,6 +4,12 @@ import express, { type Request, type Response } from "express";
 import { setWebhookSettings } from "./domains/whatsapp/whatsapp.service.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
+import {
+  checkSummaryApprovals,
+  checkDueAndOverdueTasks,
+  checkSlaBreaches,
+  checkServiceMeetingEligibility,
+} from "./domains/operations/operations.checker.js";
 import helmet from "helmet";
 import hpp from "hpp";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -136,6 +142,34 @@ const server = app.listen(env.PORT, () => {
       logger.error({ err }, "reminder: scheduled check failed"),
     );
   }, 10 * 60 * 1000);
+
+  // Operations: summary approval check — every 10 minutes
+  setInterval(() => {
+    checkSummaryApprovals().catch((err: unknown) =>
+      logger.error({ err }, "operations: checkSummaryApprovals failed"),
+    );
+  }, 10 * 60 * 1000);
+
+  // Operations: due/overdue task check — every 30 minutes
+  setInterval(() => {
+    checkDueAndOverdueTasks().catch((err: unknown) =>
+      logger.error({ err }, "operations: checkDueAndOverdueTasks failed"),
+    );
+  }, 30 * 60 * 1000);
+
+  // Operations: SLA breach check — every 30 minutes
+  setInterval(() => {
+    checkSlaBreaches().catch((err: unknown) =>
+      logger.error({ err }, "operations: checkSlaBreaches failed"),
+    );
+  }, 30 * 60 * 1000);
+
+  // Operations: service meeting eligibility — daily (every 24h)
+  setInterval(() => {
+    checkServiceMeetingEligibility().catch((err: unknown) =>
+      logger.error({ err }, "operations: checkServiceMeetingEligibility failed"),
+    );
+  }, 24 * 60 * 60 * 1000);
 });
 
 function shutdown(signal: string) {

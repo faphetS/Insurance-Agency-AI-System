@@ -9,6 +9,7 @@ import { PipelineKanbanSection } from "./Sections/PipelineKanbanSection";
 import { ConversationsTab } from "./Sections/ConversationsTab";
 import { AlertsSection } from "./Sections/AlertsSection";
 import { BotTab } from "./Sections/BotTab";
+import { NotificationsTab } from "./Sections/NotificationsTab";
 import type { DashTab } from "./Sections/TabsNav";
 
 // ── Alert count derivation (for badge on nav) ─────────────────────────────
@@ -84,6 +85,8 @@ export default function HomePage() {
             <AlertsSection />
           </div>
         )}
+
+        {activeTab === "notifications" && <NotificationsTab />}
 
         {activeTab === "bot" && <BotTab />}
       </main>
