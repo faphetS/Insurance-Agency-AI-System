@@ -114,14 +114,27 @@ app.use(globalErrorHandler);
 const server = app.listen(env.PORT, () => {
   logger.info(`Server running on ${env.BACKEND_URL} [${env.NODE_ENV}]`);
 
-  // Register GreenAPI webhook on boot (best-effort, non-blocking)
-  if (env.BACKEND_URL) {
-    const webhookUrl = `${env.BACKEND_URL}/api/whatsapp/webhook`;
-    setWebhookSettings(webhookUrl)
+  // Register GreenAPI webhook on boot (best-effort, non-blocking).
+  // Guarded: only runs when BACKEND_URL is a public HTTPS URL. Dev / localhost
+  // boots must NOT touch the shared GreenAPI instance, or they overwrite
+  // production's webhook with an unreachable URL.
+  const webhookUrl = env.BACKEND_URL ? `${env.BACKEND_URL}/api/whatsapp/webhook` : null;
+  const isPublicWebhook =
+    !!webhookUrl &&
+    webhookUrl.startsWith("https://") &&
+    !/(localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(webhookUrl);
+
+  if (isPublicWebhook) {
+    setWebhookSettings(webhookUrl!)
       .then(() => logger.info({ webhookUrl }, "GreenAPI webhook registered"))
       .catch((err: unknown) =>
         logger.warn({ err, webhookUrl }, "GreenAPI webhook registration failed — continuing"),
       );
+  } else {
+    logger.info(
+      { webhookUrl, nodeEnv: env.NODE_ENV },
+      "Skipping GreenAPI webhook registration — BACKEND_URL is not a public HTTPS URL",
+    );
   }
 
   // Calendar sync: initial run after 30s, then every 3 minutes
