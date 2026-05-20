@@ -2,8 +2,8 @@ import { supabaseAdmin } from "../../config/supabase.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import {
-  sendMessage,
-  sendInteractiveButtons,
+  sendMessageWithTyping,
+  sendInteractiveButtonsWithTyping,
 } from "../whatsapp/whatsapp.service.js";
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
 import {
@@ -67,12 +67,12 @@ async function persistOutbound(
 async function sendTextPrompt(
   conversationId: string,
   chatId: string,
-  slot: IntakeSlot,
+  slot: Exclude<IntakeSlot, "welcome">,
 ): Promise<void> {
   const prompt = INTAKE_PROMPTS[slot];
   const text = prompt.text;
   try {
-    const { idMessage } = await sendMessage(chatId, text);
+    const { idMessage } = await sendMessageWithTyping(chatId, text);
     await persistOutbound(conversationId, text, idMessage);
   } catch (err) {
     logger.error({ conversationId, slot, err }, "intake: sendTextPrompt failed");
@@ -88,7 +88,7 @@ async function sendInquiryPrompt(
   const fullText = `${prompt.text}\n${prompt.footer}`;
 
   try {
-    const { idMessage } = await sendInteractiveButtons(
+    const { idMessage } = await sendInteractiveButtonsWithTyping(
       chatId,
       prompt.text,
       [...prompt.buttons],
@@ -105,7 +105,7 @@ async function sendInquiryPrompt(
         .map((b) => `• ${b.buttonText}`)
         .join("\n");
       const fallback = `${prompt.text}\n\n${buttonList}\n\n${prompt.footer}`;
-      const { idMessage } = await sendMessage(chatId, fallback);
+      const { idMessage } = await sendMessageWithTyping(chatId, fallback);
       await persistOutbound(conversationId, fallback, idMessage);
     } catch (fallbackErr) {
       logger.error(
@@ -143,7 +143,7 @@ async function advanceTo(
   if (next === "inquiry_type") {
     await sendInquiryPrompt(conversationId, chatId);
   } else {
-    await sendTextPrompt(conversationId, chatId, next);
+    await sendTextPrompt(conversationId, chatId, next as Exclude<IntakeSlot, "welcome">);
   }
 }
 
@@ -183,9 +183,9 @@ async function finalize(
       updated_at: now,
     });
 
-  const doneText = `${INTAKE_PROMPTS.done.text}\n\nBook your consultation here: ${env.GOOGLE_CALENDAR_BOOKING_URL}`;
+  const doneText = `${INTAKE_PROMPTS.done.text}\n\nלקביעת הפגישה: ${env.GOOGLE_CALENDAR_BOOKING_URL}`;
   try {
-    const { idMessage } = await sendMessage(chatId, doneText);
+    const { idMessage } = await sendMessageWithTyping(chatId, doneText);
     await persistOutbound(conversationId, doneText, idMessage);
   } catch (err) {
     logger.error({ conversationId, err }, "intake: failed to send done message");
@@ -208,7 +208,15 @@ async function handleWelcome(
   chatId: string,
   clientId: string,
 ): Promise<void> {
-  await sendTextPrompt(conversationId, chatId, "welcome");
+  const { text1, text2 } = INTAKE_PROMPTS.welcome;
+  try {
+    const { idMessage: id1 } = await sendMessageWithTyping(chatId, text1);
+    await persistOutbound(conversationId, text1, id1);
+    const { idMessage: id2 } = await sendMessageWithTyping(chatId, text2);
+    await persistOutbound(conversationId, text2, id2);
+  } catch (err) {
+    logger.error({ conversationId, err }, "intake: handleWelcome send failed");
+  }
   const { error } = await updateClient(clientId, { intake_current_slot: "full_name" });
   if (error) {
     logger.error(
@@ -354,7 +362,7 @@ async function handleIdPhoto(
         parsed.reason,
       );
       try {
-        const { idMessage } = await sendMessage(chatId, rePrompt);
+        const { idMessage } = await sendMessageWithTyping(chatId, rePrompt);
         await persistOutbound(conversationId, rePrompt, idMessage);
       } catch (sendErr) {
         logger.error({ sendErr }, "intake: failed to send OCR rejection");

@@ -1,30 +1,31 @@
 export const INTAKE_PROMPTS = {
   welcome: {
-    text: "Hi! Before we schedule your consultation, I need to collect a few details and documents. Let's start — what is your full name?",
+    text1: "שלום! לפני קביעת הפגישה, נדרשים מספר פרטים ומסמכים. בואו נתחיל",
+    text2: "מהו השם המלא?",
   },
-  full_name: { text: "What is your full name?" },
-  email: { text: 'What is your email address?' },
+  full_name: { text: "מהו השם המלא?" },
+  email: { text: "מהי כתובת האימייל?" },
   inquiry_type: {
-    text: "What type of insurance are you interested in?",
+    text: "באיזה סוג ביטוח יש עניין?",
     buttons: [
-      { buttonId: "life", buttonText: "Life" },
-      { buttonId: "health", buttonText: "Health" },
-      { buttonId: "vehicle", buttonText: "Vehicle" },
+      { buttonId: "life", buttonText: "ביטוח חיים" },
+      { buttonId: "health", buttonText: "ביטוח בריאות" },
+      { buttonId: "vehicle", buttonText: "ביטוח רכב" },
     ],
     footer:
-      "Not listed? Reply: property, liability, business, pension, travel, mortgage, or general.",
+      "לא ברשימה? יש להשיב: רכוש, חבות, עסקי, פנסיה, נסיעות, משכנתא, או כללי.",
   },
   id_photo: {
-    text: "Please send a clear photo of your government-issued ID (front side). Make sure the text is readable.",
+    text: "נא לשלוח תמונה ברורה של תעודת הזהות (הצד הקדמי). חשוב שהטקסט יהיה קריא.",
   },
   id_photo_invalid: {
-    text: "I couldn't verify that ID photo — {reason}. Please send another clear photo of your ID.",
+    text: "לא ניתן לאמת את תמונת תעודת הזהות — {reason}. נא לשלוח תמונה נוספת וברורה של תעודת הזהות.",
   },
   poa: {
-    text: 'If you have a power of attorney document, please send it now. Otherwise reply "skip".',
+    text: 'במידה ויש מסמך ייפוי כוח, נא לשלוח אותו כעת. אחרת, יש להשיב "דלג".',
   },
   done: {
-    text: "Thanks! We have everything we need. We'll be in touch shortly to schedule your consultation.",
+    text: "תודה! התקבלו כל הפרטים הנדרשים. ייווצר קשר בהקדם לקביעת הפגישה.",
   },
 } as const;
 

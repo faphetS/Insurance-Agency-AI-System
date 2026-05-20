@@ -300,9 +300,9 @@ export const whatsappController = {
       } catch (err) {
         logger.error({ conversationId, err }, "Async message processing error");
         try {
-          await whatsappService.sendMessage(
+          await whatsappService.sendMessageWithTyping(
             chatId,
-            "Sorry, I'm having trouble processing your message right now. A team member will be with you shortly.",
+            "מצטערים, יש כעת קושי בעיבוד ההודעה. נציג ייצור קשר בהקדם.",
           );
         } catch (sendErr) {
           logger.error({ conversationId, sendErr }, "Failed to send error fallback message");

@@ -3,7 +3,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { getAuthenticatedClient } from "./calendar.auth.js";
 import { getRecentEvents } from "./calendar.service.js";
-import { sendMessage } from "../whatsapp/whatsapp.service.js";
+import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
 import type { calendar_v3 } from "googleapis";
 
 const TZ = "Asia/Jerusalem";
@@ -74,7 +74,7 @@ async function matchEventToClient(event: calendar_v3.Schema$Event): Promise<Matc
 
 function formatDateTime(iso: string): string {
   const date = new Date(iso);
-  return new Intl.DateTimeFormat("en-IL", {
+  return new Intl.DateTimeFormat("he-IL", {
     timeZone: TZ,
     weekday: "long",
     year: "numeric",
@@ -231,10 +231,10 @@ export async function syncNewBookings(): Promise<void> {
 
       if (conv?.whatsapp_chat_id) {
         const formattedDate = formatDateTime(event.start.dateTime);
-        const confirmMsg = `Your consultation has been confirmed for ${formattedDate}. We'll send you a reminder before the meeting.`;
+        const confirmMsg = `הפגישה אושרה לתאריך ${formattedDate}. תישלח תזכורת לפני המועד.`;
 
         try {
-          const { idMessage } = await sendMessage(conv.whatsapp_chat_id, confirmMsg);
+          const { idMessage } = await sendMessageWithTyping(conv.whatsapp_chat_id, confirmMsg);
           await supabaseAdmin.from("messages").insert({
             conversation_id: conversationId,
             direction: "outbound",

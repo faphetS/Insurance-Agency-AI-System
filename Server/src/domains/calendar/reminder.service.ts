@@ -1,11 +1,11 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { sendMessage } from "../whatsapp/whatsapp.service.js";
+import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
 
 const TZ = "Asia/Jerusalem";
 
 function formatDateTime(iso: string): string {
-  return new Intl.DateTimeFormat("en-IL", {
+  return new Intl.DateTimeFormat("he-IL", {
     timeZone: TZ,
     weekday: "long",
     month: "long",
@@ -17,7 +17,7 @@ function formatDateTime(iso: string): string {
 }
 
 function formatTime(iso: string): string {
-  return new Intl.DateTimeFormat("en-IL", {
+  return new Intl.DateTimeFormat("he-IL", {
     timeZone: TZ,
     hour: "2-digit",
     minute: "2-digit",
@@ -44,10 +44,10 @@ async function sendReminder(
 
   const text =
     flag === "reminder_24h_sent"
-      ? `Reminder: You have a consultation scheduled for ${formatDateTime(scheduledAt)}. See you then!`
-      : `Reminder: Your consultation is in about 1 hour (${formatTime(scheduledAt)}). Please be ready!`;
+      ? `תזכורת: קיימת פגישה מתוזמנת ל-${formatDateTime(scheduledAt)}. נשמח להיפגש!`
+      : `תזכורת: הפגישה תתקיים בעוד כשעה (${formatTime(scheduledAt)}). נא להיות מוכנים.`;
 
-  const { idMessage } = await sendMessage(conv.whatsapp_chat_id, text);
+  const { idMessage } = await sendMessageWithTyping(conv.whatsapp_chat_id, text);
 
   await supabaseAdmin.from("messages").insert({
     conversation_id: conversationId,

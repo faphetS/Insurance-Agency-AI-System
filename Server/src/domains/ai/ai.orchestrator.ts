@@ -125,7 +125,7 @@ export async function handleIncomingMessage(
 
   // 6. Send via GreenAPI
   try {
-    const { idMessage } = await whatsappService.sendMessage(
+    const { idMessage } = await whatsappService.sendMessageWithTyping(
       conversation.whatsapp_chat_id,
       reply,
     );

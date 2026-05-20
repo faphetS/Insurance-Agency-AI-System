@@ -97,5 +97,41 @@ export async function setWebhookSettings(webhookUrl: string): Promise<void> {
     stateWebhook: "yes",
     outgoingMessageWebhook: "yes",
     outgoingAPIMessageWebhook: "no",
+    markIncomingMessagesReadedOnReply: "yes",
   });
+}
+
+export async function sendTyping(chatId: string, typingTimeMs = 2000): Promise<void> {
+  const url = `${env.GREENAPI_BASE_URL}/waInstance${env.GREENAPI_ID_INSTANCE}/sendTyping/${env.GREENAPI_API_TOKEN}`;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, typingTime: typingTimeMs }),
+    });
+  } catch (err) {
+    logger.warn({ err, chatId }, "sendTyping failed — continuing");
+  }
+}
+
+export async function sendMessageWithTyping(
+  chatId: string,
+  message: string,
+  typingMs = 2000,
+): Promise<{ idMessage: string }> {
+  await sendTyping(chatId, typingMs);
+  await new Promise((r) => setTimeout(r, typingMs));
+  return sendMessage(chatId, message);
+}
+
+export async function sendInteractiveButtonsWithTyping(
+  chatId: string,
+  body: string,
+  buttons: { buttonId: string; buttonText: string }[],
+  footer?: string,
+  typingMs = 2000,
+): Promise<{ idMessage: string }> {
+  await sendTyping(chatId, typingMs);
+  await new Promise((r) => setTimeout(r, typingMs));
+  return sendInteractiveButtons(chatId, body, buttons, footer);
 }
