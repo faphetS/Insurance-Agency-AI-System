@@ -350,7 +350,7 @@ async function handleIdPhoto(
   try {
     const ocrResult = await analyzeImage(
       payload.fileUrl,
-      'Is this a government-issued ID document (passport, driver\'s license, national ID card, etc.)? Only check that the image shows an ID document and is readable. Do NOT judge authenticity or check expiration dates. Respond ONLY with JSON: {"valid": true, "reason": "short explanation"} or {"valid": false, "reason": "short explanation"}',
+      'Is this a government-issued ID document (passport, driver\'s license, national ID card, etc.)? Only check that the image shows an ID document and is readable. Do NOT judge authenticity or check expiration dates. Respond ONLY with JSON: {"valid": true, "reason": "<short explanation IN HEBREW>"} or {"valid": false, "reason": "<short explanation IN HEBREW>"}. The "reason" value MUST be in Hebrew with gender-neutral phrasing (use infinitives like לשלוח, impersonal forms like נדרש, avoid אתה/את).',
     );
 
     const cleaned = ocrResult.replace(/```json\n?|\n?```/g, "").trim();
@@ -377,13 +377,24 @@ async function handleIdPhoto(
   await advanceTo(conversationId, chatId, clientId, "poa");
 }
 
+const POA_SKIP_EXACT = new Set([
+  "skip", "no", "none",
+  "דלג", "לא", "אין",
+]);
+
+function isPoaSkip(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (POA_SKIP_EXACT.has(t)) return true;
+  return /\bאין\b|\bדלג\b|don'?t have|no poa/i.test(text);
+}
+
 async function handlePoa(
   conversationId: string,
   chatId: string,
   clientId: string,
   payload: MessagePayload,
 ): Promise<void> {
-  if (payload.kind === "text" && payload.text.trim().toLowerCase() === "skip") {
+  if (payload.kind === "text" && isPoaSkip(payload.text)) {
     await advanceTo(conversationId, chatId, clientId, "done");
     return;
   }
