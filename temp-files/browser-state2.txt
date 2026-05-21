@@ -1,0 +1,321 @@
+﻿viewport: 1920x963
+page: 1920x963
+scroll: (0, 0)
+[460]<ul id=ext-gen11 />
+	[341]<a />
+		Home page
+	[343]<a />
+		Office management
+	[423]<li id=topTabs__forms_pan level=1 />
+		[345]<a />
+			Forms
+	[347]<a />
+		New Frisbees
+	[349]<a />
+		Mobile2CRM
+	[351]<a />
+		99Digital (WhatsApp)
+	[353]<a />
+		Jaro AI
+		(BETA)
+	[355]<a />
+		B-Smart (PBX)
+	[357]<a />
+		Online Clearing House
+	[359]<a />
+		The new simulator
+	[361]<a />
+		Technical support
+	[363]<a />
+		Settings
+	[365]<a />
+		System management
+[1000]<ul id=ext-gen31 />
+	[1006]<a />
+		Desktop
+	[1014]<a />
+		B-mail
+	[1022]<a />
+		Customers
+	[1030]<a />
+		Claims
+	[1038]<a />
+		Tasks
+	[1046]<a />
+		diary
+	[1054]<a />
+		Faxes
+	[1062]<a />
+		Employers
+	[1070]<a />
+		Agents
+	[1078]<a />
+		Contacts
+	[1086]<a />
+		SMS
+	[1094]<a />
+		clearing house
+	[1102]<a />
+		Status image
+|scroll element[1660]<iframe id=if_crm_clients name=crm_clients /> (scroll)
+	[1670]<a />
+		Customer list
+	[10114]<a />
+	[10115]<a />
+		(Brotsky) Davidovich Yelena
+	[18167]<a />
+		Old customer card
+	[10146]<a />
+		Ongoing care
+	[10152]<a />
+		Policies and programs
+	[10158]<a />
+		Suggestions
+	[10164]<a />
+		Claims
+	[10170]<a />
+		Documents
+	[10176]<a />
+		Elementary collection
+	[10182]<a />
+		Life Collection
+	[10188]<a />
+		Customer relations
+	[10194]<a />
+		Status image
+	[10200]<a />
+		Forms
+	[18199]<table id=ext-comp-1608 />
+		[18200]<tbody />
+			[18201]<tr />
+				[18202]<td />
+					[18203]<i />
+				[18204]<td />
+				[18205]<td />
+					[18206]<i />
+			[18207]<tr />
+				[18208]<td />
+					[18209]<i />
+				[18210]<td />
+					[18211]<em />
+						[18212]<button id=ext-gen376 />
+							Update
+				[18213]<td />
+					[18214]<i />
+			[18215]<tr />
+				[18216]<td />
+					[18217]<i />
+				[18218]<td />
+				[18219]<td />
+					[18220]<i />
+	[18222]<table id=ext-comp-1609 />
+		[18223]<tbody />
+			[18224]<tr />
+				[18225]<td />
+					[18226]<i />
+				[18227]<td />
+				[18228]<td />
+					[18229]<i />
+			[18230]<tr />
+				[18231]<td />
+					[18232]<i />
+				[18233]<td />
+					[18234]<em />
+						[18235]<button id=ext-gen379 />
+							Print card
+				[18236]<td />
+					[18237]<i />
+			[18238]<tr />
+				[18239]<td />
+					[18240]<i />
+				[18241]<td />
+				[18242]<td />
+					[18243]<i />
+	[18245]<table id=ext-comp-1610 />
+		[18246]<tbody />
+			[18247]<tr />
+				[18248]<td />
+					[18249]<i />
+				[18250]<td />
+				[18251]<td />
+					[18252]<i />
+			[18253]<tr />
+				[18254]<td />
+					[18255]<i />
+				[18256]<td />
+					[18257]<em />
+						[18258]<button id=ext-gen382 />
+							Customer profile
+				[18259]<td />
+					[18260]<i />
+			[18261]<tr />
+				[18262]<td />
+					[18263]<i />
+				[18264]<td />
+				[18265]<td />
+					[18266]<i />
+	[18268]<table id=ext-comp-1611 />
+		[18269]<tbody />
+			[18270]<tr />
+				[18271]<td />
+					[18272]<i />
+				[18273]<td />
+				[18274]<td />
+					[18275]<i />
+			[18276]<tr />
+				[18277]<td />
+					[18278]<i />
+				[18279]<td />
+					[18280]<em />
+						[18281]<button id=ext-gen385 />
+							Extended customer profile
+				[18282]<td />
+					[18283]<i />
+			[18284]<tr />
+				[18285]<td />
+					[18286]<i />
+				[18287]<td />
+				[18288]<td />
+					[18289]<i />
+	[18291]<table id=ext-comp-1612 />
+		[18292]<tbody />
+			[18293]<tr />
+				[18294]<td />
+					[18295]<i />
+				[18296]<td />
+				[18297]<td />
+					[18298]<i />
+			[18299]<tr />
+				[18300]<td />
+					[18301]<i />
+				[18302]<td />
+					[18303]<em />
+						[18304]<button id=ext-gen388 />
+							Customer Dashboard
+				[18305]<td />
+					[18306]<i />
+			[18307]<tr />
+				[18308]<td />
+					[18309]<i />
+				[18310]<td />
+				[18311]<td />
+					[18312]<i />
+	[18186]<td />
+	[18440]<span />
+		[18441]<img />
+		general
+	[18444]<tr />
+		name:
+		[18447]<td />
+			(Brotsky) Davidovich Yelena
+		Birth date:
+		[18453]<td />
+			02/19/1986
+			, Age: 40.2
+		[18457]<td />
+	[18459]<tr />
+		Address/Postal Code:
+		[18462]<td />
+			No.:
+			308716455
+		Case number:
+		[18468]<td />
+	[18469]<tr />
+		agent:
+		[18472]<td />
+			[18474]<span id=client-agent-9965454 />
+				Didi
+		employer:
+		[18478]<td />
+			[18479]<span />
+				[19061]<font />
+					[19062]<font />
+						Pisga - Release payments
+	[18480]<tr />
+		Phones:
+		[18483]<td />
+			Mobile:
+			[18485]<span id=client-phone0-9965454 />
+				[19066]<font />
+					[19068]<font />
+						0545841227
+		Faxes:
+		[18489]<td />
+	[18490]<tr />
+		address:
+		[18493]<td />
+			Other:
+			Libra 12. Jerusalem
+		Email:
+		[18499]<td />
+			[18501]<a />
+				Ilanamba.Davidovich@gmail.com
+	[18505]<tr />
+		[18506]<td />
+			More details
+	[18509]<tr />
+		Therapist:
+		[18511]<td />
+			Ruth Kornfein
+		General field 1:
+		[18513]<td />
+	[18514]<tr />
+		Agency/Group Name:
+		[18516]<td />
+			Shaked Insurance Agency (2016) Ltd.
+		General field 2:
+		[18518]<td />
+	[18519]<tr />
+		Workplace:
+		[18521]<td />
+		General field 3:
+		[18523]<td />
+	[18524]<tr />
+		role:
+		[18526]<td />
+		Facebook:
+		[18528]<td />
+	[18529]<tr />
+		salary:
+		[18531]<td />
+		Health insurance:
+		[18533]<td />
+	[18534]<tr />
+		profession:
+		[18536]<td />
+		How to set up:
+		[18538]<td />
+			Manual (04/11/2025)
+	[18539]<tr />
+		Employee number:
+		[18541]<td />
+		website:
+		[18543]<td />
+			*[18544]<a />
+	[18545]<tr />
+		Referring factor:
+		[18547]<td />
+		group:
+		[18549]<td />
+	[18550]<tr />
+		Passport number:
+		[18552]<td />
+		smoker:
+		[18554]<td />
+			not
+	[18555]<tr />
+		Marital status:
+		[18557]<td />
+			married
+		Power of attorney signed:
+		[18559]<td />
+			not
+	[18560]<tr />
+		License:
+		[18562]<td />
+			Reception:
+		[18564]<td />
+|scroll element|<iframe id=if_config name=config /> (scroll)
+	|SHADOW(open)|*[17885]<input id=ext-comp-1030-file name=firmLogo type=file compound_components=(name=Browse Files,role=button),(name=File Selected,role=textbox,current=None) />
+[480]<a title=exit />
+	[336]<img />

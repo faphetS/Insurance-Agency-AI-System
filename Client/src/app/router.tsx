@@ -25,6 +25,7 @@ const lazyWithReload = <T extends ComponentType<unknown>>(
 const HomePage = lazyWithReload(() => import("@/pages/HomePage/HomePage"));
 const NotFoundPage = lazyWithReload(() => import("@/pages/NotFoundPage"));
 const LoginPage = lazyWithReload(() => import("@/pages/LoginPage/LoginPage"));
+const OpsInspectorPage = lazyWithReload(() => import("@/pages/OpsInspectorPage/index"));
 
 export const router = createBrowserRouter([
   {
@@ -44,6 +45,10 @@ export const router = createBrowserRouter([
           {
             index: true,
             element: <HomePage />,
+          },
+          {
+            path: "ops-inspector",
+            element: <OpsInspectorPage />,
           },
         ],
       },

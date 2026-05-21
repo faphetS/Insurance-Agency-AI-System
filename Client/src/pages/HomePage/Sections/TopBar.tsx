@@ -1,5 +1,5 @@
 import { LogOut } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuthStore } from "@/stores/auth.store";
 import { useWhatsappState, useBotSettings } from "@/features/pipeline/hooks";
 
@@ -81,8 +81,19 @@ export function TopBar() {
         <StatusPill dot={botOn ? "green" : "amber"} label={botOn ? "Bot Active" : "Bot Paused"} />
       </div>
 
-      {/* Right: email + sign out */}
+      {/* Right: ops inspector link + email + sign out */}
       <div className="flex items-center gap-3">
+        <Link
+          to="/ops-inspector"
+          className="hidden sm:flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold"
+          style={{
+            backgroundColor: "rgba(255,255,255,0.06)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            color: "#94a3b8",
+          }}
+        >
+          Ops Inspector
+        </Link>
         {user?.email && (
           <span
             className="hidden font-mono text-[10px] uppercase tracking-widest md:block"

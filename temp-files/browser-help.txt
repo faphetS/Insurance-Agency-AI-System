@@ -1,0 +1,79 @@
+﻿usage: browser-use [-h] [--session SESSION] [--browser {chromium,real,remote}]
+                   [--headed] [--profile PROFILE] [--json] [--api-key API_KEY]
+                   [--mcp] [--template TEMPLATE]
+                   {install,init,setup,doctor,open,click,type,input,scroll,back,screenshot,state,switch,close-tab,keys,select,eval,extract,hover,dblclick,rightclick,cookies,wait,get,python,run,task,session,tunnel,sessions,close,server,profile} ...
+
+Browser automation CLI for browser-use
+
+positional arguments:
+  {install,init,setup,doctor,open,click,type,input,scroll,back,screenshot,state,switch,close-tab,keys,select,eval,extract,hover,dblclick,rightclick,cookies,wait,get,python,run,task,session,tunnel,sessions,close,server,profile}
+                        Command to execute
+    install             Install Chromium browser + system dependencies
+    init                Generate browser-use template file
+    setup               Configure browser-use for first-time use
+    doctor              Check browser-use installation and dependencies
+    open                Navigate to URL
+    click               Click element by index or coordinates (x y)
+    type                Type text
+    input               Type text into specific element
+    scroll              Scroll page
+    back                Go back in history
+    screenshot          Take screenshot
+    state               Get browser state (URL, title, elements)
+    switch              Switch to tab
+    close-tab           Close tab
+    keys                Send keyboard keys
+    select              Select dropdown option
+    eval                Execute JavaScript
+    extract             Extract data using LLM
+    hover               Hover over element
+    dblclick            Double-click element
+    rightclick          Right-click element
+    cookies             Cookie operations
+    wait                Wait for conditions
+    get                 Get information
+    python              Execute Python code
+    run                 Run agent task (requires API key)
+    task                Manage cloud tasks
+    session             Manage cloud sessions
+    tunnel              Expose localhost via Cloudflare tunnel
+    sessions            List active sessions
+    close               Close session
+    server              Server control
+    profile             Manage browser profiles (use -b real or -b remote)
+
+options:
+  -h, --help            show this help message and exit
+  --session, -s SESSION
+                        Session name (default: default)
+  --browser, -b {chromium,real,remote}
+                        Browser mode (available: chromium, real, remote)
+  --headed              Show browser window
+  --profile PROFILE     Browser profile (local name or cloud ID)
+  --json                Output as JSON
+  --api-key API_KEY     Browser-Use API key
+  --mcp                 Run as MCP server (JSON-RPC via stdin/stdout)
+  --template TEMPLATE   Generate template file (use with --output for custom
+                        path)
+
+Local Mode (default):
+  browser-use run "Fill the form"               # Uses local browser + your API keys
+  browser-use run "task" --llm gpt-4o           # Specify model (requires API key)
+  browser-use open https://example.com
+
+Remote Mode (--browser remote):
+  browser-use -b remote run "task"              # Cloud execution (US proxy default)
+  browser-use -b remote run "task" --llm gpt-4o # Specify cloud model
+  browser-use -b remote --profile <id> run "task"  # Use cloud profile
+  browser-use -b remote run "task" --proxy-country gb     # UK proxy
+  browser-use -b remote run "task" --session-id <id>      # Reuse session
+  browser-use -b remote run "task" --wait       # Wait for completion
+
+Task Management:
+  browser-use task list                         # List recent cloud tasks
+  browser-use task status <task-id>             # Check task status
+  browser-use task stop <task-id>               # Stop running task
+
+Setup:
+  browser-use install                           # Install Chromium browser
+  browser-use init                              # Generate template file

@@ -10,6 +10,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The `temp-files/` folder at the project root is a scratch space for generated artifacts that aren't part of the codebase — screenshots, downloaded edge functions, debug output, schema dumps, etc. Use it freely. The user may delete its contents at any time.
 
+## Frontend scope (current)
+
+The `Client/` app is **throwaway diagnostic scaffolding** — it will be **deleted** once the backend automation is proven end-to-end in production.
+
+- Customer-facing UX lives in WhatsApp (Component A).
+- Staff-facing UX is WhatsApp/email notifications, not a web UI.
+- The Client/ app exists only to inspect backend data flow during development. Its production audience is zero.
+
+When adding inspector views for new backend features:
+- Add a minimal section to `Client/src/pages/OpsInspectorPage/sections/` (raw table or JSON dump).
+- Do NOT abstract, do NOT introduce design-system components, do NOT future-proof.
+- Cheap and ugly is the rule. Copy-paste over abstraction.
+- Don't touch the existing dashboard / overview / notifications / pipeline pages — those work as-is.
+
 ## Custom Subagents — Auto-Invoke Rule
 
 Three custom subagents live in `.claude/agents/`. Each one wraps the relevant installed skill(s). When a task matches a subagent's domain, delegate to it via the Agent tool — do not do the work yourself, and do not just invoke the skill directly.
