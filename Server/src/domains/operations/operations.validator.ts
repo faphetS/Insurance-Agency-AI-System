@@ -12,6 +12,8 @@ export const notificationListSchema = z.object({
       "service_due",
       "sla_breach",
       "digest",
+      "email_pending",
+      "whatsapp_unanswered",
     ])
     .optional(),
   severity: z.enum(["info", "warning", "urgent"]).optional(),

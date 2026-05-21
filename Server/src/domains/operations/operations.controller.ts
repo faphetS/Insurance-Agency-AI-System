@@ -5,8 +5,11 @@ import {
   createTaskChain,
   completeTask,
   getDashboard,
+  getEmailMonitoring,
   getNotifications,
+  getServiceMeetings,
   getUnreadCount,
+  getWhatsappMonitoring,
   markAllAsRead,
   markAsRead,
 } from "./operations.service.js";
@@ -79,6 +82,21 @@ export const operationsController = {
 
   async getDashboard(_req: Request, res: Response): Promise<void> {
     const data = await getDashboard();
+    res.json({ status: "success", data });
+  },
+
+  async getEmailMonitoring(_req: Request, res: Response): Promise<void> {
+    const data = await getEmailMonitoring();
+    res.json({ status: "success", data });
+  },
+
+  async getWhatsappMonitoring(_req: Request, res: Response): Promise<void> {
+    const data = await getWhatsappMonitoring();
+    res.json({ status: "success", data });
+  },
+
+  async getServiceMeetings(_req: Request, res: Response): Promise<void> {
+    const data = await getServiceMeetings();
     res.json({ status: "success", data });
   },
 };

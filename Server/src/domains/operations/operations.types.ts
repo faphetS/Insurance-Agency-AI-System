@@ -7,7 +7,9 @@ export type NotificationType =
   | "summary_ready"
   | "service_due"
   | "sla_breach"
-  | "digest";
+  | "digest"
+  | "email_pending"
+  | "whatsapp_unanswered";
 
 export type NotificationSeverity = "info" | "warning" | "urgent";
 

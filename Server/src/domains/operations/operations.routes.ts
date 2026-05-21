@@ -57,4 +57,19 @@ router.get(
   operationsController.getDashboard,
 );
 
+router.get(
+  "/email-monitoring",
+  operationsController.getEmailMonitoring,
+);
+
+router.get(
+  "/whatsapp-monitoring",
+  operationsController.getWhatsappMonitoring,
+);
+
+router.get(
+  "/service-meetings",
+  operationsController.getServiceMeetings,
+);
+
 export default router;

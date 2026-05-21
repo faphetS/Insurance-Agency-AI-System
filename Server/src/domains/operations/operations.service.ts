@@ -53,6 +53,18 @@ export async function createTaskChain(meetingId: string) {
     throw new NotFoundError("Client linked to meeting");
   }
 
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("assigned_to, assigned_handler_id")
+    .eq("id", clientId)
+    .single();
+
+  const assignedTo =
+    (client?.assigned_handler_id as string | null) ?? (client?.assigned_to as string | null);
+  if (!assignedTo) {
+    throw new NotFoundError("Staff member assigned to client");
+  }
+
   const now = new Date();
   const tasks = TASK_CHAIN_DEFINITION.map((step) => {
     const dueAt = new Date(now.getTime() + step.delayDays * 24 * 60 * 60 * 1000);
@@ -64,6 +76,7 @@ export async function createTaskChain(meetingId: string) {
       due_at: dueAt.toISOString(),
       status: "pending",
       reminder_sent: false,
+      assigned_to: assignedTo,
     };
   });
 
@@ -205,6 +218,21 @@ export async function getUnreadCount(): Promise<number> {
   }
 
   return count ?? 0;
+}
+
+export async function getEmailMonitoring() {
+  const { emailProvider } = await import("./operations.email.js");
+  return emailProvider.scanAll();
+}
+
+export async function getWhatsappMonitoring() {
+  const { whatsappMonitor } = await import("./operations.whatsapp-monitor.js");
+  return whatsappMonitor.getSummary();
+}
+
+export async function getServiceMeetings() {
+  const { getServiceMeetingsSummary } = await import("./operations.service-meetings.js");
+  return getServiceMeetingsSummary();
 }
 
 export async function getDashboard() {
