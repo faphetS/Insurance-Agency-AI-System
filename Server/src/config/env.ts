@@ -55,6 +55,19 @@ const envSchema = z.object({
   GOOGLE_REDIRECT_URI: z.string().url(),
   GOOGLE_CALENDAR_ID: z.string().min(1),
   GOOGLE_CALENDAR_BOOKING_URL: z.string().url(),
+
+  // Gmail OAuth 2.0 (for per-staff inbox monitoring)
+  // Get credentials at: https://console.cloud.google.com/apis/credentials
+  // Add Gmail API scopes: gmail.readonly + gmail.metadata
+  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: z
+    .string()
+    .url()
+    .default("http://localhost:3000/api/integrations/gmail/callback"),
+
+  // Timeless.day (meeting recording + transcripts)
+  TIMELESS_API_KEY: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -2,6 +2,8 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
 import { setWebhookSettings } from "./domains/whatsapp/whatsapp.service.js";
+import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeless.service.js";
+import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import {
@@ -134,6 +136,21 @@ const server = app.listen(env.PORT, () => {
     logger.info(
       { webhookUrl, nodeEnv: env.NODE_ENV },
       "Skipping GreenAPI webhook registration — BACKEND_URL is not a public HTTPS URL",
+    );
+  }
+
+  // Timeless webhook registration + hourly poll cron — skipped in dev (same guard as WhatsApp above)
+  if (isPublicWebhook && env.TIMELESS_API_KEY) {
+    ensureWebhookRegistered()
+      .then(() => logger.info("Timeless webhook registered"))
+      .catch((err: unknown) =>
+        logger.warn({ err }, "Timeless webhook registration failed — continuing"),
+      );
+    startTimelessPollCron();
+  } else {
+    logger.info(
+      { nodeEnv: env.NODE_ENV },
+      "Skipping Timeless webhook/cron — BACKEND_URL is not public or TIMELESS_API_KEY is not set",
     );
   }
 
