@@ -50,6 +50,7 @@ export async function listMeetings(
   params: TimelessListMeetingsParams,
 ): Promise<TimelessListMeetingsResponse> {
   const qs = new URLSearchParams();
+  if (params.id) qs.set("id", params.id);
   if (params.start_date) qs.set("start_date", params.start_date);
   if (params.end_date) qs.set("end_date", params.end_date);
   if (params.status) qs.set("status", params.status);
@@ -61,8 +62,12 @@ export async function listMeetings(
 }
 
 export async function getMeeting(id: string, expand?: string): Promise<TimelessMeeting> {
-  const qs = expand ? `?expand=${encodeURIComponent(expand)}` : "";
-  return request<TimelessMeeting>(`/meetings/${id}${qs}`);
+  const res = await listMeetings({ id, expand: expand ?? "documents" });
+  const m = res.data[0];
+  if (!m) {
+    throw new AppError(404, `Timeless meeting ${id} not found`, "TIMELESS_MEETING_NOT_FOUND");
+  }
+  return m;
 }
 
 export async function getTranscript(id: string): Promise<TimelessTranscript> {

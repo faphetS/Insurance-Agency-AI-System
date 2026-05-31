@@ -7,7 +7,6 @@ import type { GmailIntegration } from "./gmail.types.js";
 
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.metadata",
 ];
 
 function createOAuth2Client() {
@@ -74,7 +73,7 @@ export async function handleCallback(
         refresh_token: tokens.refresh_token,
         access_token: tokens.access_token ?? null,
         access_token_expires_at: expiresAt,
-        scope: tokens.scope ?? null,
+        scope: tokens.scope ?? GMAIL_SCOPES.join(" "),
         connected_at: new Date().toISOString(),
         is_active: true,
         last_error: null,

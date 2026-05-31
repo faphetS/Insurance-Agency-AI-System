@@ -1,18 +1,20 @@
 export interface TimelessParticipant {
   email: string;
   name?: string;
+  title?: string | null;
+  company?: string | null;
 }
 
 export interface TimelessHost {
+  id?: string;
   email: string;
   name?: string;
 }
 
 export interface TimelessDocument {
   id: string;
-  type: string;
+  title: string;
   created_at: string;
-  title?: string;
 }
 
 export interface TimelessMeeting {
@@ -22,32 +24,38 @@ export interface TimelessMeeting {
   end_time?: string;
   status: string;
   source?: string;
-  host: TimelessHost;
+  host: TimelessHost | null;
   participants: TimelessParticipant[];
   documents?: TimelessDocument[];
-  recording_url?: string;
+  duration?: number | null;
+  created_at?: string;
 }
 
 export interface TimelessTranscriptSegment {
-  speaker: string;
+  speaker_id: string;
+  start_time: number;
+  end_time?: number;
   text: string;
-  start_time?: number;
 }
 
 export interface TimelessTranscript {
   meeting_id: string;
+  language?: string;
+  speakers: { id: string; name: string }[];
   segments: TimelessTranscriptSegment[];
 }
 
 export interface TimelessRecording {
-  url: string;
-  expires_at?: string;
+  meeting_id: string;
+  recording_url: string | null;
 }
 
 export interface TimelessDocumentContent {
   id: string;
-  type: string;
+  title: string;
+  format: string;
   content: string;
+  created_at: string;
 }
 
 export interface TimelessWebhook {
@@ -59,12 +67,12 @@ export interface TimelessWebhook {
 }
 
 export interface TimelessWebhookPayload {
-  event: string;
-  meeting_id: string;
+  id: string;
   [key: string]: unknown;
 }
 
 export interface TimelessListMeetingsParams {
+  id?: string;
   start_date?: string;
   end_date?: string;
   status?: string;
@@ -74,6 +82,7 @@ export interface TimelessListMeetingsParams {
 }
 
 export interface TimelessListMeetingsResponse {
-  meetings: TimelessMeeting[];
-  next_cursor?: string;
+  data: TimelessMeeting[];
+  next_cursor?: string | null;
+  has_more?: boolean;
 }

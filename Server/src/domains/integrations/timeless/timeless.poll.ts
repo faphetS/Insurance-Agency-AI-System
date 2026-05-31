@@ -22,11 +22,11 @@ async function runPoll(): Promise<void> {
       limit: 50,
     });
 
-    for (const m of page.meetings) {
+    for (const m of page.data) {
       timelessIds.push(m.id);
     }
 
-    cursor = page.next_cursor;
+    cursor = page.next_cursor ?? undefined;
   } while (cursor);
 
   if (timelessIds.length === 0) {

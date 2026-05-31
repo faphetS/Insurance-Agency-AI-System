@@ -2,6 +2,10 @@ import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
 import { bafiProvider } from "./operations.bafi.js";
 import { createNotification, completeTask } from "./operations.service.js";
+import { notifyStaffSummaryReady } from "./operations.staff-notify.js";
+import { notifyStaffTaskOverdue } from "./operations.staff-reminder.js";
+import { sendOverdueAlert, sendSlaAlert, sendServiceDueInvite } from "./operations.alert-sender.js";
+import { buildCrossCheckAssessment } from "./operations.cross-check.js";
 import type { TaskType } from "./operations.types.js";
 
 export async function checkDueAndOverdueTasks(): Promise<void> {
@@ -9,7 +13,7 @@ export async function checkDueAndOverdueTasks(): Promise<void> {
 
   const { data: tasks, error } = await supabaseAdmin
     .from("tasks")
-    .select("id, client_id, type, due_at, status")
+    .select("id, client_id, type, due_at, status, assigned_to, reminder_sent")
     .eq("status", "pending")
     .lte("due_at", now.toISOString());
 
@@ -37,9 +41,19 @@ export async function checkDueAndOverdueTasks(): Promise<void> {
         case "deposit_check":
           result = await bafiProvider.checkDeposit(clientId);
           break;
-        case "cross_check":
+        case "cross_check": {
           result = await bafiProvider.crossCheck(clientId);
+          // Advisory AI artifact — compare summary text vs BAFI execution.
+          // Degrades gracefully: no summary or AI failure is a silent no-op.
+          const flags = {
+            forms: !!(result.details?.["forms"] as boolean | undefined),
+            receipt: !!(result.details?.["receipt"] as boolean | undefined),
+            policy: !!(result.details?.["policy"] as boolean | undefined),
+            deposit: !!(result.details?.["deposit"] as boolean | undefined),
+          };
+          await buildCrossCheckAssessment(clientId, task.id as string, flags);
           break;
+        }
         default:
           continue;
       }
@@ -51,13 +65,27 @@ export async function checkDueAndOverdueTasks(): Promise<void> {
         const overdueByMs = now.getTime() - dueAt.getTime();
         const overdueByDays = overdueByMs / (1000 * 60 * 60 * 24);
 
+        if (task.reminder_sent === false) {
+          await notifyStaffTaskOverdue({
+            id: task.id as string,
+            client_id: clientId,
+            type: taskType,
+            due_at: task.due_at as string,
+            assigned_to: task.assigned_to as string,
+          });
+          await supabaseAdmin
+            .from("tasks")
+            .update({ reminder_sent: true, updated_at: now.toISOString() })
+            .eq("id", task.id);
+        }
+
         if (overdueByDays > 3) {
           await supabaseAdmin
             .from("tasks")
             .update({ status: "overdue", updated_at: now.toISOString() })
             .eq("id", task.id);
 
-          await createNotification({
+          const newRow = await createNotification({
             type: "overdue_task",
             title: `Overdue task: ${taskType}`,
             message: `Task "${taskType}" for client ${clientId} is overdue by ${Math.floor(overdueByDays)} days.`,
@@ -66,6 +94,15 @@ export async function checkDueAndOverdueTasks(): Promise<void> {
             task_id: task.id as string,
             reference_key: `overdue:${task.id}`,
           });
+
+          if (newRow) {
+            await sendOverdueAlert({
+              id: task.id as string,
+              client_id: clientId,
+              type: taskType,
+              assigned_to: task.assigned_to as string,
+            });
+          }
         }
       }
     } catch (err) {
@@ -97,6 +134,7 @@ export async function checkSummaryApprovals(): Promise<void> {
         meeting_id: meeting.id as string,
         reference_key: `summary_ready:${meeting.id}`,
       });
+      await notifyStaffSummaryReady(meeting.id as string);
     } catch (err) {
       logger.error({ err, meetingId: meeting.id }, "checkSummaryApprovals: error processing meeting");
     }
@@ -111,7 +149,7 @@ export async function checkServiceMeetingEligibility(): Promise<void> {
 
   const { data: clients, error } = await supabaseAdmin
     .from("clients")
-    .select("id, last_service_date")
+    .select("id, full_name, last_service_date, assigned_handler_id, assigned_to")
     .eq("status", "active")
     .or(`last_service_date.is.null,last_service_date.lte.${twoYearsAgoStr}`);
 
@@ -122,7 +160,7 @@ export async function checkServiceMeetingEligibility(): Promise<void> {
 
   for (const client of clients ?? []) {
     try {
-      await createNotification({
+      const newRow = await createNotification({
         type: "service_due",
         title: "Annual service meeting due",
         message: `Client ${client.id} is due for a service meeting (last service: ${client.last_service_date ?? "never"}).`,
@@ -130,6 +168,15 @@ export async function checkServiceMeetingEligibility(): Promise<void> {
         client_id: client.id as string,
         reference_key: `service_due:${client.id}:${currentYear}`,
       });
+
+      if (newRow) {
+        await sendServiceDueInvite({
+          id: client.id as string,
+          full_name: client.full_name as string | null,
+          assigned_handler_id: client.assigned_handler_id as string | null,
+          assigned_to: client.assigned_to as string | null,
+        });
+      }
     } catch (err) {
       logger.error({ err, clientId: client.id }, "checkServiceMeetingEligibility: error processing client");
     }
@@ -151,7 +198,7 @@ export async function checkSlaBreaches(): Promise<void> {
 
   for (const client of clients ?? []) {
     try {
-      await createNotification({
+      const newRow = await createNotification({
         type: "sla_breach",
         title: "SLA breach detected",
         message: `Client ${client.full_name ?? client.id} has breached SLA in stage "${client.derived_stage}".`,
@@ -159,6 +206,14 @@ export async function checkSlaBreaches(): Promise<void> {
         client_id: client.id as string,
         reference_key: `sla_breach:${client.id}:${today}`,
       });
+
+      if (newRow) {
+        await sendSlaAlert({
+          id: client.id as string,
+          full_name: client.full_name as string | null,
+          derived_stage: client.derived_stage as string | null,
+        });
+      }
     } catch (err) {
       logger.error({ err, clientId: client.id }, "checkSlaBreaches: error processing client");
     }

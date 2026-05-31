@@ -8,6 +8,12 @@ import {
   type NotificationFilters,
   type TaskType,
 } from "./operations.types.js";
+import {
+  sendInteractiveButtonsWithTyping,
+  sendMessageWithTyping,
+} from "../whatsapp/whatsapp.service.js";
+import { toChatId } from "../whatsapp/whatsapp.util.js";
+import { notifyStaffHandoff } from "./operations.staff-handoff.js";
 
 export async function createNotification(data: CreateNotificationData) {
   const { error, data: row } = await supabaseAdmin
@@ -35,6 +41,155 @@ export async function createNotification(data: CreateNotificationData) {
   }
 
   return row;
+}
+
+export async function finalizeSummary(meetingId: string, finalText?: string): Promise<void> {
+  // Approve-as-is promotes the AI draft to the final summary; an edit supplies its own text.
+  let finalValue = finalText;
+  if (finalValue === undefined) {
+    const { data: draftRow } = await supabaseAdmin
+      .from("meetings")
+      .select("summary_draft")
+      .eq("id", meetingId)
+      .maybeSingle();
+    finalValue = (draftRow?.summary_draft as string | null) ?? undefined;
+  }
+
+  // Only a draft can be finalized — guards re-approve / stale-button taps from re-sending to the client.
+  const { data: claimed } = await supabaseAdmin
+    .from("meetings")
+    .update({
+      summary_status: "approved",
+      ...(finalValue !== undefined && { summary_final: finalValue }),
+    })
+    .eq("id", meetingId)
+    .eq("summary_status", "draft")
+    .select("id")
+    .maybeSingle();
+
+  if (!claimed) {
+    const { data: exists } = await supabaseAdmin
+      .from("meetings")
+      .select("id")
+      .eq("id", meetingId)
+      .maybeSingle();
+    if (!exists) throw new NotFoundError("Meeting");
+    return; // already finalized — idempotent no-op
+  }
+
+  await sendSummaryToClient(meetingId);
+}
+
+export async function sendSummaryToClient(meetingId: string): Promise<void> {
+  try {
+    const { data: meeting } = await supabaseAdmin
+      .from("meetings")
+      .select("id, client_id, conversation_id, summary_final")
+      .eq("id", meetingId)
+      .maybeSingle();
+
+    if (!meeting) return;
+
+    const { data: claimed } = await supabaseAdmin
+      .from("meetings")
+      .update({ summary_status: "sent" })
+      .eq("id", meetingId)
+      .eq("summary_status", "approved")
+      .select("id")
+      .maybeSingle();
+
+    if (!claimed) return;
+
+    const conversationId = meeting.conversation_id as string | null;
+    let chatId: string | null = null;
+
+    if (conversationId) {
+      const { data: conv } = await supabaseAdmin
+        .from("conversations")
+        .select("whatsapp_chat_id")
+        .eq("id", conversationId)
+        .maybeSingle();
+      chatId = (conv?.whatsapp_chat_id as string | null) ?? null;
+    } else {
+      const { data: client } = await supabaseAdmin
+        .from("clients")
+        .select("phone")
+        .eq("id", meeting.client_id as string)
+        .maybeSingle();
+      chatId = toChatId(client?.phone as string | null);
+    }
+
+    if (!chatId) {
+      logger.warn({ meetingId }, "sendSummaryToClient: no chatId resolved");
+      return;
+    }
+
+    const summaryText = (meeting.summary_final as string | null) ?? "(אין סיכום)";
+    const body = [
+      "📋 סיכום הפגישה שלך:",
+      "",
+      summaryText,
+      "",
+      "אנא אשר/י שהפרטים נכונים.",
+    ].join("\n");
+
+    const buttons = [{ buttonId: `client_confirm:${meetingId}`, buttonText: "✅ אישור" }];
+
+    const { idMessage } = await sendInteractiveButtonsWithTyping(chatId, body, buttons, "");
+
+    if (conversationId) {
+      await supabaseAdmin.from("messages").insert({
+        conversation_id: conversationId,
+        direction: "outbound",
+        sent_by: "bot",
+        body,
+        status: "sent",
+        whatsapp_message_id: idMessage,
+      });
+    }
+
+    logger.info({ meetingId }, "sendSummaryToClient: sent");
+  } catch (err) {
+    logger.error({ err, meetingId }, "sendSummaryToClient: unexpected error");
+  }
+}
+
+export async function handleClientConfirm(
+  meetingId: string,
+  chatId: string,
+  conversationId: string | null,
+): Promise<void> {
+  try {
+    const { data: claimed } = await supabaseAdmin
+      .from("meetings")
+      .update({ client_confirmed: true })
+      .eq("id", meetingId)
+      .eq("client_confirmed", false)
+      .select("id")
+      .maybeSingle();
+
+    if (!claimed) return;
+
+    await createTaskChain(meetingId);
+    await notifyStaffHandoff(meetingId);
+
+    const { idMessage } = await sendMessageWithTyping(chatId, "תודה! הסיכום אושר ונעביר לטיפול.");
+
+    if (conversationId) {
+      await supabaseAdmin.from("messages").insert({
+        conversation_id: conversationId,
+        direction: "outbound",
+        sent_by: "bot",
+        body: "תודה! הסיכום אושר ונעביר לטיפול.",
+        status: "sent",
+        whatsapp_message_id: idMessage,
+      });
+    }
+
+    logger.info({ meetingId }, "handleClientConfirm: confirmed + task chain created");
+  } catch (err) {
+    logger.error({ err, meetingId }, "handleClientConfirm: unexpected error");
+  }
 }
 
 export async function createTaskChain(meetingId: string) {
@@ -89,17 +244,17 @@ export async function createTaskChain(meetingId: string) {
 
   await supabaseAdmin
     .from("clients")
-    .update({ pipeline_stage: "awaiting_approval" })
+    .update({ pipeline_stage: "forms" })
     .eq("id", clientId);
 
   await createNotification({
     type: "summary_ready",
-    title: "Meeting summary ready for approval",
-    message: `A meeting summary is ready for review and the task chain has been created.`,
+    title: "Task chain created",
+    message: `The task chain for meeting ${meetingId} has been created and processing has begun.`,
     severity: "warning",
     client_id: clientId,
     meeting_id: meetingId,
-    reference_key: `summary_ready:${meetingId}`,
+    reference_key: `task_chain:${meetingId}`,
   });
 
   logger.info({ meetingId, clientId, taskCount: tasks.length }, "createTaskChain: created");
@@ -118,7 +273,7 @@ export async function completeTask(taskId: string) {
 
   const { error: updateErr } = await supabaseAdmin
     .from("tasks")
-    .update({ status: "done", updated_at: new Date().toISOString() })
+    .update({ status: "completed", updated_at: new Date().toISOString() })
     .eq("id", taskId);
 
   if (updateErr) {
@@ -131,7 +286,7 @@ export async function completeTask(taskId: string) {
   await createNotification({
     type: task.type as CreateNotificationData["type"],
     title: `Task completed: ${task.type}`,
-    message: `Task ${taskId} of type "${task.type}" has been marked as done.`,
+    message: `Task ${taskId} of type "${task.type}" has been marked as completed.`,
     severity: "info",
     client_id: task.client_id as string,
     task_id: taskId,

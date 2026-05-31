@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../../config/supabase.js";
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import type { BafiCheckResult, BafiProvider } from "./operations.types.js";
 
@@ -150,4 +151,4 @@ class SupabaseBafiProvider implements BafiProvider {
 }
 
 export const bafiProvider: BafiProvider =
-  process.env.BAFI_PROVIDER === "stub" ? new StubBafiProvider() : new SupabaseBafiProvider();
+  env.BAFI_PROVIDER === "stub" ? new StubBafiProvider() : new SupabaseBafiProvider();

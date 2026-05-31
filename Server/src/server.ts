@@ -2,8 +2,10 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
 import { setWebhookSettings } from "./domains/whatsapp/whatsapp.service.js";
+import { ensureClientDocumentsBucket } from "./lib/storage.js";
 import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeless.service.js";
 import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
+import { startDailyDigestCron } from "./domains/operations/operations.digest.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import {
@@ -72,7 +74,7 @@ app.use(
 );
 
 // 5. Body parsing with size limits
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "1mb", verify: (req, _res, buf) => { (req as unknown as { rawBody?: Buffer }).rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // 6. Cookie parsing
@@ -116,6 +118,11 @@ app.use(globalErrorHandler);
 const server = app.listen(env.PORT, () => {
   logger.info(`Server running on ${env.BACKEND_URL} [${env.NODE_ENV}]`);
 
+  // Ensure Supabase Storage bucket for client documents exists (best-effort, unconditional).
+  ensureClientDocumentsBucket()
+    .then((created) => logger.info({ created }, "client-documents bucket ready"))
+    .catch((err: unknown) => logger.warn({ err }, "client-documents bucket ensure failed"));
+
   // Register GreenAPI webhook on boot (best-effort, non-blocking).
   // Guarded: only runs when BACKEND_URL is a public HTTPS URL. Dev / localhost
   // boots must NOT touch the shared GreenAPI instance, or they overwrite
@@ -154,52 +161,60 @@ const server = app.listen(env.PORT, () => {
     );
   }
 
-  // Calendar sync: initial run after 30s, then every 3 minutes
-  setTimeout(() => {
-    syncNewBookings().catch((err: unknown) =>
-      logger.error({ err }, "booking-sync: initial run failed"),
-    );
-  }, 30_000);
-  setInterval(() => {
-    syncNewBookings().catch((err: unknown) =>
-      logger.error({ err }, "booking-sync: scheduled run failed"),
-    );
-  }, 3 * 60 * 1000);
+  // All schedulers — public deployments only (guard prevents dev boots from sending
+  // live WhatsApp messages, mutating prod data, or overwriting production webhooks)
+  if (isPublicWebhook) {
+    startDailyDigestCron();
 
-  // Reminder check: every 10 minutes
-  setInterval(() => {
-    checkAndSendReminders().catch((err: unknown) =>
-      logger.error({ err }, "reminder: scheduled check failed"),
-    );
-  }, 10 * 60 * 1000);
+    // Calendar sync: initial run after 30s, then every 3 minutes
+    setTimeout(() => {
+      syncNewBookings().catch((err: unknown) =>
+        logger.error({ err }, "booking-sync: initial run failed"),
+      );
+    }, 30_000);
+    setInterval(() => {
+      syncNewBookings().catch((err: unknown) =>
+        logger.error({ err }, "booking-sync: scheduled run failed"),
+      );
+    }, 3 * 60 * 1000);
 
-  // Operations: summary approval check — every 10 minutes
-  setInterval(() => {
-    checkSummaryApprovals().catch((err: unknown) =>
-      logger.error({ err }, "operations: checkSummaryApprovals failed"),
-    );
-  }, 10 * 60 * 1000);
+    // Reminder check: every 10 minutes
+    setInterval(() => {
+      checkAndSendReminders().catch((err: unknown) =>
+        logger.error({ err }, "reminder: scheduled check failed"),
+      );
+    }, 10 * 60 * 1000);
 
-  // Operations: due/overdue task check — every 30 minutes
-  setInterval(() => {
-    checkDueAndOverdueTasks().catch((err: unknown) =>
-      logger.error({ err }, "operations: checkDueAndOverdueTasks failed"),
-    );
-  }, 30 * 60 * 1000);
+    // Operations: summary approval check — every 10 minutes
+    setInterval(() => {
+      checkSummaryApprovals().catch((err: unknown) =>
+        logger.error({ err }, "operations: checkSummaryApprovals failed"),
+      );
+    }, 10 * 60 * 1000);
 
-  // Operations: SLA breach check — every 30 minutes
-  setInterval(() => {
-    checkSlaBreaches().catch((err: unknown) =>
-      logger.error({ err }, "operations: checkSlaBreaches failed"),
-    );
-  }, 30 * 60 * 1000);
+    // Operations: due/overdue task check — every 30 minutes
+    setInterval(() => {
+      checkDueAndOverdueTasks().catch((err: unknown) =>
+        logger.error({ err }, "operations: checkDueAndOverdueTasks failed"),
+      );
+    }, 30 * 60 * 1000);
 
-  // Operations: service meeting eligibility — daily (every 24h)
-  setInterval(() => {
-    checkServiceMeetingEligibility().catch((err: unknown) =>
-      logger.error({ err }, "operations: checkServiceMeetingEligibility failed"),
-    );
-  }, 24 * 60 * 60 * 1000);
+    // Operations: SLA breach check — every 30 minutes
+    setInterval(() => {
+      checkSlaBreaches().catch((err: unknown) =>
+        logger.error({ err }, "operations: checkSlaBreaches failed"),
+      );
+    }, 30 * 60 * 1000);
+
+    // Operations: service meeting eligibility — daily (every 24h)
+    setInterval(() => {
+      checkServiceMeetingEligibility().catch((err: unknown) =>
+        logger.error({ err }, "operations: checkServiceMeetingEligibility failed"),
+      );
+    }, 24 * 60 * 60 * 1000);
+  } else {
+    logger.info("Skipping operations/booking/reminder schedulers — BACKEND_URL not public");
+  }
 });
 
 function shutdown(signal: string) {

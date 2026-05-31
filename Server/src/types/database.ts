@@ -531,6 +531,7 @@ export type Database = {
           assigned_to: string
           bafi_file_number: string | null
           client_type: string | null
+          complexity: string | null
           created_at: string
           date_of_birth: string | null
           email: string | null
@@ -566,6 +567,7 @@ export type Database = {
           assigned_to: string
           bafi_file_number?: string | null
           client_type?: string | null
+          complexity?: string | null
           created_at?: string
           date_of_birth?: string | null
           email?: string | null
@@ -601,6 +603,7 @@ export type Database = {
           assigned_to?: string
           bafi_file_number?: string | null
           client_type?: string | null
+          complexity?: string | null
           created_at?: string
           date_of_birth?: string | null
           email?: string | null
@@ -944,8 +947,10 @@ export type Database = {
           reminder_1h_sent: boolean
           reminder_24h_sent: boolean
           scheduled_at: string
+          staff_summary_notified_at: string | null
           status: string
           summary_draft: string | null
+          summary_edit_chat_id: string | null
           summary_final: string | null
           summary_status: string
           timeless_meeting_id: string | null
@@ -964,8 +969,10 @@ export type Database = {
           reminder_1h_sent?: boolean
           reminder_24h_sent?: boolean
           scheduled_at: string
+          staff_summary_notified_at?: string | null
           status?: string
           summary_draft?: string | null
+          summary_edit_chat_id?: string | null
           summary_final?: string | null
           summary_status?: string
           timeless_meeting_id?: string | null
@@ -984,8 +991,10 @@ export type Database = {
           reminder_1h_sent?: boolean
           reminder_24h_sent?: boolean
           scheduled_at?: string
+          staff_summary_notified_at?: string | null
           status?: string
           summary_draft?: string | null
+          summary_edit_chat_id?: string | null
           summary_final?: string | null
           summary_status?: string
           timeless_meeting_id?: string | null

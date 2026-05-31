@@ -12,7 +12,8 @@ async function request<T>(
   body?: unknown,
 ): Promise<T> {
   const url = `${base()}/${path}/${token()}`;
-  logger.debug({ method, url }, "GreenAPI request");
+  const redactedUrl = url.replace(token(), "***");
+  logger.debug({ method, url: redactedUrl }, "GreenAPI request");
 
   const res = await fetch(url, {
     method,
@@ -22,7 +23,7 @@ async function request<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    logger.error({ status: res.status, url, body: text }, "GreenAPI error");
+    logger.error({ status: res.status, url: redactedUrl, body: text }, "GreenAPI error");
     throw new AppError(
       502,
       `GreenAPI responded with ${res.status}: ${text}`,

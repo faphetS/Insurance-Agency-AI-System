@@ -127,8 +127,76 @@ Respond ONLY with the JSON object, nothing else.`;
     }
     return { valid: false };
   } catch (err) {
-    logger.warn({ err, slotName, userMessage }, "classifyIntakeResponse failed — falling back to accept");
-    return { valid: true, extracted: userMessage };
+    logger.warn({ err, slotName, userMessage }, "classifyIntakeResponse failed — rejecting to re-prompt");
+    return { valid: false };
+  }
+}
+
+/**
+ * Classify whether an intake case is 'simple' or 'complex' based on the
+ * inquiry type and any gathered details. Never throws — defaults to 'simple'.
+ */
+export async function classifyComplexity(
+  inquiryType: string,
+  details: Record<string, string | null | undefined>,
+): Promise<"simple" | "complex"> {
+  const resolvedModel = env.AI_MODEL;
+
+  const detailLines = Object.entries(details)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("\n");
+
+  const systemPrompt = `You are a case-complexity screener for an insurance agency.
+Given the inquiry type and client details, decide whether this is a 'simple' or 'complex' case.
+
+Consider a case COMPLEX if any of the following apply:
+- Inquiry type involves health, life, or pension insurance (these often require medical underwriting)
+- Client has indicated multiple insurance types
+- POA (power of attorney) was provided (suggests the client is acting on behalf of another)
+- Multiple products or cross-insurance checks are likely needed
+
+Consider a case SIMPLE if it is a straightforward single-product inquiry (vehicle, home/property, travel).
+
+Inquiry type: ${inquiryType}
+Client details:
+${detailLines || "(none)"}
+
+Respond ONLY with JSON: {"complexity": "simple"} or {"complexity": "complex"}`;
+
+  try {
+    const messages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: "Classify this case." },
+    ];
+
+    let raw: string;
+    try {
+      const response = await openai.chat.completions.create(
+        { model: resolvedModel, messages },
+        { timeout: 15_000 },
+      );
+      raw = response.choices[0]?.message?.content ?? "";
+    } catch (err) {
+      if (resolvedModel !== FALLBACK_MODEL) {
+        logger.warn({ model: resolvedModel, err }, "classifyComplexity: primary model failed — retrying with fallback");
+        const response = await openai.chat.completions.create(
+          { model: FALLBACK_MODEL, messages },
+          { timeout: 15_000 },
+        );
+        raw = response.choices[0]?.message?.content ?? "";
+      } else {
+        throw err;
+      }
+    }
+
+    const cleaned = raw.replace(/```json\n?|\n?```/g, "").trim();
+    const parsed = JSON.parse(cleaned) as { complexity?: string };
+    if (parsed.complexity === "complex") return "complex";
+    return "simple";
+  } catch (err) {
+    logger.warn({ err, inquiryType }, "classifyComplexity: failed — defaulting to simple");
+    return "simple";
   }
 }
 

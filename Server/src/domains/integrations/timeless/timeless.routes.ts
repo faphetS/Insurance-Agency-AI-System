@@ -6,13 +6,7 @@ import { timelessController } from "./timeless.controller.js";
 
 const router = express.Router();
 
-// Raw body required for HMAC signature verification — mounted before the global
-// express.json() parser processes this route via per-route middleware override.
-router.post(
-  "/webhook",
-  express.raw({ type: "application/json" }),
-  timelessController.webhook,
-);
+router.post("/webhook", timelessController.webhook);
 
 router.get("/status", authenticate, timelessController.status);
 

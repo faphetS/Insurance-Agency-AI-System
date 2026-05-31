@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../../config/supabase.js";
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { countUnreadEmails } from "../integrations/gmail/gmail.service.js";
 
@@ -120,6 +121,6 @@ export class GmailEmailProvider implements EmailProvider {
 }
 
 export const emailProvider: EmailProvider =
-  process.env.EMAIL_PROVIDER === "stub"
+  env.EMAIL_PROVIDER === "stub"
     ? new StubEmailProvider()
     : new GmailEmailProvider();

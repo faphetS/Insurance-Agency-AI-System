@@ -52,6 +52,11 @@ router.post(
   operationsController.triggerCheck,
 );
 
+router.post(
+  "/trigger-digest",
+  operationsController.triggerDigest,
+);
+
 router.get(
   "/dashboard",
   operationsController.getDashboard,

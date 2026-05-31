@@ -3,13 +3,15 @@ export type NotificationType =
   | "receipt_check"
   | "policy_check"
   | "deposit_check"
+  | "cross_check"
   | "overdue_task"
   | "summary_ready"
   | "service_due"
   | "sla_breach"
   | "digest"
   | "email_pending"
-  | "whatsapp_unanswered";
+  | "whatsapp_unanswered"
+  | "complex_case";
 
 export type NotificationSeverity = "info" | "warning" | "urgent";
 

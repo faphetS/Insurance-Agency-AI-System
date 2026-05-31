@@ -1,9 +1,7 @@
 import type { Request, Response } from "express";
-import { supabaseAdmin } from "../../config/supabase.js";
-import { NotFoundError } from "../../lib/errors.js";
 import {
-  createTaskChain,
   completeTask,
+  finalizeSummary,
   getDashboard,
   getEmailMonitoring,
   getNotifications,
@@ -51,21 +49,7 @@ export const operationsController = {
     const { meetingId } = req.params as { meetingId: string };
     const { finalText } = req.body as { finalText?: string };
 
-    const { data: meeting, error } = await supabaseAdmin
-      .from("meetings")
-      .update({
-        summary_status: "approved",
-        ...(finalText !== undefined && { summary_final: finalText }),
-      })
-      .eq("id", meetingId)
-      .select("id")
-      .single();
-
-    if (error || !meeting) {
-      throw new NotFoundError("Meeting");
-    }
-
-    await createTaskChain(meetingId);
+    await finalizeSummary(meetingId, finalText);
     res.json({ status: "success" });
   },
 
@@ -78,6 +62,12 @@ export const operationsController = {
   async triggerCheck(_req: Request, res: Response): Promise<void> {
     await runAllChecks();
     res.json({ status: "success", message: "All checks completed" });
+  },
+
+  async triggerDigest(_req: Request, res: Response): Promise<void> {
+    const { runDailyDigest } = await import("./operations.digest.js");
+    await runDailyDigest({ force: true });
+    res.json({ status: "success", message: "Digest sent" });
   },
 
   async getDashboard(_req: Request, res: Response): Promise<void> {

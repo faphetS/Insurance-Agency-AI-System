@@ -12,7 +12,9 @@ import {
   type InquiryType,
   type IntakeSlot,
 } from "./intake.prompts.js";
-import { analyzeImage, classifyIntakeResponse } from "./ai.service.js";
+import { analyzeImage, classifyComplexity, classifyIntakeResponse } from "./ai.service.js";
+import { createNotification } from "../operations/operations.service.js";
+import { persistRemoteFile, extFor } from "../../lib/storage.js";
 
 // ---------------------------------------------------------------------------
 // Type helpers — the DB types file predates the migration; cast as needed
@@ -30,6 +32,7 @@ interface ClientIntakeUpdate {
   intake_current_slot?: string;
   intake_completed_at?: string | null;
   pipeline_stage?: string | null;
+  complexity?: string | null;
 }
 
 function updateClient(id: string, values: ClientIntakeUpdate) {
@@ -153,11 +156,32 @@ async function finalize(
   chatId: string,
   clientId: string,
 ): Promise<void> {
+  // Classify case complexity before marking complete — default to 'simple' on any error.
+  const { data: clientForComplexity } = await supabaseAdmin
+    .from("clients")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select("inquiry_type, poa_doc_url, email" as any)
+    .eq("id", clientId)
+    .maybeSingle();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const clientRow = clientForComplexity as any as {
+    inquiry_type?: string | null;
+    poa_doc_url?: string | null;
+    email?: string | null;
+  } | null;
+
+  const complexity = await classifyComplexity(
+    clientRow?.inquiry_type ?? "unknown",
+    { poa_doc_url: clientRow?.poa_doc_url, email: clientRow?.email },
+  );
+
   const { error } = await updateClient(clientId, {
     intake_state: "completed",
     intake_current_slot: "done",
     intake_completed_at: new Date().toISOString(),
     pipeline_stage: "meeting_scheduling",
+    complexity,
   });
 
   if (error) {
@@ -166,6 +190,20 @@ async function finalize(
       "intake: failed to finalize",
     );
     return;
+  }
+
+  if (complexity === "complex") {
+    const notified = await createNotification({
+      type: "complex_case",
+      title: "תיק מורכב",
+      message: `לקוח ${clientId} סווג כתיק מורכב (סוג פנייה: ${clientRow?.inquiry_type ?? "unknown"})`,
+      severity: "warning",
+      client_id: clientId,
+      reference_key: `complex_case:${clientId}`,
+    });
+    if (notified) {
+      logger.info({ clientId, complexity }, "intake: complex case notification created");
+    }
   }
 
   // Insert pending meeting row so booking-sync can match it when the event arrives
@@ -197,6 +235,21 @@ async function finalize(
     .eq("id", conversationId);
 
   logger.info({ conversationId, clientId }, "intake: completed");
+}
+
+async function persistIntakeFile(
+  clientId: string,
+  kind: "id_photo" | "poa",
+  payload: Extract<MessagePayload, { kind: "image" | "document" }>,
+): Promise<string | null> {
+  const ext = extFor(payload.mimeType, payload.fileName);
+  const destPath = `clients/${clientId}/${kind}_${Date.now()}.${ext}`;
+  const stored = await persistRemoteFile(payload.fileUrl, destPath, payload.mimeType);
+  if (!stored) {
+    logger.warn({ clientId, kind }, "intake: file persist failed");
+    return null;
+  }
+  return stored;
 }
 
 // ---------------------------------------------------------------------------
@@ -336,17 +389,7 @@ async function handleIdPhoto(
     return;
   }
 
-  await supabaseAdmin.from("documents").insert({
-    client_id: clientId,
-    type: "id_photo",
-    file_url: payload.fileUrl,
-    file_name: payload.fileName ?? null,
-    mime_type: payload.mimeType ?? null,
-  });
-
-  await updateClient(clientId, { id_photo_url: payload.fileUrl });
-
-  // OCR validation via Gemini
+  // OCR validation first — only persist on success (don't store rejected IDs)
   try {
     const ocrResult = await analyzeImage(
       payload.fileUrl,
@@ -370,10 +413,39 @@ async function handleIdPhoto(
       return;
     }
   } catch (err) {
-    logger.warn({ err }, "OCR validation failed — accepting photo and continuing");
+    logger.warn({ err }, "intake: OCR validation failed — requesting resend");
+    const retryText = "לא ניתן לקרוא את התמונה, נא לשלוח מחדש תמונה ברורה של תעודת הזהות.";
+    try {
+      const { idMessage } = await sendMessageWithTyping(chatId, retryText);
+      await persistOutbound(conversationId, retryText, idMessage);
+    } catch (sendErr) {
+      logger.error({ sendErr }, "intake: failed to send OCR error message");
+    }
+    return;
   }
 
-  await updateClient(clientId, { id_validated: true });
+  const ref = await persistIntakeFile(clientId, "id_photo", payload);
+
+  if (!ref) {
+    const retryText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את תעודת הזהות.";
+    try {
+      const { idMessage } = await sendMessageWithTyping(chatId, retryText);
+      await persistOutbound(conversationId, retryText, idMessage);
+    } catch (sendErr) {
+      logger.error({ sendErr }, "intake: failed to send file-persist error message");
+    }
+    return;
+  }
+
+  await supabaseAdmin.from("documents").insert({
+    client_id: clientId,
+    type: "id_photo",
+    file_url: ref,
+    file_name: payload.fileName ?? null,
+    mime_type: payload.mimeType ?? null,
+  });
+
+  await updateClient(clientId, { id_photo_url: ref, id_validated: true });
   await advanceTo(conversationId, chatId, clientId, "poa");
 }
 
@@ -400,15 +472,28 @@ async function handlePoa(
   }
 
   if (payload.kind === "image" || payload.kind === "document") {
+    const ref = await persistIntakeFile(clientId, "poa", payload);
+
+    if (!ref) {
+      const retryText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את ייפוי הכוח.";
+      try {
+        const { idMessage } = await sendMessageWithTyping(chatId, retryText);
+        await persistOutbound(conversationId, retryText, idMessage);
+      } catch (sendErr) {
+        logger.error({ sendErr }, "intake: failed to send poa file-persist error message");
+      }
+      return;
+    }
+
     await supabaseAdmin.from("documents").insert({
       client_id: clientId,
       type: "poa",
-      file_url: payload.fileUrl,
+      file_url: ref,
       file_name: payload.fileName ?? null,
       mime_type: payload.mimeType ?? null,
     });
 
-    await updateClient(clientId, { poa_doc_url: payload.fileUrl });
+    await updateClient(clientId, { poa_doc_url: ref });
     await advanceTo(conversationId, chatId, clientId, "done");
     return;
   }

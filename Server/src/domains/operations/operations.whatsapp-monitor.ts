@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../../config/supabase.js";
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 
 export const WHATSAPP_NUMBERS = [
@@ -73,22 +74,44 @@ async function greenApiUnansweredCount(instance: WhatsappInstance): Promise<numb
 async function botUnansweredCount(): Promise<number> {
   const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
 
-  // A conversation is unanswered when:
-  // - the latest message is inbound (direction='inbound')
-  // - it arrived more than 15 minutes ago
-  // - there is no subsequent outbound reply in that conversation
-  const { data, error } = await supabaseAdmin
+  const { data: convRows, error } = await supabaseAdmin
     .from("conversations")
     .select("id")
-    .lt("last_message_at", fifteenMinutesAgo)
-    .eq("last_message_direction", "inbound");
+    .not("client_id", "is", null)
+    .lt("last_message_at", fifteenMinutesAgo);
 
   if (error) {
-    logger.error({ error }, "botUnansweredCount: query failed");
+    logger.error({ error }, "botUnansweredCount: conversations query failed");
     return 0;
   }
 
-  return data?.length ?? 0;
+  const convIds = (convRows ?? []).map((c) => c.id as string);
+  if (convIds.length === 0) return 0;
+
+  const { data: msgRows, error: msgError } = await supabaseAdmin
+    .from("messages")
+    .select("conversation_id, direction, created_at")
+    .in("conversation_id", convIds)
+    .order("created_at", { ascending: false });
+
+  if (msgError) {
+    logger.error({ error: msgError }, "botUnansweredCount: messages query failed");
+    return 0;
+  }
+
+  const latestByConv = new Map<string, string>();
+  for (const msg of msgRows ?? []) {
+    const convId = msg.conversation_id as string;
+    if (!latestByConv.has(convId)) {
+      latestByConv.set(convId, msg.direction as string);
+    }
+  }
+
+  let count = 0;
+  for (const direction of latestByConv.values()) {
+    if (direction === "inbound") count++;
+  }
+  return count;
 }
 
 export class GreenApiWhatsappMonitor implements WhatsappMonitor {
@@ -178,6 +201,6 @@ export class GreenApiWhatsappMonitor implements WhatsappMonitor {
 }
 
 export const whatsappMonitor: WhatsappMonitor =
-  process.env.WHATSAPP_PROVIDER === "stub"
+  env.WHATSAPP_PROVIDER === "stub"
     ? new StubWhatsappMonitor()
     : new GreenApiWhatsappMonitor();

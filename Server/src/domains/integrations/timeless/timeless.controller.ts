@@ -12,26 +12,21 @@ import type { TimelessWebhookPayload } from "./timeless.types.js";
 
 export const timelessController = {
   async webhook(req: Request, res: Response): Promise<void> {
-    const rawBody = req.body as Buffer;
+    const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
     const signature = req.headers["x-webhook-signature"] as string | undefined;
 
     await verifySignature(rawBody, signature);
 
-    const payload = JSON.parse(rawBody.toString("utf-8")) as TimelessWebhookPayload;
+    const payload = req.body as TimelessWebhookPayload;
 
-    logger.info({ event: payload.event, meetingId: payload.meeting_id }, "timeless: webhook received");
+    logger.info({ meetingId: payload.id }, "timeless: webhook received");
 
     res.status(200).json({ status: "ok" });
 
-    if (
-      payload.event === "meeting.transcript_ready" ||
-      payload.event === "meeting.initial_summary_ready"
-    ) {
-      await recordEvent();
-      ingestTimelessMeeting(payload.meeting_id).catch((err: unknown) =>
-        logger.error({ err, meetingId: payload.meeting_id }, "timeless: ingest failed"),
-      );
-    }
+    await recordEvent();
+    ingestTimelessMeeting(payload.id).catch((err: unknown) =>
+      logger.error({ err, meetingId: payload.id }, "timeless: ingest failed"),
+    );
   },
 
   async status(_req: Request, res: Response): Promise<void> {

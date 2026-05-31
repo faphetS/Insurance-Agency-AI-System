@@ -68,6 +68,11 @@ const envSchema = z.object({
 
   // Timeless.day (meeting recording + transcripts)
   TIMELESS_API_KEY: z.string().optional(),
+
+  // Provider toggles — set to "stub" to disable live API calls
+  BAFI_PROVIDER: z.enum(["stub", "live"]).default("live"),
+  EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
+  WHATSAPP_PROVIDER: z.enum(["stub", "live"]).default("live"),
 });
 
 const parsed = envSchema.safeParse(process.env);

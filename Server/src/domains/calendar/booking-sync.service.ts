@@ -24,6 +24,7 @@ async function matchEventToClient(event: calendar_v3.Schema$Event): Promise<Matc
       .from("clients")
       .select("id, full_name, email, pipeline_stage")
       .in("email", attendeeEmails)
+      .in("status", ["new", "active"])
       .limit(1)
       .maybeSingle();
     if (client) return { client, tier: 1 };

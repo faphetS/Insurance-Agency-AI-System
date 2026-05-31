@@ -4,6 +4,7 @@ import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { AppError } from "../../../lib/errors.js";
 import { createNotification } from "../../operations/operations.service.js";
+import { notifyStaffSummaryReady } from "../../operations/operations.staff-notify.js";
 import {
   createWebhook,
   deleteWebhook,
@@ -13,7 +14,7 @@ import {
   getTranscript,
   listWebhooks,
 } from "./timeless.client.js";
-import type { TimelessMeeting, TimelessTranscriptSegment } from "./timeless.types.js";
+import type { TimelessMeeting, TimelessTranscript } from "./timeless.types.js";
 
 const WEBHOOK_EVENTS = ["meeting.transcript_ready", "meeting.initial_summary_ready"];
 
@@ -74,7 +75,9 @@ export async function ensureWebhookRegistered(): Promise<void> {
   logger.info({ webhookId: created.id, url: targetUrl }, "timeless: webhook registered");
 }
 
-export async function verifySignature(rawBody: Buffer, signatureHeader: string | undefined): Promise<void> {
+export async function verifySignature(rawBody: Buffer | undefined, signatureHeader: string | undefined): Promise<void> {
+  if (!rawBody) throw new AppError(400, "Raw body unavailable for signature verification", "TIMELESS_NO_RAW_BODY");
+
   if (!signatureHeader) {
     throw new AppError(401, "Missing X-Webhook-Signature header", "TIMELESS_SIG_MISSING");
   }
@@ -100,17 +103,16 @@ export async function verifySignature(rawBody: Buffer, signatureHeader: string |
   }
 }
 
-function formatTranscript(segments: TimelessTranscriptSegment[]): string {
-  return segments
+function formatTranscript(transcript: TimelessTranscript): string {
+  const nameById = new Map(transcript.speakers.map((s) => [s.id, s.name]));
+  return transcript.segments
     .map((seg) => {
-      if (seg.start_time !== undefined) {
-        const totalSeconds = Math.floor(seg.start_time);
-        const h = Math.floor(totalSeconds / 3600).toString().padStart(2, "0");
-        const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, "0");
-        const s = (totalSeconds % 60).toString().padStart(2, "0");
-        return `[${h}:${m}:${s}] ${seg.speaker}: ${seg.text}`;
-      }
-      return `${seg.speaker}: ${seg.text}`;
+      const speaker = nameById.get(seg.speaker_id) ?? seg.speaker_id;
+      const totalSeconds = Math.floor(seg.start_time);
+      const h = Math.floor(totalSeconds / 3600).toString().padStart(2, "0");
+      const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, "0");
+      const s = (totalSeconds % 60).toString().padStart(2, "0");
+      return `[${h}:${m}:${s}] ${speaker}: ${seg.text}`;
     })
     .join("\n");
 }
@@ -182,7 +184,7 @@ async function parkUnmatched(
         timeless_meeting_id: meeting.id,
         start_time: meeting.start_time,
         participants: meeting.participants,
-        host_email: meeting.host.email,
+        host_email: meeting.host?.email ?? null,
         candidate_meeting_ids: candidateMeetingIds,
         reason,
       },
@@ -206,12 +208,12 @@ async function applyIngest(
     getRecording(timelessMeeting.id).catch(() => null),
   ]);
 
-  const transcript = transcriptData ? formatTranscript(transcriptData.segments) : null;
-  const recordingUrl = recordingData?.url ?? null;
+  const transcript = transcriptData ? formatTranscript(transcriptData) : null;
+  const recordingUrl = recordingData?.recording_url ?? null;
 
   let summaryDraft: string | null = null;
   const summaryDoc = (timelessMeeting.documents ?? [])
-    .filter((d) => d.type.toLowerCase().includes("summary"))
+    .filter((d) => (d.title ?? "").toLowerCase().includes("summary"))
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
 
   if (summaryDoc) {
@@ -245,6 +247,8 @@ async function applyIngest(
     meeting_id: ourMeetingId,
     reference_key: `summary_ready:${ourMeetingId}`,
   });
+
+  await notifyStaffSummaryReady(ourMeetingId);
 
   logger.info({ ourMeetingId, timelessId: timelessMeeting.id }, "timeless: meeting ingested");
 }
@@ -287,12 +291,12 @@ export async function ingestTimelessMeeting(meetingId: string): Promise<void> {
   const scored: ScoredCandidate[] = candidates.map((c) => {
     let score = 0;
     if (c.client_email && participantEmails.has(c.client_email.toLowerCase())) score += 10;
-    if (staffEmails.has(timelessMeeting.host.email.toLowerCase())) score += 5;
+    if (timelessMeeting.host && staffEmails.has(timelessMeeting.host.email.toLowerCase())) score += 5;
     const diffMin = Math.abs(new Date(c.scheduled_at).getTime() - tTime) / 60_000;
     if (diffMin <= 5) score += 5;
     else if (diffMin <= 15) score += 2;
     const src = (timelessMeeting.source ?? "").toLowerCase();
-    if (src === "google meet" && c.type === "google_meet") score += 3;
+    if (src === "google_meet" && c.type === "google_meet") score += 3;
     if (src === "phone" && c.type === "phone") score += 3;
     return { ...c, score };
   });

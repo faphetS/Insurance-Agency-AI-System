@@ -2,9 +2,9 @@ import type { Request, Response } from "express";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
-import { UnauthorizedError } from "../../lib/errors.js";
 import { handleIncomingMessage } from "../ai/ai.orchestrator.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
+import { finalizeSummary, handleClientConfirm } from "../operations/operations.service.js";
 import * as whatsappService from "./whatsapp.service.js";
 import {
   incomingMessageSchema,
@@ -12,6 +12,8 @@ import {
   webhookPayloadSchema,
   extractPayload,
 } from "./whatsapp.validator.js";
+import { isStaffChat, extractButtonId } from "./whatsapp.util.js";
+import { wantsHuman, handleHumanEscalation } from "./whatsapp.escalation.js";
 
 export const whatsappController = {
   /**
@@ -24,7 +26,9 @@ export const whatsappController = {
     const authHeader = req.headers.authorization;
     const expectedToken = `Bearer ${env.GREENAPI_WEBHOOK_TOKEN}`;
     if (authHeader !== expectedToken) {
-      throw new UnauthorizedError("Invalid webhook token");
+      logger.warn({ authHeader }, "Webhook token mismatch — returning 200 to prevent retry storms");
+      res.status(200).json({ ok: true });
+      return;
     }
 
     // 2. Parse payload — on validation failure, still return 200 to stop retries
@@ -53,6 +57,7 @@ export const whatsappController = {
         res.status(200).json({ ok: true });
         return;
       }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const outChatId = outboundResult.data.senderData?.chatId ?? (req.body as Record<string, any>)?.senderData?.chatId;
       if (!outChatId) {
         res.status(200).json({ ok: true });
@@ -60,6 +65,7 @@ export const whatsappController = {
       }
 
       // Check if this outgoing message was sent by our bot — don't self-pause
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const idMessage = outboundResult.data.idMessage ?? (req.body as Record<string, any>)?.idMessage;
       if (idMessage) {
         const { data: existing } = await supabaseAdmin
@@ -133,6 +139,73 @@ export const whatsappController = {
 
     // Derive phone from chatId (format: "1234567890@c.us" or "group@g.us")
     const contactPhone = chatId.split("@")[0] ?? chatId;
+
+    // Staff intercept — if this chat belongs to a staff member, handle separately
+    const staff = await isStaffChat(chatId);
+    if (staff) {
+      res.status(200).json({ ok: true });
+
+      setImmediate(async () => {
+        try {
+          const buttonId = extractButtonId(req.body);
+
+          const approveMatch = /^sum_approve:(.+)$/.exec(buttonId);
+          const editMatch = /^sum_edit:(.+)$/.exec(buttonId);
+
+          if (approveMatch) {
+            const meetingId = approveMatch[1]!;
+            await finalizeSummary(meetingId);
+            await whatsappService.sendMessageWithTyping(chatId, "✅ הסיכום אושר.");
+          } else if (editMatch) {
+            const meetingId = editMatch[1]!;
+            // Clear any prior edit session for this chat
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (supabaseAdmin as any)
+              .from("meetings")
+              .update({ summary_edit_chat_id: null })
+              .eq("summary_edit_chat_id", chatId);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (supabaseAdmin as any)
+              .from("meetings")
+              .update({ summary_edit_chat_id: chatId })
+              .eq("id", meetingId);
+            await whatsappService.sendMessageWithTyping(
+              chatId,
+              "אוקיי, אנא שלח/י את נוסח הסיכום המעודכן.",
+            );
+          } else {
+            // Plain text — find an open edit session for this chat
+            const inboundText =
+              payload.kind === "text" ? payload.text : "";
+            if (inboundText) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const { data: editMeeting } = await (supabaseAdmin as any)
+                .from("meetings")
+                .select("id")
+                .eq("summary_edit_chat_id", chatId)
+                .eq("summary_status", "draft")
+                .order("updated_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              if (editMeeting) {
+                await finalizeSummary(editMeeting.id as string, inboundText);
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                await (supabaseAdmin as any)
+                  .from("meetings")
+                  .update({ summary_edit_chat_id: null })
+                  .eq("id", editMeeting.id);
+                await whatsappService.sendMessageWithTyping(chatId, "✅ הסיכום עודכן ואושר.");
+              }
+            }
+          }
+        } catch (err) {
+          logger.error({ err, chatId }, "Staff WhatsApp handler error");
+        }
+      });
+
+      return;
+    }
 
     // 3a. Upsert conversation by whatsapp_chat_id
     const { data: conversation, error: convErr } = await supabaseAdmin
@@ -287,6 +360,17 @@ export const whatsappController = {
 
     setImmediate(async () => {
       try {
+        if (textForAi && wantsHuman(textForAi)) {
+          await handleHumanEscalation(conversationId, chatId);
+          return;
+        }
+
+        const confirmMatch = /^client_confirm:(.+)$/.exec(extractButtonId(req.body));
+        if (confirmMatch) {
+          await handleClientConfirm(confirmMatch[1]!, chatId, conversationId);
+          return;
+        }
+
         if (linkedClientId) {
           const { consumed } = await handleIntake(
             conversationId,
