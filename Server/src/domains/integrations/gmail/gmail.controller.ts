@@ -7,7 +7,11 @@ import {
   getAuthorizationUrl,
   handleCallback,
   getGmailStatus,
+  fetchMessages,
 } from "./gmail.service.js";
+import type { ScanGmailQuery } from "./gmail.validator.js";
+
+const BODY_PREVIEW_LENGTH = 1500;
 
 export const gmailController = {
   async authorize(req: Request, res: Response): Promise<void> {
@@ -50,5 +54,48 @@ export const gmailController = {
     const staffId = req.user!.id;
     const data = await getGmailStatus(staffId);
     res.json({ status: "success", data });
+  },
+
+  async scan(req: Request, res: Response): Promise<void> {
+    const { q, limit, staffId: queryStaffId } = req.query as unknown as ScanGmailQuery;
+
+    let resolvedStaffId = queryStaffId;
+
+    if (!resolvedStaffId) {
+      const { data: firstRow } = await supabaseAdmin
+        .from("gmail_integrations")
+        .select("staff_id")
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle();
+
+      if (!firstRow) {
+        throw new AppError(404, "No active Gmail integration found", "GMAIL_NOT_FOUND");
+      }
+      resolvedStaffId = firstRow.staff_id as string;
+    }
+
+    logger.info({ staffId: resolvedStaffId, q, limit }, "gmail.scan: starting");
+
+    const emails = await fetchMessages(resolvedStaffId, {
+      q: q ?? "newer_than:30d",
+      maxResults: limit,
+    });
+
+    const truncated = emails.map((email) => ({
+      ...email,
+      bodyText:
+        email.bodyText.length > BODY_PREVIEW_LENGTH
+          ? email.bodyText.slice(0, BODY_PREVIEW_LENGTH) + "…"
+          : email.bodyText,
+    }));
+
+    res.json({
+      status: "success",
+      data: {
+        count: truncated.length,
+        emails: truncated,
+      },
+    });
   },
 };

@@ -3,7 +3,7 @@ import { supabaseAdmin } from "../../../config/supabase.js";
 import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { AppError } from "../../../lib/errors.js";
-import type { GmailIntegration } from "./gmail.types.js";
+import type { GmailIntegration, ParsedEmail } from "./gmail.types.js";
 
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -175,4 +175,148 @@ export async function getGmailStatus(staffId: string): Promise<{
     email: (data.email as string | null) ?? null,
     lastSyncedAt: (data.last_synced_at as string | null) ?? null,
   };
+}
+
+function decodeBase64Url(encoded: string): string {
+  const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(base64, "base64").toString("utf-8");
+}
+
+function stripHtmlTags(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+type GmailMessagePart = {
+  mimeType?: string | null;
+  body?: { data?: string | null } | null;
+  parts?: GmailMessagePart[] | null;
+};
+
+function extractBodyText(payload: GmailMessagePart): string {
+  const plainParts: string[] = [];
+  const htmlParts: string[] = [];
+
+  function walk(part: GmailMessagePart) {
+    const mime = part.mimeType ?? "";
+
+    if (mime === "text/plain" && part.body?.data) {
+      plainParts.push(decodeBase64Url(part.body.data));
+      return;
+    }
+
+    if (mime === "text/html" && part.body?.data) {
+      htmlParts.push(decodeBase64Url(part.body.data));
+      return;
+    }
+
+    if (mime.startsWith("multipart/") && part.parts) {
+      for (const child of part.parts) {
+        walk(child);
+      }
+      return;
+    }
+
+    // Top-level payload with body.data but no explicit mimeType — treat as plain
+    if (!mime && part.body?.data) {
+      plainParts.push(decodeBase64Url(part.body.data));
+    }
+  }
+
+  walk(payload);
+
+  if (plainParts.length > 0) {
+    return plainParts.join("\n").trim();
+  }
+  if (htmlParts.length > 0) {
+    return stripHtmlTags(htmlParts.join("\n"));
+  }
+  return "";
+}
+
+function headerValue(
+  headers: Array<{ name?: string | null; value?: string | null }>,
+  name: string,
+): string {
+  const lower = name.toLowerCase();
+  return headers.find((h) => h.name?.toLowerCase() === lower)?.value ?? "";
+}
+
+export async function fetchMessages(
+  staffId: string,
+  opts: { q?: string; maxResults?: number },
+): Promise<ParsedEmail[]> {
+  const { data: integration, error: fetchErr } = await supabaseAdmin
+    .from("gmail_integrations")
+    .select("*")
+    .eq("staff_id", staffId)
+    .eq("is_active", true)
+    .single();
+
+  if (fetchErr || !integration) {
+    throw new AppError(404, `No active Gmail integration for staff ${staffId}`, "GMAIL_NOT_FOUND");
+  }
+
+  const accessToken = await getValidAccessToken(integration as GmailIntegration);
+  const client = createOAuth2Client();
+  client.setCredentials({ access_token: accessToken });
+  const gmail = google.gmail({ version: "v1", auth: client });
+
+  const listRes = await gmail.users.messages.list({
+    userId: "me",
+    q: opts.q ?? "newer_than:30d",
+    maxResults: opts.maxResults ?? 10,
+  });
+
+  const messageIds = listRes.data.messages ?? [];
+  if (messageIds.length === 0) {
+    return [];
+  }
+
+  logger.info({ staffId, count: messageIds.length }, "gmail.fetchMessages: fetching full messages");
+
+  const results = await Promise.all(
+    messageIds.map(async (ref) => {
+      try {
+        const msgRes = await gmail.users.messages.get({
+          userId: "me",
+          id: ref.id!,
+          format: "full",
+        });
+
+        const msg = msgRes.data;
+        const payload = msg.payload ?? {};
+        const headers = payload.headers ?? [];
+
+        const bodyText = extractBodyText(payload as GmailMessagePart);
+
+        return {
+          id: msg.id ?? "",
+          threadId: msg.threadId ?? "",
+          from: headerValue(headers, "from"),
+          to: headerValue(headers, "to"),
+          subject: headerValue(headers, "subject"),
+          date: headerValue(headers, "date"),
+          snippet: msg.snippet ?? "",
+          bodyText,
+          internalDate: Number(msg.internalDate ?? 0),
+        } satisfies ParsedEmail;
+      } catch (err) {
+        logger.warn({ err, messageId: ref.id, staffId }, "gmail.fetchMessages: failed to parse message, skipping");
+        return null;
+      }
+    }),
+  );
+
+  return results.filter((r): r is ParsedEmail => r !== null);
 }

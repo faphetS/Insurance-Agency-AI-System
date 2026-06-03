@@ -23,3 +23,15 @@ export interface EmailInboxStatus {
   lastSyncedAt: string | null;
   error: string | null;
 }
+
+export interface ParsedEmail {
+  id: string;
+  threadId: string;
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+  snippet: string;
+  bodyText: string;
+  internalDate: number;
+}
