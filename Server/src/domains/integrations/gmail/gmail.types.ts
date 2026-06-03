@@ -34,4 +34,6 @@ export interface ParsedEmail {
   snippet: string;
   bodyText: string;
   internalDate: number;
+  labelIds: string[];
+  direction: "sent" | "received" | "other";
 }

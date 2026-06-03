@@ -75,7 +75,7 @@ const envSchema = z.object({
   TIMELESS_API_KEY: z.string().optional(),
 
   // Provider toggles — set to "stub" to disable live API calls
-  BAFI_PROVIDER: z.enum(["stub", "live"]).default("stub"),
+  BAFI_PROVIDER: z.enum(["stub", "live", "email"]).default("stub"),
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
   WHATSAPP_PROVIDER: z.enum(["stub", "live"]).default("live"),
 });

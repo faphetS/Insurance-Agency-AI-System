@@ -1,6 +1,8 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
+import { env } from "../../config/env.js";
 import type { BafiCheckResult, BafiProvider } from "./operations.types.js";
+import { EmailMilestoneProvider } from "./operations.email-milestones.js";
 
 class DefaultBafiProvider implements BafiProvider {
   private stub(method: string, clientId: string): BafiCheckResult {
@@ -35,7 +37,7 @@ class DefaultBafiProvider implements BafiProvider {
         .select("id, full_name, phone")
         .eq("is_active", true);
       if (error) throw error;
-      return (data ?? []).map((row: any) => ({
+      return (data ?? []).map((row: Record<string, unknown>) => ({
         id: row.id as string,
         name: row.full_name as string,
         phone: (row.phone as string | null) ?? undefined,
@@ -47,4 +49,5 @@ class DefaultBafiProvider implements BafiProvider {
   }
 }
 
-export const bafiProvider: BafiProvider = new DefaultBafiProvider();
+export const bafiProvider: BafiProvider =
+  env.BAFI_PROVIDER === "email" ? new EmailMilestoneProvider() : new DefaultBafiProvider();

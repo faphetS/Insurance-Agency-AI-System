@@ -9,7 +9,8 @@ import {
   getGmailStatus,
   fetchMessages,
 } from "./gmail.service.js";
-import type { ScanGmailQuery } from "./gmail.validator.js";
+import { classifyMailbox } from "./gmail.milestones.js";
+import type { ScanGmailQuery, MilestonesGmailQuery } from "./gmail.validator.js";
 
 const BODY_PREVIEW_LENGTH = 1500;
 
@@ -96,6 +97,38 @@ export const gmailController = {
         count: truncated.length,
         emails: truncated,
       },
+    });
+  },
+
+  async milestones(req: Request, res: Response): Promise<void> {
+    const { q, limit, staffId: queryStaffId } = req.query as unknown as MilestonesGmailQuery;
+
+    let resolvedStaffId = queryStaffId;
+
+    if (!resolvedStaffId) {
+      const { data: firstRow } = await supabaseAdmin
+        .from("gmail_integrations")
+        .select("staff_id")
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle();
+
+      if (!firstRow) {
+        throw new AppError(404, "No active Gmail integration found", "GMAIL_NOT_FOUND");
+      }
+      resolvedStaffId = firstRow.staff_id as string;
+    }
+
+    logger.info({ staffId: resolvedStaffId, q, limit }, "gmail.milestones: starting classification");
+
+    const hits = await classifyMailbox(resolvedStaffId, {
+      q,
+      maxResults: limit,
+    });
+
+    res.json({
+      status: "success",
+      data: { hits },
     });
   },
 };

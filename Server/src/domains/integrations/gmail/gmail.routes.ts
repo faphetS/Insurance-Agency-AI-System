@@ -2,7 +2,7 @@ import express from "express";
 import { authenticate } from "../../../middleware/auth.js";
 import { validate } from "../../../middleware/validate.js";
 import { gmailController } from "./gmail.controller.js";
-import { scanGmailSchema } from "./gmail.validator.js";
+import { scanGmailSchema, milestonesGmailSchema } from "./gmail.validator.js";
 
 const router = express.Router();
 
@@ -14,6 +14,12 @@ router.get(
   authenticate,
   validate({ query: scanGmailSchema }),
   gmailController.scan,
+);
+router.get(
+  "/milestones",
+  authenticate,
+  validate({ query: milestonesGmailSchema }),
+  gmailController.milestones,
 );
 
 export default router;

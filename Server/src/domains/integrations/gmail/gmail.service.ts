@@ -297,8 +297,15 @@ export async function fetchMessages(
         const msg = msgRes.data;
         const payload = msg.payload ?? {};
         const headers = payload.headers ?? [];
+        const labelIds = (msg.labelIds ?? []) as string[];
 
         const bodyText = extractBodyText(payload as GmailMessagePart);
+
+        const direction: "sent" | "received" | "other" = labelIds.includes("SENT")
+          ? "sent"
+          : labelIds.includes("INBOX")
+            ? "received"
+            : "other";
 
         return {
           id: msg.id ?? "",
@@ -310,6 +317,8 @@ export async function fetchMessages(
           snippet: msg.snippet ?? "",
           bodyText,
           internalDate: Number(msg.internalDate ?? 0),
+          labelIds,
+          direction,
         } satisfies ParsedEmail;
       } catch (err) {
         logger.warn({ err, messageId: ref.id, staffId }, "gmail.fetchMessages: failed to parse message, skipping");
