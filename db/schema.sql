@@ -148,7 +148,8 @@ CREATE TABLE public.tasks (
   type            text        NOT NULL
                   CHECK (type IN (
                     'forms_check', 'receipt_check', 'policy_check',
-                    'deposit_check', 'cross_check', 'service_meeting', 'general'
+                    'deposit_check', 'cross_check', 'service_meeting',
+                    'summary_approval', 'general'
                   )),
   description     text        NOT NULL,
   assigned_to     uuid        NOT NULL REFERENCES public.staff(id),
