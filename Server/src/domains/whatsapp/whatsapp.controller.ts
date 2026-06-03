@@ -22,11 +22,17 @@ export const whatsappController = {
    * GreenAPI pushes events here; we must always respond 200 quickly.
    */
   async handleWebhook(req: Request, res: Response): Promise<void> {
-    // 1. Verify token
+    // 1. Verify token — accept either Authorization: Bearer <token> (GreenAPI
+    // style) OR a ?token=<token> query param (for gateways that can't set headers).
     const authHeader = req.headers.authorization;
-    const expectedToken = `Bearer ${env.GREENAPI_WEBHOOK_TOKEN}`;
-    if (authHeader !== expectedToken) {
-      logger.warn({ authHeader }, "Webhook token mismatch — returning 200 to prevent retry storms");
+    const tokenParam = typeof req.query["token"] === "string" ? req.query["token"] : null;
+    const headerOk = authHeader === `Bearer ${env.GREENAPI_WEBHOOK_TOKEN}`;
+    const queryOk = tokenParam === env.GREENAPI_WEBHOOK_TOKEN;
+    if (!headerOk && !queryOk) {
+      logger.warn(
+        { authHeader, hasQueryToken: tokenParam !== null },
+        "Webhook token mismatch — returning 200 to prevent retry storms",
+      );
       res.status(200).json({ ok: true });
       return;
     }
