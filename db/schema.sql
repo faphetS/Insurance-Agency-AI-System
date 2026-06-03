@@ -328,6 +328,9 @@ CREATE TABLE public.whatsapp_instances (
   green_api_url         text,
   -- Added for CLIX gateway: identifies the connected line by CLIX customerId
   gateway_customer_id   text        UNIQUE,
+  -- 'conversational' = customer-facing bot; 'operational' = staff scan/monitoring line
+  purpose               text        NOT NULL DEFAULT 'conversational'
+                        CHECK (purpose IN ('conversational', 'operational')),
   is_active             boolean     NOT NULL DEFAULT true,
   is_connected          boolean     GENERATED ALWAYS AS (
                           green_api_instance_id IS NOT NULL
@@ -512,8 +515,8 @@ VALUES (1)
 ON CONFLICT (id) DO NOTHING;
 
 -- CLIX bot line instance — placeholder phone, real customerId used for webhook routing
-INSERT INTO public.whatsapp_instances (label, phone_number, role, gateway_customer_id, is_active)
-VALUES ('CLIX bot line', '000000000', 'bot', 'didi-scan-bot', true)
+INSERT INTO public.whatsapp_instances (label, phone_number, role, gateway_customer_id, purpose, is_active)
+VALUES ('CLIX bot line', '000000000', 'bot', 'didi-scan-bot', 'operational', true)
 ON CONFLICT (gateway_customer_id) DO NOTHING;
 
 -- ============================================================

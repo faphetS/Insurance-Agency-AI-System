@@ -44,6 +44,7 @@ export const whatsappController = {
     const rawBody = req.body as Record<string, any>;
     let webhookBody: Record<string, unknown> = rawBody;
     let clixInstanceId: string | null = null;
+    let isOperational = false;
 
     if (!rawBody.typeWebhook && rawBody.customerId && rawBody.type) {
       // CLIX gateway path
@@ -59,7 +60,7 @@ export const whatsappController = {
       // Resolve the whatsapp_instances row for this CLIX line
       const { data: instanceRow, error: instanceErr } = await supabaseAdmin
         .from("whatsapp_instances")
-        .select("id")
+        .select("id, purpose")
         .eq("gateway_customer_id", clixResult.customerId)
         .maybeSingle();
 
@@ -75,6 +76,7 @@ export const whatsappController = {
         );
       } else {
         clixInstanceId = instanceRow.id as string;
+        isOperational = (instanceRow as { id: string; purpose: string }).purpose === "operational";
       }
     }
 
@@ -279,6 +281,42 @@ export const whatsappController = {
 
     const conversationId = conversation.id;
 
+    // 3d. Insert inbound message — unique index rejects duplicate whatsapp_message_id
+    const { data: inserted, error: msgErr } = await supabaseAdmin
+      .from("messages")
+      .insert({
+        conversation_id: conversationId,
+        direction: "inbound",
+        sent_by: "customer",
+        body: messageBody,
+        whatsapp_message_id: idMessage,
+        status: "received",
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (msgErr) {
+      if (msgErr.code === "23505") {
+        logger.debug({ idMessage }, "Duplicate webhook — skipping");
+        res.sendStatus(200);
+        return;
+      }
+      logger.error({ conversationId, msgErr }, "Failed to insert inbound message");
+    }
+
+    if (!inserted) {
+      res.sendStatus(200);
+      return;
+    }
+
+    // Operational connections: message is stored + tagged; skip client creation and
+    // conversational bot dispatch entirely.
+    if (isOperational) {
+      logger.info({ conversationId, chatId }, "Operational connection — message stored, skipping conversational bot");
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     // 3b. Link client if conversation has no client_id yet
     let linkedClientId: string | null = null;
 
@@ -371,34 +409,6 @@ export const whatsappController = {
         { conversationId, clientLinkErr },
         "Unexpected error during client link — continuing",
       );
-    }
-
-    // 3d. Insert inbound message — unique index rejects duplicate whatsapp_message_id
-    const { data: inserted, error: msgErr } = await supabaseAdmin
-      .from("messages")
-      .insert({
-        conversation_id: conversationId,
-        direction: "inbound",
-        sent_by: "customer",
-        body: messageBody,
-        whatsapp_message_id: idMessage,
-        status: "received",
-      })
-      .select("id")
-      .maybeSingle();
-
-    if (msgErr) {
-      if (msgErr.code === "23505") {
-        logger.debug({ idMessage }, "Duplicate webhook — skipping");
-        res.sendStatus(200);
-        return;
-      }
-      logger.error({ conversationId, msgErr }, "Failed to insert inbound message");
-    }
-
-    if (!inserted) {
-      res.sendStatus(200);
-      return;
     }
 
     // 3e. Respond 200 immediately — intake/AI processing runs async to avoid
