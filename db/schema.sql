@@ -116,7 +116,7 @@ CREATE TABLE public.meetings (
                              CHECK (summary_status IN ('draft', 'approved', 'sent')),
   client_confirmed           boolean     NOT NULL DEFAULT false,
   status                     text        NOT NULL DEFAULT 'scheduled'
-                             CHECK (status IN ('scheduled', 'confirmed', 'done', 'cancelled')),
+                             CHECK (status IN ('pending_booking', 'scheduled', 'confirmed', 'done', 'cancelled')),
   reminder_24h_sent          boolean     NOT NULL DEFAULT false,
   reminder_1h_sent           boolean     NOT NULL DEFAULT false,
   created_at                 timestamptz NOT NULL DEFAULT now(),
