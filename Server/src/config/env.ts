@@ -11,10 +11,15 @@ const envSchema = z.object({
   BACKEND_URL: z.string().url().default("http://localhost:3000"),
   FRONTEND_URL: z.string().url().default("http://localhost:5173"),
 
-  // Supabase
-  SUPABASE_URL: z.string().url(),
-  SUPABASE_ANON_KEY: z.string().min(1),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+  // PostgreSQL (self-hosted)
+  DATABASE_URL: z.string().min(1),
+  DATABASE_POOL_MAX: z.coerce.number().default(10),
+
+  // File storage
+  STORAGE_DIR: z.string().default("./storage"),
+
+  // Admin API
+  ADMIN_API_TOKEN: z.string().min(16),
 
   // Auth
   JWT_SECRET: z.string().min(32),
@@ -70,7 +75,7 @@ const envSchema = z.object({
   TIMELESS_API_KEY: z.string().optional(),
 
   // Provider toggles — set to "stub" to disable live API calls
-  BAFI_PROVIDER: z.enum(["stub", "live"]).default("live"),
+  BAFI_PROVIDER: z.enum(["stub", "live"]).default("stub"),
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
   WHATSAPP_PROVIDER: z.enum(["stub", "live"]).default("live"),
 });

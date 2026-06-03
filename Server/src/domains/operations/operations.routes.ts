@@ -6,6 +6,8 @@ import {
   notificationIdSchema,
   approveSummarySchema,
   completeTaskSchema,
+  scanWhatsappSchema,
+  scanWhatsappDaySchema,
 } from "./operations.validator.js";
 import { operationsController } from "./operations.controller.js";
 
@@ -75,6 +77,18 @@ router.get(
 router.get(
   "/service-meetings",
   operationsController.getServiceMeetings,
+);
+
+router.post(
+  "/scan-whatsapp",
+  validate({ body: scanWhatsappSchema }),
+  operationsController.scanWhatsapp,
+);
+
+router.post(
+  "/scan-whatsapp-day",
+  validate({ body: scanWhatsappDaySchema }),
+  operationsController.scanWhatsappDay,
 );
 
 export default router;

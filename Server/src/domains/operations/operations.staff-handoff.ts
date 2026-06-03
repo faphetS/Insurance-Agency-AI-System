@@ -68,7 +68,7 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
     const taskLines =
       tasks && tasks.length > 0
         ? tasks
-            .map((t, i) => {
+            .map((t: any, i: number) => {
               const label = TASK_LABELS_HE[t.type] ?? t.type;
               return `${i + 1}. ${label} — עד ${formatDueDate(t.due_at)}`;
             })

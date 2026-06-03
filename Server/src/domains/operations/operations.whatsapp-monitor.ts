@@ -85,7 +85,7 @@ async function botUnansweredCount(): Promise<number> {
     return 0;
   }
 
-  const convIds = (convRows ?? []).map((c) => c.id as string);
+  const convIds = (convRows ?? []).map((c: any) => c.id as string);
   if (convIds.length === 0) return 0;
 
   const { data: msgRows, error: msgError } = await supabaseAdmin

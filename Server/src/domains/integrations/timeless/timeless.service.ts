@@ -145,7 +145,7 @@ async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
 
   if (!meetings || meetings.length === 0) return [];
 
-  const clientIds = [...new Set(meetings.map((m) => m.client_id as string))];
+  const clientIds = [...new Set(meetings.map((m: any) => m.client_id as string))];
 
   const { data: clients } = await supabaseAdmin
     .from("clients")
@@ -153,10 +153,10 @@ async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
     .in("id", clientIds);
 
   const emailMap = new Map<string, string | null>(
-    (clients ?? []).map((c) => [c.id as string, (c.email as string | null) ?? null]),
+    (clients ?? []).map((c: any) => [c.id as string, (c.email as string | null) ?? null]),
   );
 
-  return meetings.map((m) => ({
+  return meetings.map((m: any) => ({
     id: m.id as string,
     scheduled_at: m.scheduled_at as string,
     type: m.type as string,
@@ -167,7 +167,7 @@ async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
 
 async function fetchStaffEmails(): Promise<Set<string>> {
   const { data } = await supabaseAdmin.from("staff").select("email");
-  return new Set((data ?? []).map((s) => (s.email as string).toLowerCase()));
+  return new Set((data ?? []).map((s: any) => (s.email as string).toLowerCase()));
 }
 
 type UnmatchedReason = "no_candidates" | "low_score" | "ambiguous";

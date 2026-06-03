@@ -1,5 +1,6 @@
+import { timingSafeEqual } from "crypto";
 import type { NextFunction, Request, Response } from "express";
-import { supabaseAdmin } from "../config/supabase.js";
+import { env } from "../config/env.js";
 import { ForbiddenError, UnauthorizedError } from "../lib/errors.js";
 
 export interface AuthUser {
@@ -16,10 +17,6 @@ declare global {
   }
 }
 
-/**
- * Verifies the JWT from the Authorization header via Supabase's authoritative
- * getUser call. Attaches the decoded user to req.user.
- */
 export async function authenticate(
   req: Request,
   _res: Response,
@@ -31,26 +28,21 @@ export async function authenticate(
   }
 
   const token = header.slice(7);
+  const expected = env.ADMIN_API_TOKEN;
 
-  const { data, error } = await supabaseAdmin.auth.getUser(token);
-  if (error || !data.user) {
-    throw new UnauthorizedError("Invalid or expired token");
+  let match = false;
+  if (token.length === expected.length) {
+    match = timingSafeEqual(Buffer.from(token), Buffer.from(expected));
   }
 
-  req.user = {
-    id: data.user.id,
-    email: data.user.email ?? "",
-    role:
-      (data.user.app_metadata?.role as string | undefined) ?? "authenticated",
-  };
+  if (!match) {
+    throw new UnauthorizedError("Invalid token");
+  }
 
+  req.user = { id: "admin", email: "", role: "admin" };
   next();
 }
 
-/**
- * Middleware factory that restricts access to specific roles.
- * Must be used after `authenticate`.
- */
 export function authorize(...allowedRoles: string[]) {
   return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) {

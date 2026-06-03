@@ -68,7 +68,7 @@ export class GmailEmailProvider implements EmailProvider {
     }
 
     const results = await Promise.allSettled(
-      integrations.map(async (row) => {
+      integrations.map(async (row: any) => {
         const staffId = row.staff_id as string;
         const address = row.email as string;
 

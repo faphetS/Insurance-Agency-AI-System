@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+defaults:
+  run:
+    working-directory: Server
+
 jobs:
   lint-and-typecheck:
     runs-on: ubuntu-latest
@@ -15,27 +19,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: Server/package-lock.json
 
-      - name: Install root dependencies
+      - name: Install dependencies
         run: npm install
 
-      - name: Install Client dependencies
-        run: npm install -w Client
+      - name: Lint
+        run: npm run lint
 
-      - name: Install Server dependencies
-        run: npm install -w Server
-
-      - name: Lint Client
-        run: npm run lint -w Client
-
-      - name: Lint Server
-        run: npm run lint -w Server
-
-      - name: Typecheck Client
-        run: npm run typecheck -w Client
-
-      - name: Typecheck Server
-        run: npm run typecheck -w Server
+      - name: Typecheck
+        run: npm run typecheck
 
   test:
     runs-on: ubuntu-latest
@@ -46,21 +39,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: Server/package-lock.json
 
-      - name: Install root dependencies
+      - name: Install dependencies
         run: npm install
 
-      - name: Install Client dependencies
-        run: npm install -w Client
-
-      - name: Install Server dependencies
-        run: npm install -w Server
-
-      - name: Test Server
-        run: npm test -w Server
-
-      - name: Test Client
-        run: npm test -w Client
+      - name: Test
+        run: npm test
 
   build:
     runs-on: ubuntu-latest
@@ -71,18 +56,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: Server/package-lock.json
 
-      - name: Install root dependencies
+      - name: Install dependencies
         run: npm install
 
-      - name: Install Client dependencies
-        run: npm install -w Client
-
-      - name: Install Server dependencies
-        run: npm install -w Server
-
-      - name: Build Client
-        run: npm run build -w Client
-
-      - name: Build Server
-        run: npm run build -w Server
+      - name: Build
+        run: npm run build

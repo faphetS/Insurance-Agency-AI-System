@@ -137,7 +137,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       .not("client_id", "is", null)
       .lt("last_message_at", thresholdIso);
 
-    const candidateConvIds = (convRows ?? []).map((c) => c.id as string);
+    const candidateConvIds = (convRows ?? []).map((c: any) => c.id as string);
 
     const unansweredClientIds: string[] = [];
 
@@ -176,7 +176,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
     twoYearsAgo.setMonth(twoYearsAgo.getMonth() - 24);
     const twoYearsAgoIso = twoYearsAgo.toISOString();
 
-    const serviceDueClients = (clientRows ?? []).filter((c) => {
+    const serviceDueClients = (clientRows ?? []).filter((c: any) => {
       if ((c.status as string) !== "active") return false;
       const lsd = c.last_service_date as string | null;
       return !lsd || lsd <= twoYearsAgoIso;

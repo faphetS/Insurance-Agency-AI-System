@@ -40,6 +40,19 @@ export const completeTaskSchema = z.object({
   taskId: z.string().uuid(),
 });
 
+export const scanWhatsappSchema = z.object({
+  chatId: z.string().min(3),
+  thresholdHours: z.coerce.number().min(0).max(168).default(4),
+  count: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const scanWhatsappDaySchema = z.object({
+  fromHour: z.coerce.number().int().min(0).max(23).default(8),
+  tz: z.string().default("Asia/Jerusalem"),
+  thresholdHours: z.coerce.number().min(0).max(168).default(0),
+  windowMinutes: z.coerce.number().int().min(1).max(20160).optional(),
+});
+
 export type NotificationListInput = z.infer<typeof notificationListSchema>;
 export type NotificationIdInput = z.infer<typeof notificationIdSchema>;
 export type CompleteTaskInput = z.infer<typeof completeTaskSchema>;

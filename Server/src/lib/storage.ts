@@ -1,34 +1,17 @@
-import { supabaseAdmin } from "../config/supabase.js";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
 
 export const CLIENT_DOCS_BUCKET = "client-documents";
 
 export async function ensureClientDocumentsBucket(): Promise<boolean> {
   try {
-    const { error: getError } = await supabaseAdmin.storage.getBucket(CLIENT_DOCS_BUCKET);
-    if (!getError) return false;
-
-    const { error: createError } = await supabaseAdmin.storage.createBucket(CLIENT_DOCS_BUCKET, {
-      public: false,
-      fileSizeLimit: "15MB",
-      allowedMimeTypes: [
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-        "image/heic",
-        "image/heif",
-        "application/pdf",
-      ],
-    });
-
-    if (createError && !createError.message.toLowerCase().includes("already exists")) {
-      logger.warn({ err: createError }, "ensureClientDocumentsBucket: createBucket failed");
-      return false;
-    }
-
+    await fs.mkdir(path.join(env.STORAGE_DIR, CLIENT_DOCS_BUCKET), { recursive: true });
     return true;
   } catch (err) {
-    logger.warn({ err }, "ensureClientDocumentsBucket: unexpected error");
+    logger.warn({ err }, "ensureClientDocumentsBucket: mkdir failed");
     return false;
   }
 }
@@ -91,18 +74,11 @@ export async function persistRemoteFile(
       return null;
     }
 
-    const ct = contentType ?? res.headers.get("content-type") ?? "application/octet-stream";
+    const absPath = path.join(env.STORAGE_DIR, CLIENT_DOCS_BUCKET, destPath);
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.writeFile(absPath, buf);
 
-    const { data, error } = await supabaseAdmin.storage
-      .from(CLIENT_DOCS_BUCKET)
-      .upload(destPath, buf, { contentType: ct, upsert: true });
-
-    if (error) {
-      logger.warn({ err: error, destPath }, "persistRemoteFile: storage upload failed");
-      return null;
-    }
-
-    return data?.path ?? null;
+    return destPath;
   } catch (err) {
     logger.warn({ err, sourceUrl, destPath }, "persistRemoteFile: unexpected error");
     return null;
@@ -110,24 +86,26 @@ export async function persistRemoteFile(
 }
 
 export async function getSignedDocUrl(
-  path: string,
+  filePath: string,
   expiresInSec: number,
 ): Promise<string | null> {
-  if (/^https?:\/\//i.test(path)) return path;
+  if (/^https?:\/\//i.test(filePath)) return filePath;
 
   try {
-    const { data, error } = await supabaseAdmin.storage
-      .from(CLIENT_DOCS_BUCKET)
-      .createSignedUrl(path, expiresInSec);
+    const exp = Math.floor(Date.now() / 1000) + expiresInSec;
+    const sig = crypto
+      .createHmac("sha256", env.JWT_SECRET)
+      .update(`${filePath}.${exp}`)
+      .digest("hex");
 
-    if (error) {
-      logger.warn({ err: error, path }, "getSignedDocUrl: createSignedUrl failed");
-      return null;
-    }
+    const encodedPath = filePath
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
 
-    return data?.signedUrl ?? null;
+    return `${env.BACKEND_URL}/files/${encodedPath}?exp=${exp}&sig=${sig}`;
   } catch (err) {
-    logger.warn({ err, path }, "getSignedDocUrl: unexpected error");
+    logger.warn({ err, filePath }, "getSignedDocUrl: unexpected error");
     return null;
   }
 }

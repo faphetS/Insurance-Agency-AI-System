@@ -41,7 +41,7 @@ async function runPoll(): Promise<void> {
     .not("timeless_meeting_id", "is", null);
 
   const ingestedSet = new Set(
-    (alreadyIngested ?? []).map((r) => r.timeless_meeting_id as string),
+    (alreadyIngested ?? []).map((r: any) => r.timeless_meeting_id as string),
   );
 
   const toIngest = timelessIds.filter((id) => !ingestedSet.has(id));

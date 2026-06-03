@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../../config/supabase.js";
+import { pool } from "../../lib/db.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { getAuthenticatedClient } from "./calendar.auth.js";
@@ -45,32 +46,46 @@ async function matchEventToClient(event: calendar_v3.Schema$Event): Promise<Matc
   }
 
   // Tier 3: pending booking time-proximity
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: pendingMeetings } = await (supabaseAdmin as any)
-    .from("meetings")
-    .select("id, conversation_id, created_at, client_id, clients(id, full_name, email, pipeline_stage)")
-    .eq("status", "pending_booking")
-    .is("calendar_event_id", null);
+  const { rows: pendingMeetings } = await pool.query<{
+    id: string;
+    conversation_id: string | null;
+    created_at: string;
+    client_id: string;
+    c_id: string;
+    c_full_name: string;
+    c_email: string | null;
+    c_pipeline_stage: string | null;
+  }>(
+    `SELECT m.id, m.conversation_id, m.created_at, m.client_id,
+            c.id AS c_id, c.full_name AS c_full_name,
+            c.email AS c_email, c.pipeline_stage AS c_pipeline_stage
+     FROM meetings m
+     LEFT JOIN clients c ON c.id = m.client_id
+     WHERE m.status = $1
+       AND m.calendar_event_id IS NULL`,
+    ["pending_booking"],
+  );
 
-  if (!pendingMeetings || pendingMeetings.length === 0) return null;
+  if (pendingMeetings.length === 0) return null;
+
+  const toResult = (m: (typeof pendingMeetings)[0]): MatchResult => ({
+    client: { id: m.c_id, full_name: m.c_full_name, email: m.c_email, pipeline_stage: m.c_pipeline_stage },
+    tier: 3,
+    pendingMeeting: { id: m.id, conversation_id: m.conversation_id },
+  });
 
   if (pendingMeetings.length === 1) {
-    const m = pendingMeetings[0];
-    return { client: m.clients, tier: 3, pendingMeeting: { id: m.id, conversation_id: m.conversation_id } };
+    return toResult(pendingMeetings[0]!);
   }
 
   const eventCreated = event.created ? new Date(event.created).getTime() : Date.now();
-  const closest = pendingMeetings.reduce((best: (typeof pendingMeetings)[0], m: (typeof pendingMeetings)[0]) => {
+  const closest = pendingMeetings.reduce((best, m) => {
     const bestDiff = Math.abs(new Date(best.created_at).getTime() - eventCreated);
     const mDiff = Math.abs(new Date(m.created_at).getTime() - eventCreated);
     return mDiff < bestDiff ? m : best;
   });
 
-  return {
-    client: closest.clients,
-    tier: 3,
-    pendingMeeting: { id: closest.id, conversation_id: closest.conversation_id },
-  };
+  return toResult(closest);
 }
 
 function formatDateTime(iso: string): string {

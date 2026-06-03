@@ -29,7 +29,7 @@ export async function getServiceMeetingsSummary(): Promise<ServiceMeetingsSummar
     return { clients: [], dueCount: 0, upcomingCount: 0, bafiConnected: true, lastBafiSync: null };
   }
 
-  const clientIds = (data ?? []).map((r) => r.id as string);
+  const clientIds = (data ?? []).map((r: any) => r.id as string);
 
   // Fetch the latest meeting per client in a single query
   const summaryStatusMap = new Map<string, string | null>();
@@ -52,7 +52,7 @@ export async function getServiceMeetingsSummary(): Promise<ServiceMeetingsSummar
   let dueCount = 0;
   let upcomingCount = 0;
 
-  const clients: ServiceMeetingClient[] = (data ?? []).map((row) => {
+  const clients: ServiceMeetingClient[] = (data ?? []).map((row: any) => {
     const lastServiceDate = row.last_service_date as string | null;
 
     let monthsSinceService: number | null = null;

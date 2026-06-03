@@ -89,4 +89,27 @@ export const operationsController = {
     const data = await getServiceMeetings();
     res.json({ status: "success", data });
   },
+
+  async scanWhatsapp(req: Request, res: Response): Promise<void> {
+    const { chatId, thresholdHours, count } = req.body as {
+      chatId: string;
+      thresholdHours: number;
+      count: number;
+    };
+    const { scanChatForUnanswered } = await import("./operations.whatsapp-scan.js");
+    const result = await scanChatForUnanswered(chatId, { thresholdHours, count });
+    res.json({ status: "success", data: result });
+  },
+
+  async scanWhatsappDay(req: Request, res: Response): Promise<void> {
+    const { fromHour, tz, thresholdHours, windowMinutes } = req.body as {
+      fromHour: number;
+      tz: string;
+      thresholdHours: number;
+      windowMinutes?: number;
+    };
+    const { scanDayUnanswered } = await import("./operations.whatsapp-scan.js");
+    const result = await scanDayUnanswered({ fromHour, tz, thresholdHours, windowMinutes });
+    res.json({ status: "success", data: result });
+  },
 };

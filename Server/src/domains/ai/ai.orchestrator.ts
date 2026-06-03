@@ -73,8 +73,8 @@ export async function handleIncomingMessage(
   }
 
   const history: ChatTurn[] = (messages ?? [])
-    .filter((m) => m.body)
-    .map((m) => ({
+    .filter((m: any) => m.body)
+    .map((m: any) => ({
       role: m.direction === "inbound" ? "user" : "model",
       text: m.body as string,
     }));

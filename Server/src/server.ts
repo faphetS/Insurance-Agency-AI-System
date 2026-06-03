@@ -26,6 +26,7 @@ import { AppError, globalErrorHandler } from "./lib/errors.js";
 import { audit } from "./middleware/audit.js";
 import { requestId } from "./middleware/requestId.js";
 import apiRoutes from "./routes/index.js";
+import filesRouter from "./domains/files/files.routes.js";
 import rateLimit from "express-rate-limit";
 
 const app = express();
@@ -57,7 +58,7 @@ app.use(
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:", "https:"],
-        connectSrc: ["'self'", env.SUPABASE_URL],
+        connectSrc: ["'self'"],
       },
     },
     hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
@@ -105,6 +106,7 @@ app.get("/health", (_req: Request, res: Response) => {
 });
 
 app.use("/api", apiRoutes);
+app.use("/files", filesRouter);
 
 // --- 404 handler for unmatched routes ---
 app.use((_req: Request, _res: Response) => {

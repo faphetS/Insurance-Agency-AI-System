@@ -136,3 +136,52 @@ export async function sendInteractiveButtonsWithTyping(
   await new Promise((r) => setTimeout(r, typingMs));
   return sendInteractiveButtons(chatId, body, buttons, footer);
 }
+
+export interface GreenApiHistoryMessage {
+  type: "incoming" | "outgoing";
+  idMessage: string;
+  timestamp: number; // unix seconds
+  typeMessage: string;
+  chatId: string;
+  textMessage?: string;
+  senderId?: string;
+  senderName?: string;
+  senderContactName?: string;
+  statusMessage?: string;
+  sendByApi?: boolean;
+}
+
+// Journal query string must follow the token: .../{endpoint}/{token}?minutes=N
+async function journalGet(endpoint: string, minutes: number): Promise<GreenApiHistoryMessage[]> {
+  const url = `${base()}/${endpoint}/${token()}?minutes=${minutes}`;
+  const res = await fetch(url, { method: "GET" });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    logger.error({ status: res.status, endpoint, body: text }, "GreenAPI journal error");
+    throw new AppError(502, `GreenAPI ${endpoint} responded with ${res.status}: ${text}`, "GREENAPI_ERROR");
+  }
+  return (await res.json()) as GreenApiHistoryMessage[];
+}
+
+export async function lastIncomingMessages(minutes = 1440): Promise<GreenApiHistoryMessage[]> {
+  return journalGet("lastIncomingMessages", minutes);
+}
+
+export async function lastOutgoingMessages(minutes = 1440): Promise<GreenApiHistoryMessage[]> {
+  return journalGet("lastOutgoingMessages", minutes);
+}
+
+export async function getChatHistory(
+  chatId: string,
+  count = 20,
+): Promise<GreenApiHistoryMessage[]> {
+  return request<GreenApiHistoryMessage[]>("POST", "getChatHistory", { chatId, count });
+}
+
+export async function ensureHistorySettings(): Promise<void> {
+  await request<unknown>("POST", "setSettings", {
+    incomingWebhook: "yes",
+    outgoingMessageWebhook: "yes",
+    outgoingWebhook: "yes",
+  });
+}
