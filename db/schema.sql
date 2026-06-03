@@ -207,19 +207,22 @@ CREATE TABLE public.audit_logs (
 --    bot_paused_until added by 20260428160000.
 -- ============================================================
 CREATE TABLE public.conversations (
-  id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  whatsapp_chat_id  text        NOT NULL UNIQUE,
-  client_id         uuid        REFERENCES public.clients(id) ON DELETE SET NULL,
-  contact_name      text,
-  contact_phone     text,
-  last_message_at   timestamptz NOT NULL DEFAULT now(),
-  bot_paused        boolean     NOT NULL DEFAULT false,
-  status            text        NOT NULL DEFAULT 'active'
-                    CHECK (status IN ('active', 'closed')),
-  created_at        timestamptz NOT NULL DEFAULT now(),
+  id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  whatsapp_chat_id      text        NOT NULL UNIQUE,
+  client_id             uuid        REFERENCES public.clients(id) ON DELETE SET NULL,
+  contact_name          text,
+  contact_phone         text,
+  last_message_at       timestamptz NOT NULL DEFAULT now(),
+  bot_paused            boolean     NOT NULL DEFAULT false,
+  status                text        NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'closed')),
+  created_at            timestamptz NOT NULL DEFAULT now(),
 
   -- Added by 20260428160000_add_bot_paused_until
-  bot_paused_until  timestamptz
+  bot_paused_until      timestamptz,
+
+  -- Added for CLIX gateway: tags the connected WhatsApp line that received the message
+  whatsapp_instance_id  uuid        REFERENCES public.whatsapp_instances(id)
 );
 
 -- ============================================================
@@ -323,6 +326,8 @@ CREATE TABLE public.whatsapp_instances (
   green_api_instance_id text,
   green_api_token       text,
   green_api_url         text,
+  -- Added for CLIX gateway: identifies the connected line by CLIX customerId
+  gateway_customer_id   text        UNIQUE,
   is_active             boolean     NOT NULL DEFAULT true,
   is_connected          boolean     GENERATED ALWAYS AS (
                           green_api_instance_id IS NOT NULL
@@ -505,6 +510,11 @@ CREATE TRIGGER set_updated_at
 INSERT INTO public.bot_settings (id)
 VALUES (1)
 ON CONFLICT (id) DO NOTHING;
+
+-- CLIX bot line instance — placeholder phone, real customerId used for webhook routing
+INSERT INTO public.whatsapp_instances (label, phone_number, role, gateway_customer_id, is_active)
+VALUES ('CLIX bot line', '000000000', 'bot', 'didi-scan-bot', true)
+ON CONFLICT (gateway_customer_id) DO NOTHING;
 
 -- ============================================================
 -- VIEW: v_client_pipeline

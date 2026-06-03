@@ -11,6 +11,7 @@ import {
   outgoingMessageSchema,
   webhookPayloadSchema,
   extractPayload,
+  clixToInternal,
 } from "./whatsapp.validator.js";
 import { isStaffChat, extractButtonId } from "./whatsapp.util.js";
 import { wantsHuman, handleHumanEscalation } from "./whatsapp.escalation.js";
@@ -37,11 +38,51 @@ export const whatsappController = {
       return;
     }
 
-    // 2. Parse payload — on validation failure, still return 200 to stop retries
-    const looseResult = webhookPayloadSchema.safeParse(req.body);
+    // 2. Detect gateway format and normalise to a common body for downstream parsing.
+    //    GreenAPI payloads always carry `typeWebhook`; CLIX payloads carry `customerId`+`type`.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawBody = req.body as Record<string, any>;
+    let webhookBody: Record<string, unknown> = rawBody;
+    let clixInstanceId: string | null = null;
+
+    if (!rawBody.typeWebhook && rawBody.customerId && rawBody.type) {
+      // CLIX gateway path
+      const clixResult = clixToInternal(rawBody);
+      if (!clixResult) {
+        logger.warn({ body: rawBody }, "CLIX webhook failed normalisation — ignoring");
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      webhookBody = clixResult.payload;
+
+      // Resolve the whatsapp_instances row for this CLIX line
+      const { data: instanceRow, error: instanceErr } = await supabaseAdmin
+        .from("whatsapp_instances")
+        .select("id")
+        .eq("gateway_customer_id", clixResult.customerId)
+        .maybeSingle();
+
+      if (instanceErr) {
+        logger.warn(
+          { customerId: clixResult.customerId, instanceErr },
+          "CLIX instance lookup error — continuing without instanceId",
+        );
+      } else if (!instanceRow) {
+        logger.warn(
+          { customerId: clixResult.customerId },
+          "CLIX customerId not found in whatsapp_instances — continuing without instanceId",
+        );
+      } else {
+        clixInstanceId = instanceRow.id as string;
+      }
+    }
+
+    // Parse the (possibly normalised) payload — on failure still return 200
+    const looseResult = webhookPayloadSchema.safeParse(webhookBody);
     if (!looseResult.success) {
       logger.warn(
-        { body: req.body, errors: looseResult.error.errors },
+        { body: webhookBody, errors: looseResult.error.errors },
         "Webhook parse failed — ignoring",
       );
       res.status(200).json({ ok: true });
@@ -58,13 +99,13 @@ export const whatsappController = {
 
     // Handle manual messages sent from WhatsApp phone — set cooldown
     if (rawPayload.typeWebhook === "outgoingMessageReceived") {
-      const outboundResult = outgoingMessageSchema.safeParse(req.body);
+      const outboundResult = outgoingMessageSchema.safeParse(webhookBody);
       if (!outboundResult.success) {
         res.status(200).json({ ok: true });
         return;
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const outChatId = outboundResult.data.senderData?.chatId ?? (req.body as Record<string, any>)?.senderData?.chatId;
+      const outChatId = outboundResult.data.senderData?.chatId ?? (webhookBody as Record<string, any>)?.senderData?.chatId;
       if (!outChatId) {
         res.status(200).json({ ok: true });
         return;
@@ -72,7 +113,7 @@ export const whatsappController = {
 
       // Check if this outgoing message was sent by our bot — don't self-pause
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const idMessage = outboundResult.data.idMessage ?? (req.body as Record<string, any>)?.idMessage;
+      const idMessage = outboundResult.data.idMessage ?? (webhookBody as Record<string, any>)?.idMessage;
       if (idMessage) {
         const { data: existing } = await supabaseAdmin
           .from("messages")
@@ -106,7 +147,7 @@ export const whatsappController = {
     }
 
     // Narrow to the full inbound schema
-    const inboundResult = incomingMessageSchema.safeParse(req.body);
+    const inboundResult = incomingMessageSchema.safeParse(webhookBody);
     if (!inboundResult.success) {
       logger.warn(
         { errors: inboundResult.error.errors },
@@ -119,7 +160,7 @@ export const whatsappController = {
     const inbound = inboundResult.data;
 
     // Log raw messageData to diagnose button response structure
-    logger.info({ messageData: req.body.messageData }, "Incoming messageData (raw)");
+    logger.info({ messageData: webhookBody.messageData }, "Incoming messageData (raw)");
 
     const chatId = inbound.senderData.chatId;
 
@@ -133,7 +174,7 @@ export const whatsappController = {
     const idMessage = inbound.idMessage;
 
     // Extract normalised payload (text | image | document)
-    const payload = extractPayload(inbound, req.body as Record<string, unknown>);
+    const payload = extractPayload(inbound, webhookBody);
 
     // Derive the body to store in messages table
     const messageBody =
@@ -153,7 +194,7 @@ export const whatsappController = {
 
       setImmediate(async () => {
         try {
-          const buttonId = extractButtonId(req.body);
+          const buttonId = extractButtonId(webhookBody);
 
           const approveMatch = /^sum_approve:(.+)$/.exec(buttonId);
           const editMatch = /^sum_edit:(.+)$/.exec(buttonId);
@@ -214,17 +255,19 @@ export const whatsappController = {
     }
 
     // 3a. Upsert conversation by whatsapp_chat_id
+    const conversationUpsertData: Record<string, unknown> = {
+      whatsapp_chat_id: chatId,
+      contact_name: senderName,
+      contact_phone: contactPhone,
+      last_message_at: new Date().toISOString(),
+    };
+    if (clixInstanceId !== null) {
+      conversationUpsertData.whatsapp_instance_id = clixInstanceId;
+    }
+
     const { data: conversation, error: convErr } = await supabaseAdmin
       .from("conversations")
-      .upsert(
-        {
-          whatsapp_chat_id: chatId,
-          contact_name: senderName,
-          contact_phone: contactPhone,
-          last_message_at: new Date().toISOString(),
-        },
-        { onConflict: "whatsapp_chat_id", ignoreDuplicates: false },
-      )
+      .upsert(conversationUpsertData, { onConflict: "whatsapp_chat_id", ignoreDuplicates: false })
       .select("id")
       .single();
 
@@ -371,7 +414,7 @@ export const whatsappController = {
           return;
         }
 
-        const confirmMatch = /^client_confirm:(.+)$/.exec(extractButtonId(req.body));
+        const confirmMatch = /^client_confirm:(.+)$/.exec(extractButtonId(webhookBody));
         if (confirmMatch) {
           await handleClientConfirm(confirmMatch[1]!, chatId, conversationId);
           return;

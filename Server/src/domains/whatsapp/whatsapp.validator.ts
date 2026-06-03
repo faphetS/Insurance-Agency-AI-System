@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -204,3 +205,74 @@ export const sendMessageSchema = z.object({
 });
 
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+// ---------------------------------------------------------------------------
+// CLIX gateway — inbound webhook schema + normalisation adapter
+// ---------------------------------------------------------------------------
+
+export const clixWebhookSchema = z.object({
+  customerId: z.string(),
+  type: z.enum(["incoming", "outgoing"]),
+  chatType: z.string(),
+  from: z.string(),
+  pushName: z.string().optional(),
+  message: z.string().optional(),
+  messageType: z.string(),
+  timestamp: z.number(),
+});
+
+export type ClixWebhookPayload = z.infer<typeof clixWebhookSchema>;
+
+/**
+ * Normalise a CLIX webhook body into the GreenAPI shape the controller
+ * already processes, plus the originating customerId for instance resolution.
+ * Returns null if the payload fails validation (caller should return 200 quietly).
+ */
+export function clixToInternal(
+  body: unknown,
+): { payload: Record<string, unknown>; customerId: string } | null {
+  const parsed = clixWebhookSchema.safeParse(body);
+  if (!parsed.success) return null;
+
+  const { customerId, type, chatType, from, pushName, message, messageType, timestamp } =
+    parsed.data;
+
+  // Synthesise a stable dedupe id: clix:<customerId>:<from>:<timestamp>:<msgHash>
+  const msgHash = createHash("sha1")
+    .update(message ?? "")
+    .digest("hex")
+    .slice(0, 12);
+  const idMessage = `clix:${customerId}:${from}:${timestamp}:${msgHash}`;
+
+  // Non-private chats (groups) get @g.us suffix so the existing group filter drops them
+  const chatIdSuffix = chatType === "private" ? "@c.us" : "@g.us";
+  const chatId = `${from}${chatIdSuffix}`;
+
+  const typeWebhook =
+    type === "incoming" ? "incomingMessageReceived" : "outgoingMessageReceived";
+
+  // Build messageData in GreenAPI shape
+  const messageData: Record<string, unknown> =
+    messageType === "text"
+      ? {
+          typeMessage: "textMessage",
+          textMessageData: { textMessage: message ?? "" },
+        }
+      : {
+          typeMessage: `${messageType}Message`,
+          textMessageData: { textMessage: `[${messageType}]` },
+        };
+
+  const payload: Record<string, unknown> = {
+    typeWebhook,
+    idMessage,
+    senderData: {
+      chatId,
+      senderName: pushName ?? undefined,
+      sender: chatId,
+    },
+    messageData,
+  };
+
+  return { payload, customerId };
+}
