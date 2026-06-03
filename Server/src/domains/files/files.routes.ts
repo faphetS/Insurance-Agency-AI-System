@@ -28,8 +28,12 @@ function mimeForPath(filePath: string): string {
 
 // GET /files/* — serves a file from STORAGE_DIR/client-documents/
 // Auth is the HMAC signature in the query string (no JWT required).
-router.get("/*", async (req: Request, res: Response) => {
-  const rawRelPath = (req.params as Record<string, string>)[0] ?? "";
+// Express 5 requires a *named* wildcard ("/*splat"); the bare "/*" form is
+// rejected by path-to-regexp v8 at registration time.
+router.get("/*splat", async (req: Request, res: Response) => {
+  // Express 5 URL-decodes wildcard segments and exposes them as an array.
+  const splat = (req.params as Record<string, string | string[]>)["splat"];
+  const relPath = Array.isArray(splat) ? splat.join("/") : String(splat ?? "");
 
   const exp = req.query["exp"] as string | undefined;
   const sig = req.query["sig"] as string | undefined;
@@ -45,12 +49,6 @@ router.get("/*", async (req: Request, res: Response) => {
     res.status(401).json({ status: "error", code: "UNAUTHORIZED", message: "Link expired" });
     return;
   }
-
-  // Decode percent-encoded path components, then re-join
-  const relPath = rawRelPath
-    .split("/")
-    .map((segment) => decodeURIComponent(segment))
-    .join("/");
 
   // HMAC verification — constant-time compare
   const expected = crypto
