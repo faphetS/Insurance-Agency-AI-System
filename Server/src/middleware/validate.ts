@@ -16,11 +16,24 @@ export function validate(schemas: ValidationSchemas) {
     if (schemas.body) {
       req.body = schemas.body.parse(req.body);
     }
+    // In Express 5, req.params and req.query are getter-only — direct
+    // assignment throws "Cannot set property ... which has only a getter".
+    // Redefine them as data properties holding the validated/coerced values.
     if (schemas.params) {
-      req.params = schemas.params.parse(req.params);
+      Object.defineProperty(req, "params", {
+        value: schemas.params.parse(req.params),
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
     }
     if (schemas.query) {
-      req.query = schemas.query.parse(req.query);
+      Object.defineProperty(req, "query", {
+        value: schemas.query.parse(req.query),
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
     }
     next();
   };
