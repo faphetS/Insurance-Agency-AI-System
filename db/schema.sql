@@ -519,6 +519,12 @@ INSERT INTO public.whatsapp_instances (label, phone_number, role, gateway_custom
 VALUES ('CLIX bot line', '000000000', 'bot', 'didi-scan-bot', 'operational', true)
 ON CONFLICT (gateway_customer_id) DO NOTHING;
 
+-- Scanning bot = GreenAPI instance #2. Creds live in .env (GREENAPI_SCAN_*), NOT here.
+-- Once provisioned, on the VPS:
+--   UPDATE public.whatsapp_instances SET is_active=false WHERE gateway_customer_id='didi-scan-bot';
+--   INSERT INTO public.whatsapp_instances (label, phone_number, role, purpose, is_active)
+--   VALUES ('Scan line (GreenAPI #2)', '<scan phone>', 'bot', 'operational', true);
+
 -- ============================================================
 -- VIEW: v_client_pipeline
 -- Final form from 20260415160458_intake_in_pipeline_view.sql.

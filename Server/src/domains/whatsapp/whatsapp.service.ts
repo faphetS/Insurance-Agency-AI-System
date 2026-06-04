@@ -2,17 +2,28 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { AppError } from "../../lib/errors.js";
 
-const base = () =>
-  `${env.GREENAPI_BASE_URL}/waInstance${env.GREENAPI_ID_INSTANCE}`;
-const token = () => env.GREENAPI_API_TOKEN;
+export interface GreenApiCreds {
+  idInstance: string;
+  token: string;
+  baseUrl: string;
+}
 
-async function request<T>(
+export function scanCreds(): GreenApiCreds | null {
+  const id = env.GREENAPI_SCAN_ID_INSTANCE;
+  const tok = env.GREENAPI_SCAN_API_TOKEN;
+  const url = env.GREENAPI_SCAN_BASE_URL;
+  if (!id || !tok || !url) return null;
+  return { idInstance: id, token: tok, baseUrl: url };
+}
+
+async function requestWith<T>(
+  creds: GreenApiCreds,
   method: string,
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const url = `${base()}/${path}/${token()}`;
-  const redactedUrl = url.replace(token(), "***");
+  const url = `${creds.baseUrl}/waInstance${creds.idInstance}/${path}/${creds.token}`;
+  const redactedUrl = url.replace(creds.token, "***");
   logger.debug({ method, url: redactedUrl }, "GreenAPI request");
 
   const res = await fetch(url, {
@@ -32,8 +43,24 @@ async function request<T>(
   }
 
   const data = (await res.json()) as T;
-  logger.debug({ url, data }, "GreenAPI response");
+  logger.debug({ url: redactedUrl, data }, "GreenAPI response");
   return data;
+}
+
+function envCreds(): GreenApiCreds {
+  return {
+    idInstance: env.GREENAPI_ID_INSTANCE,
+    token: env.GREENAPI_API_TOKEN,
+    baseUrl: env.GREENAPI_BASE_URL,
+  };
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  return requestWith<T>(envCreds(), method, path, body);
 }
 
 export async function sendMessage(
@@ -152,15 +179,20 @@ export interface GreenApiHistoryMessage {
 }
 
 // Journal query string must follow the token: .../{endpoint}/{token}?minutes=N
-async function journalGet(endpoint: string, minutes: number): Promise<GreenApiHistoryMessage[]> {
-  const url = `${base()}/${endpoint}/${token()}?minutes=${minutes}`;
+async function journalGetWith(creds: GreenApiCreds, endpoint: string, minutes: number): Promise<GreenApiHistoryMessage[]> {
+  const url = `${creds.baseUrl}/waInstance${creds.idInstance}/${endpoint}/${creds.token}?minutes=${minutes}`;
+  const redactedUrl = url.replace(creds.token, "***");
   const res = await fetch(url, { method: "GET" });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    logger.error({ status: res.status, endpoint, body: text }, "GreenAPI journal error");
+    logger.error({ status: res.status, url: redactedUrl, endpoint, body: text }, "GreenAPI journal error");
     throw new AppError(502, `GreenAPI ${endpoint} responded with ${res.status}: ${text}`, "GREENAPI_ERROR");
   }
   return (await res.json()) as GreenApiHistoryMessage[];
+}
+
+async function journalGet(endpoint: string, minutes: number): Promise<GreenApiHistoryMessage[]> {
+  return journalGetWith(envCreds(), endpoint, minutes);
 }
 
 export async function lastIncomingMessages(minutes = 1440): Promise<GreenApiHistoryMessage[]> {
@@ -176,6 +208,22 @@ export async function getChatHistory(
   count = 20,
 ): Promise<GreenApiHistoryMessage[]> {
   return request<GreenApiHistoryMessage[]>("POST", "getChatHistory", { chatId, count });
+}
+
+export async function getChatHistoryWith(
+  creds: GreenApiCreds,
+  chatId: string,
+  count = 20,
+): Promise<GreenApiHistoryMessage[]> {
+  return requestWith<GreenApiHistoryMessage[]>(creds, "POST", "getChatHistory", { chatId, count });
+}
+
+export async function lastIncomingMessagesWith(creds: GreenApiCreds, minutes = 1440): Promise<GreenApiHistoryMessage[]> {
+  return journalGetWith(creds, "lastIncomingMessages", minutes);
+}
+
+export async function lastOutgoingMessagesWith(creds: GreenApiCreds, minutes = 1440): Promise<GreenApiHistoryMessage[]> {
+  return journalGetWith(creds, "lastOutgoingMessages", minutes);
 }
 
 export async function ensureHistorySettings(): Promise<void> {

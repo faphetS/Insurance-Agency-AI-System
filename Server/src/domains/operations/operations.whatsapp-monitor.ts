@@ -1,6 +1,8 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+import { scanCreds } from "../whatsapp/whatsapp.service.js";
+import { scanDayUnanswered } from "./operations.whatsapp-scan.js";
 
 export const WHATSAPP_NUMBERS = [
   { phone: "0559762838", label: "Health, Pension & Finance Dept", displayNumber: "055-976-2838" },
@@ -49,6 +51,7 @@ interface WhatsappInstance {
   label: string;
   phone_number: string;
   role: "bot" | "staff";
+  purpose: "conversational" | "operational";
   staff_id: string | null;
   green_api_instance_id: string | null;
   green_api_token: string | null;
@@ -60,15 +63,22 @@ interface WhatsappInstance {
   last_error: string | null;
 }
 
-// TODO: Implement real GreenAPI chat history polling.
-// Endpoint: GET https://${green_api_url}/waInstance${green_api_instance_id}/getChatHistory/${green_api_token}
-// Returns array of messages; count those where fromMe=false and timestamp > threshold.
-async function greenApiUnansweredCount(instance: WhatsappInstance): Promise<number> {
-  logger.info(
-    { instanceId: instance.green_api_instance_id, label: instance.label },
-    "greenApiUnansweredCount: GreenAPI calls not implemented yet — returning 0",
-  );
-  return 0;
+let _scanNotConfiguredLogged = false;
+
+async function greenApiUnansweredCount(_instance: WhatsappInstance): Promise<number> {
+  const creds = scanCreds();
+  if (!creds) {
+    if (!_scanNotConfiguredLogged) {
+      logger.info("greenApiUnansweredCount: scan instance not configured — returning 0");
+      _scanNotConfiguredLogged = true;
+    }
+    return 0;
+  }
+  const result = await scanDayUnanswered(creds, {
+    windowMinutes: 24 * 60,
+    thresholdHours: 4,
+  });
+  return result.unansweredCount;
 }
 
 async function botUnansweredCount(): Promise<number> {
@@ -140,17 +150,22 @@ export class GreenApiWhatsappMonitor implements WhatsappMonitor {
           unansweredCount: 0,
         };
 
-        if (!instance.is_connected) {
+        // Operational lines are "connected" when the scan creds are present in .env,
+        // not when the DB row has green_api_instance_id filled (it doesn't need to be).
+        const isConnected =
+          instance.purpose === "operational" ? scanCreds() !== null : instance.is_connected;
+
+        if (!isConnected) {
           return base;
         }
 
         try {
           let unansweredCount = 0;
 
-          if (instance.role === "bot") {
-            unansweredCount = await botUnansweredCount();
-          } else {
+          if (instance.purpose === "operational") {
             unansweredCount = await greenApiUnansweredCount(instance);
+          } else {
+            unansweredCount = await botUnansweredCount();
           }
 
           await supabaseAdmin
@@ -162,7 +177,7 @@ export class GreenApiWhatsappMonitor implements WhatsappMonitor {
             })
             .eq("id", instance.id);
 
-          return { ...base, connected: true, unansweredCount };
+          return { ...base, connected: isConnected, unansweredCount };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logger.error({ err, instanceId: instance.id }, "GreenApiWhatsappMonitor: per-instance error");

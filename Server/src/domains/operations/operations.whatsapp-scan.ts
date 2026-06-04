@@ -1,7 +1,8 @@
 import {
-  getChatHistory,
-  lastIncomingMessages,
-  lastOutgoingMessages,
+  getChatHistoryWith,
+  lastIncomingMessagesWith,
+  lastOutgoingMessagesWith,
+  type GreenApiCreds,
   type GreenApiHistoryMessage,
 } from "../whatsapp/whatsapp.service.js";
 import { logger } from "../../config/logger.js";
@@ -39,6 +40,7 @@ export interface ScanResult {
 }
 
 export async function scanChatForUnanswered(
+  creds: GreenApiCreds,
   input: string,
   opts?: { thresholdHours?: number; count?: number },
 ): Promise<ScanResult> {
@@ -47,7 +49,7 @@ export async function scanChatForUnanswered(
   const thresholdHours = opts?.thresholdHours ?? 4;
   const count = opts?.count ?? 20;
 
-  const history = await getChatHistory(chatId, count);
+  const history = await getChatHistoryWith(creds, chatId, count);
 
   if (history.length === 0) {
     const result: ScanResult = {
@@ -144,12 +146,15 @@ function dayWindow(fromHour: number, tz: string, now = new Date()) {
   return { start, end };
 }
 
-export async function scanDayUnanswered(opts?: {
-  fromHour?: number;
-  tz?: string;
-  thresholdHours?: number;
-  windowMinutes?: number;
-}): Promise<DayScanResult> {
+export async function scanDayUnanswered(
+  creds: GreenApiCreds,
+  opts?: {
+    fromHour?: number;
+    tz?: string;
+    thresholdHours?: number;
+    windowMinutes?: number;
+  },
+): Promise<DayScanResult> {
   const fromHour = opts?.fromHour ?? 8;
   const tz = opts?.tz ?? "Asia/Jerusalem";
   const thresholdHours = opts?.thresholdHours ?? 0;
@@ -164,7 +169,7 @@ export async function scanDayUnanswered(opts?: {
   }
 
   const minutes = Math.ceil((Date.now() - start.getTime()) / 60_000) + 2;
-  const [inc, out] = await Promise.all([lastIncomingMessages(minutes), lastOutgoingMessages(minutes)]);
+  const [inc, out] = await Promise.all([lastIncomingMessagesWith(creds, minutes), lastOutgoingMessagesWith(creds, minutes)]);
 
   const startMs = start.getTime();
   const endMs = end.getTime();

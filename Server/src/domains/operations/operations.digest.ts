@@ -4,7 +4,7 @@ import { logger } from "../../config/logger.js";
 import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
-import { getDashboard, getEmailMonitoring } from "./operations.service.js";
+import { getDashboard, getEmailMonitoring, getWhatsappMonitoring } from "./operations.service.js";
 
 const UNANSWERED_HOURS = 4;
 
@@ -332,6 +332,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
 
     let dashboard: Awaited<ReturnType<typeof getDashboard>>;
     let emailPending = 0;
+    let waUnansweredScan = 0;
     try {
       dashboard = await getDashboard();
     } catch (err) {
@@ -350,6 +351,13 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       emailPending = emailResult.totalPending ?? 0;
     } catch (err) {
       logger.warn({ err }, "runDailyDigest: getEmailMonitoring failed — using 0");
+    }
+
+    try {
+      const waSummary = await getWhatsappMonitoring();
+      waUnansweredScan = waSummary.totalUnanswered ?? 0;
+    } catch (err) {
+      logger.warn({ err }, "runDailyDigest: getWhatsappMonitoring failed — using 0");
     }
 
     const totalUnanswered = unansweredClientIds.length;
@@ -374,7 +382,8 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       `משימות באיחור: ${dashboard.overdue_tasks}`,
       `סיכומים ממתינים לאישור: ${dashboard.pending_summary_approvals}`,
       `חריגות SLA: ${dashboard.sla_breaches}`,
-      `פניות ללא מענה: ${totalUnanswered}`,
+      `פניות ללא מענה (בוט): ${totalUnanswered}`,
+      `פניות ללא מענה (וואצאפ – סריקה): ${waUnansweredScan}`,
       `אימיילים ממתינים: ${emailPending}`,
       `לקוחות לפגישת שירות: ${totalServiceDue}`,
       "",

@@ -214,6 +214,16 @@ const server = app.listen(env.PORT, () => {
         logger.error({ err }, "operations: checkServiceMeetingEligibility failed"),
       );
     }, 24 * 60 * 60 * 1000);
+
+    // WhatsApp monitoring scan — every 20 minutes (refreshes last_unanswered_count on instances)
+    setInterval(() => {
+      import("./domains/operations/operations.service.js")
+        .then(({ getWhatsappMonitoring }) => getWhatsappMonitoring())
+        .then((summary) => logger.info({ summary }, "whatsapp-monitor: scheduled scan complete"))
+        .catch((err: unknown) =>
+          logger.error({ err }, "whatsapp-monitor: scheduled scan failed"),
+        );
+    }, 20 * 60 * 1000);
   } else {
     logger.info("Skipping operations/booking/reminder schedulers — BACKEND_URL not public");
   }

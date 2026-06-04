@@ -39,11 +39,16 @@ const envSchema = z.object({
     .default("http://localhost:5173")
     .transform((val) => val.split(",").map((s) => s.trim())),
 
-  // GreenAPI (WhatsApp gateway)
+  // GreenAPI (WhatsApp gateway) — instance #1: conversational bot
   GREENAPI_ID_INSTANCE: z.string().min(1),
   GREENAPI_API_TOKEN: z.string().min(1),
   GREENAPI_BASE_URL: z.string().url(),
   GREENAPI_WEBHOOK_TOKEN: z.string().min(16),
+
+  // GreenAPI instance #2: scanning / operational bot (leave blank until provisioned)
+  GREENAPI_SCAN_ID_INSTANCE: z.string().optional(),
+  GREENAPI_SCAN_API_TOKEN: z.string().optional(),
+  GREENAPI_SCAN_BASE_URL: z.string().optional(),
 
   // OpenRouter AI
   OPENROUTER_API_KEY: z.string().min(1),
