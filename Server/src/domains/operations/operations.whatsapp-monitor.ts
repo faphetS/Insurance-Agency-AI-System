@@ -76,7 +76,7 @@ async function greenApiUnansweredCount(_instance: WhatsappInstance): Promise<num
   }
   const result = await scanDayUnanswered(creds, {
     windowMinutes: 24 * 60,
-    thresholdHours: 4,
+    thresholdHours: env.GREENAPI_SCAN_UNANSWERED_HOURS,
   });
   return result.unansweredCount;
 }
@@ -223,6 +223,6 @@ export const whatsappMonitor: WhatsappMonitor =
 export async function greenApiUnansweredThreads(): Promise<DayScanThread[]> {
   const creds = scanCreds();
   if (!creds) return [];
-  const r = await scanDayUnanswered(creds, { windowMinutes: 24 * 60, thresholdHours: 4 });
+  const r = await scanDayUnanswered(creds, { windowMinutes: 24 * 60, thresholdHours: env.GREENAPI_SCAN_UNANSWERED_HOURS });
   return r.unanswered;
 }

@@ -49,6 +49,7 @@ const envSchema = z.object({
   GREENAPI_SCAN_ID_INSTANCE: z.string().optional(),
   GREENAPI_SCAN_API_TOKEN: z.string().optional(),
   GREENAPI_SCAN_BASE_URL: z.string().optional(),
+  GREENAPI_SCAN_UNANSWERED_HOURS: z.coerce.number().min(0).default(4),
 
   // OpenRouter AI
   OPENROUTER_API_KEY: z.string().min(1),

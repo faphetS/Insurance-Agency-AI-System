@@ -60,24 +60,30 @@ export const whatsappController = {
       // Resolve the whatsapp_instances row for this CLIX line
       const { data: instanceRow, error: instanceErr } = await supabaseAdmin
         .from("whatsapp_instances")
-        .select("id, purpose")
+        .select("id, purpose, is_active")
         .eq("gateway_customer_id", clixResult.customerId)
         .maybeSingle();
 
       if (instanceErr) {
         logger.warn(
           { customerId: clixResult.customerId, instanceErr },
-          "CLIX instance lookup error — continuing without instanceId",
+          "CLIX instance lookup error — ignoring message",
         );
-      } else if (!instanceRow) {
-        logger.warn(
-          { customerId: clixResult.customerId },
-          "CLIX customerId not found in whatsapp_instances — continuing without instanceId",
-        );
-      } else {
-        clixInstanceId = instanceRow.id as string;
-        isOperational = (instanceRow as { id: string; purpose: string }).purpose === "operational";
+        res.status(200).json({ ok: true });
+        return;
       }
+
+      if (!instanceRow || !(instanceRow as { id: string; purpose: string; is_active: boolean }).is_active) {
+        logger.info(
+          { customerId: clixResult.customerId },
+          "CLIX gateway inactive/unknown — ignoring message",
+        );
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      clixInstanceId = instanceRow.id as string;
+      isOperational = (instanceRow as { id: string; purpose: string; is_active: boolean }).purpose === "operational";
     }
 
     // Parse the (possibly normalised) payload — on failure still return 200

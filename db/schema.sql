@@ -521,7 +521,7 @@ ON CONFLICT (id) DO NOTHING;
 
 -- CLIX bot line instance — placeholder phone, real customerId used for webhook routing
 INSERT INTO public.whatsapp_instances (label, phone_number, role, gateway_customer_id, purpose, is_active)
-VALUES ('CLIX bot line', '000000000', 'bot', 'didi-scan-bot', 'operational', true)
+VALUES ('CLIX bot line', '000000000', 'bot', 'didi-scan-bot', 'operational', false)
 ON CONFLICT (gateway_customer_id) DO NOTHING;
 
 -- Scanning bot = GreenAPI instance #2. Creds live in .env (GREENAPI_SCAN_*), NOT here.
