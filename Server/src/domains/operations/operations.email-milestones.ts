@@ -4,10 +4,9 @@ import { classifyMailbox } from "../integrations/gmail/gmail.milestones.js";
 import type { MilestoneHit } from "../integrations/gmail/gmail.milestones.js";
 import type { BafiCheckResult, BafiProvider } from "./operations.types.js";
 
-// Correlation uses client email (constrained Gmail search) and a persisted
-// policy number (exact LLM-extracted match) in addition to fuzzy name matching.
-// ID-number matching is deferred — ctx.id_number will be undefined until the
-// clients table gains that column; the tier is guarded and ready.
+// Correlation uses client email (constrained Gmail search), a persisted
+// policy number, and the Israeli national ID number (when captured during
+// intake OCR) for definitive-tier email-to-client matching.
 
 interface ClientContext {
   clientId: string;
@@ -15,17 +14,20 @@ interface ClientContext {
   mailboxStaffId: string;
   email: string | null;
   policy_number: string | null;
-  // id_number is intentionally absent from the clients table today.
-  // Add it here and to the SELECT when the column is introduced.
-  id_number?: string | null;
+  id_number: string | null;
 }
 
-type MatchLevel = "definitive" | "strong" | "weak" | "none";
+export type MatchLevel = "definitive" | "strong" | "weak" | "none";
+
+export interface ClientEmailMatch {
+  hit: MilestoneHit;
+  level: MatchLevel;
+}
 
 async function loadClientContext(clientId: string): Promise<ClientContext | null> {
   const { data: client } = await supabaseAdmin
     .from("clients")
-    .select("full_name, email, policy_number, assigned_handler_id, assigned_to")
+    .select("full_name, email, policy_number, id_number, assigned_handler_id, assigned_to")
     .eq("id", clientId)
     .maybeSingle();
 
@@ -51,6 +53,7 @@ async function loadClientContext(clientId: string): Promise<ClientContext | null
         mailboxStaffId: preferred.staff_id as string,
         email: (client.email as string | null) ?? null,
         policy_number: (client.policy_number as string | null) ?? null,
+        id_number: (client.id_number as string | null) ?? null,
       };
     }
   }
@@ -72,6 +75,7 @@ async function loadClientContext(clientId: string): Promise<ClientContext | null
     mailboxStaffId: fallback.staff_id as string,
     email: (client.email as string | null) ?? null,
     policy_number: (client.policy_number as string | null) ?? null,
+    id_number: (client.id_number as string | null) ?? null,
   };
 }
 
@@ -230,4 +234,47 @@ export class EmailMilestoneProvider implements BafiProvider {
       return [];
     }
   }
+}
+
+/**
+ * Scan a single client's mailbox for actionable insurer emails.
+ * Uses the same correlation internals as scanForClient (milestone path) but
+ * returns {hit, level}[] and targets a recent 14-day window suitable for the
+ * daily digest. Does NOT write tasks or persist policy numbers.
+ */
+export async function scanClientEmails(
+  clientId: string,
+  opts?: { q?: string; maxResults?: number },
+): Promise<ClientEmailMatch[] | null> {
+  const ctx = await loadClientContext(clientId);
+  if (!ctx) return null;
+
+  let q: string;
+  if (opts?.q) {
+    q = opts.q;
+  } else if (ctx.policy_number) {
+    q = `"${ctx.policy_number}" newer_than:14d`;
+  } else if (ctx.email) {
+    q = `("${ctx.clientFullName}" OR ${ctx.email}) newer_than:14d`;
+  } else {
+    q = `"${ctx.clientFullName}" newer_than:14d`;
+  }
+
+  let hits: MilestoneHit[];
+  try {
+    hits = await classifyMailbox(ctx.mailboxStaffId, { q, maxResults: opts?.maxResults ?? 10 });
+  } catch (err) {
+    logger.error({ clientId, err }, "scanClientEmails: classifyMailbox failed");
+    return [];
+  }
+
+  const results: ClientEmailMatch[] = [];
+
+  for (const hit of hits) {
+    const level = resolveMatchLevel(hit, ctx);
+    if (level === "none") continue;
+    results.push({ hit, level });
+  }
+
+  return results;
 }

@@ -12,6 +12,8 @@ export interface MilestoneHit {
   idNumber: string | null;
   policyNumber: string | null;
   evidence: string | null;
+  needsAction: boolean;
+  actionSummary: string | null;
 }
 
 export async function classifyMailbox(
@@ -41,6 +43,8 @@ export async function classifyMailbox(
         idNumber: result.idNumber,
         policyNumber: result.policyNumber,
         evidence: result.evidence,
+        needsAction: result.needsAction,
+        actionSummary: result.actionSummary,
       };
     }),
   );

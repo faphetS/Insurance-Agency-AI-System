@@ -1,12 +1,14 @@
 import cron from "node-cron";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
+import { env } from "../../config/env.js";
 import { sendStaffMessage } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
 import { getDashboard, getEmailMonitoring } from "./operations.service.js";
 import { greenApiUnansweredThreads } from "./operations.whatsapp-monitor.js";
 import { type DayScanThread } from "./operations.whatsapp-scan.js";
+import { scanClientEmails } from "./operations.email-milestones.js";
 
 const UNANSWERED_HOURS = 4;
 
@@ -47,6 +49,7 @@ interface AgentBucket {
   pendingSummaries: string[];
   serviceDue: string[];
   waUnanswered: { name: string; hoursSince: number }[];
+  actionableEmails: { clientName: string; actionSummary: string }[];
 }
 
 export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> {
@@ -205,7 +208,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
     function getBucket(staffId: string): AgentBucket {
       let b = buckets.get(staffId);
       if (!b) {
-        b = { overdueTasks: [], unanswered: [], pendingSummaries: [], serviceDue: [], waUnanswered: [] };
+        b = { overdueTasks: [], unanswered: [], pendingSummaries: [], serviceDue: [], waUnanswered: [], actionableEmails: [] };
         buckets.set(staffId, b);
       }
       return b;
@@ -259,6 +262,57 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       }
     }
 
+    // 3g. Actionable insurer emails — per active client, recent 14d window.
+    // Guard: skip entirely when email integration is stubbed.
+    let actionableEmailCount = 0;
+    if (env.EMAIL_PROVIDER !== "stub") {
+      try {
+        const activeClients = (clientRows ?? []).filter(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (c: any) => (c.status as string) === "active",
+        );
+
+        const BATCH = 5;
+        for (let i = 0; i < activeClients.length; i += BATCH) {
+          const batch = activeClients.slice(i, i + BATCH);
+          await Promise.all(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            batch.map(async (c: any) => {
+              const clientId = c.id as string;
+              const staffId = agentOf(clientId);
+              if (!staffId || !staffMap.has(staffId)) return;
+
+              try {
+                const matches = await scanClientEmails(clientId);
+                if (!matches) return;
+
+                let clientHitCount = 0;
+                for (const { hit, level } of matches) {
+                  if (clientHitCount >= 3) break;
+                  if (
+                    (level === "definitive" || level === "strong") &&
+                    hit.needsAction &&
+                    hit.actionSummary
+                  ) {
+                    getBucket(staffId).actionableEmails.push({
+                      clientName: c.full_name as string,
+                      actionSummary: hit.actionSummary,
+                    });
+                    actionableEmailCount++;
+                    clientHitCount++;
+                  }
+                }
+              } catch (err) {
+                logger.warn({ clientId, err }, "runDailyDigest: scanClientEmails failed for client — skipping");
+              }
+            }),
+          );
+        }
+      } catch (err) {
+        logger.error({ err }, "runDailyDigest: actionable email scan phase failed — skipping");
+      }
+    }
+
     // 5. Send per-agent digests
     const sentChatIds = new Set<string>();
 
@@ -269,7 +323,8 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         (bucket?.unanswered.length ?? 0) +
         (bucket?.pendingSummaries.length ?? 0) +
         (bucket?.serviceDue.length ?? 0) +
-        (bucket?.waUnanswered.length ?? 0);
+        (bucket?.waUnanswered.length ?? 0) +
+        (bucket?.actionableEmails.length ?? 0);
 
       if (totalItems === 0) {
         logger.info({ staffId }, "runDailyDigest: no items for agent — skipping");
@@ -303,6 +358,14 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         lines.push(`📱 וואצאפ – לקוחות ללא מענה (${bucket.waUnanswered.length}):`);
         for (const item of bucket.waUnanswered) {
           lines.push(`- ${item.name} (לפני ${Math.round(item.hoursSince)} שע׳)`);
+        }
+        lines.push("");
+      }
+
+      if (bucket && bucket.actionableEmails.length > 0) {
+        lines.push(`📧 מיילים לטיפול (${bucket.actionableEmails.length}):`);
+        for (const e of bucket.actionableEmails) {
+          lines.push(`- ${e.clientName}: ${e.actionSummary}`);
         }
         lines.push("");
       }
@@ -406,7 +469,8 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         (bucket?.unanswered.length ?? 0) +
         (bucket?.pendingSummaries.length ?? 0) +
         (bucket?.serviceDue.length ?? 0) +
-        (bucket?.waUnanswered.length ?? 0);
+        (bucket?.waUnanswered.length ?? 0) +
+        (bucket?.actionableEmails.length ?? 0);
       agentBreakdown.push({ name: entry.fullName, count });
     }
     agentBreakdown.sort((a, b) => b.count - a.count);
@@ -420,6 +484,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       `פניות ללא מענה (בוט): ${totalUnanswered}`,
       `פניות ללא מענה (וואצאפ – סריקה): ${waUnansweredScan}`,
       `אימיילים ממתינים: ${emailPending}`,
+      `מיילים לטיפול (לקוחות): ${actionableEmailCount}`,
       `לקוחות לפגישת שירות: ${totalServiceDue}`,
       "",
       "לפי סוכן:",

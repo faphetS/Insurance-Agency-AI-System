@@ -95,7 +95,11 @@ CREATE TABLE public.clients (
   -- Added for email milestone matching: persisted when the LLM extracts a
   -- policy number from a milestone email with definitive/strong confidence.
   -- Allows subsequent scans to short-circuit by policy # instead of name.
-  policy_number        text
+  policy_number        text,
+
+  -- Israeli national ID (תעודת זהות), auto-captured by OCR during intake.
+  -- Enables definitive email-to-client matching without relying on name alone.
+  id_number            text
 );
 
 -- ============================================================

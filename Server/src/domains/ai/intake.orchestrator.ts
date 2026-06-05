@@ -12,7 +12,7 @@ import {
   type InquiryType,
   type IntakeSlot,
 } from "./intake.prompts.js";
-import { analyzeImage, classifyComplexity, classifyIntakeResponse } from "./ai.service.js";
+import { validateIdPhoto, classifyComplexity, classifyIntakeResponse } from "./ai.service.js";
 import { createNotification } from "../operations/operations.service.js";
 import { persistRemoteFile, extFor } from "../../lib/storage.js";
 
@@ -27,6 +27,7 @@ interface ClientIntakeUpdate {
   inquiry_type?: string;
   id_photo_url?: string;
   id_validated?: boolean;
+  id_number?: string | null;
   poa_doc_url?: string;
   intake_state?: string;
   intake_current_slot?: string;
@@ -389,29 +390,11 @@ async function handleIdPhoto(
     return;
   }
 
-  // OCR validation first — only persist on success (don't store rejected IDs)
+  // Combined OCR pass: validate the ID photo AND extract the ID number in one call.
+  const imageUrl = payload.fileUrl;
+  let ocrResult: Awaited<ReturnType<typeof validateIdPhoto>> | undefined;
   try {
-    const ocrResult = await analyzeImage(
-      payload.fileUrl,
-      'Is this a government-issued ID document (passport, driver\'s license, national ID card, etc.)? Only check that the image shows an ID document and is readable. Do NOT judge authenticity or check expiration dates. Respond ONLY with JSON: {"valid": true, "reason": "<short explanation IN HEBREW>"} or {"valid": false, "reason": "<short explanation IN HEBREW>"}. The "reason" value MUST be in Hebrew with gender-neutral phrasing (use infinitives like לשלוח, impersonal forms like נדרש, avoid אתה/את).',
-    );
-
-    const cleaned = ocrResult.replace(/```json\n?|\n?```/g, "").trim();
-    const parsed = JSON.parse(cleaned) as { valid: boolean; reason: string };
-
-    if (!parsed.valid) {
-      const rePrompt = INTAKE_PROMPTS.id_photo_invalid.text.replace(
-        "{reason}",
-        parsed.reason,
-      );
-      try {
-        const { idMessage } = await sendMessageWithTyping(chatId, rePrompt);
-        await persistOutbound(conversationId, rePrompt, idMessage);
-      } catch (sendErr) {
-        logger.error({ sendErr }, "intake: failed to send OCR rejection");
-      }
-      return;
-    }
+    ocrResult = await validateIdPhoto(imageUrl);
   } catch (err) {
     logger.warn({ err }, "intake: OCR validation failed — requesting resend");
     const retryText = "לא ניתן לקרוא את התמונה, נא לשלוח מחדש תמונה ברורה של תעודת הזהות.";
@@ -423,6 +406,24 @@ async function handleIdPhoto(
     }
     return;
   }
+
+  if (!ocrResult) return;
+
+  if (!ocrResult.valid) {
+    const rePrompt = INTAKE_PROMPTS.id_photo_invalid.text.replace(
+      "{reason}",
+      ocrResult.reason,
+    );
+    try {
+      const { idMessage } = await sendMessageWithTyping(chatId, rePrompt);
+      await persistOutbound(conversationId, rePrompt, idMessage);
+    } catch (sendErr) {
+      logger.error({ sendErr }, "intake: failed to send OCR rejection");
+    }
+    return;
+  }
+
+  const extractedIdNumber = ocrResult.idNumber;
 
   const ref = await persistIntakeFile(clientId, "id_photo", payload);
 
@@ -445,7 +446,16 @@ async function handleIdPhoto(
     mime_type: payload.mimeType ?? null,
   });
 
-  await updateClient(clientId, { id_photo_url: ref, id_validated: true });
+  const photoUpdate: ClientIntakeUpdate = { id_photo_url: ref, id_validated: true };
+  if (extractedIdNumber) {
+    photoUpdate.id_number = extractedIdNumber;
+    logger.info({ clientId, idNumber: extractedIdNumber }, "intake: ID number extracted and will be persisted");
+  }
+  await updateClient(clientId, photoUpdate);
+
+  // Best-effort: if id_number was extracted but the combined update failed silently
+  // (updateClient swallows errors), there is nothing more to do — intake is not blocked.
+
   await advanceTo(conversationId, chatId, clientId, "poa");
 }
 

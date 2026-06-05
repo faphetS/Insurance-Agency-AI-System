@@ -206,6 +206,8 @@ export interface EmailMilestoneResult {
   idNumber: string | null;
   policyNumber: string | null;
   evidence: string | null;
+  needsAction: boolean;
+  actionSummary: string | null;
 }
 
 const EMAIL_MILESTONE_NULL: EmailMilestoneResult = {
@@ -214,6 +216,8 @@ const EMAIL_MILESTONE_NULL: EmailMilestoneResult = {
   idNumber: null,
   policyNumber: null,
   evidence: null,
+  needsAction: false,
+  actionSummary: null,
 };
 
 /**
@@ -266,8 +270,12 @@ Additionally, extract (if present in the email):
 - policyNumber: policy or fund number (מספר פוליסה / מספר קרן)
 - evidence: a short verbatim quote (≤120 chars) from the email body that is the strongest proof of your classification — null if milestone is "none"
 
+Actionability (independent of milestone classification — a non-milestone email can still need action):
+- needsAction: true when the email is an insurer/insurance email about a client that REQUIRES the agent to DO something — for example: חסר טופס, נדרשת השלמה, נדחתה הבקשה, ממתין לתשובתך, נדרש חתימה, or any explicit deadline. false for informational emails, automated confirmations, status notices, marketing, or non-insurance correspondence.
+- actionSummary: a short Hebrew phrase (≤80 chars) describing what the agent needs to do — null when needsAction is false.
+
 Respond ONLY with valid JSON, no markdown, no commentary:
-{"milestone":"<value>","clientName":<string|null>,"idNumber":<string|null>,"policyNumber":<string|null>,"evidence":<string|null>}`;
+{"milestone":"<value>","clientName":<string|null>,"idNumber":<string|null>,"policyNumber":<string|null>,"evidence":<string|null>,"needsAction":<bool>,"actionSummary":<string|null>}`;
 
   try {
     const userMessage = `Direction: ${input.direction}\nSubject: ${input.subject}\n\n${input.bodyText.slice(0, 3000)}`;
@@ -298,7 +306,7 @@ Respond ONLY with valid JSON, no markdown, no commentary:
     }
 
     const cleaned = raw.replace(/```json\n?|\n?```/g, "").trim();
-    const parsed = JSON.parse(cleaned) as Partial<EmailMilestoneResult>;
+    const parsed = JSON.parse(cleaned) as Partial<EmailMilestoneResult> & { needsAction?: unknown; actionSummary?: unknown };
 
     const validMilestones = ["forms_sent", "receipt_confirmed", "policy_issued", "deposit_made", "none"] as const;
     const milestone = validMilestones.includes(parsed.milestone as (typeof validMilestones)[number])
@@ -311,10 +319,51 @@ Respond ONLY with valid JSON, no markdown, no commentary:
       idNumber: parsed.idNumber ?? null,
       policyNumber: parsed.policyNumber ?? null,
       evidence: parsed.evidence ?? null,
+      needsAction: parsed.needsAction === true,
+      actionSummary: typeof parsed.actionSummary === "string" ? parsed.actionSummary.slice(0, 80) : null,
     };
   } catch (err) {
     logger.warn({ err, subject: input.subject }, "classifyEmailMilestone: failed — returning none");
     return EMAIL_MILESTONE_NULL;
+  }
+}
+
+const ID_NUMBER_RE = /^\d{8,9}$/;
+
+/**
+ * Single vision pass that both validates the ID photo AND extracts the
+ * Israeli national ID number (תעודת זהות). Returns validity + idNumber so
+ * the caller does not need a second LLM call.
+ */
+export async function validateIdPhoto(imageUrl: string): Promise<{
+  valid: boolean;
+  reason: string;
+  idNumber: string | null;
+}> {
+  const prompt =
+    'Is this a government-issued ID document (passport, driver\'s license, national ID card, etc.)? ' +
+    'Only check that the image shows an ID document and is readable. ' +
+    'Do NOT judge authenticity or check expiration dates. ' +
+    'Also extract the 9-digit Israeli national ID number (תעודת זהות / ת"ז) if visible — it is a sequence of exactly 8 or 9 digits. ' +
+    'Respond ONLY with JSON: ' +
+    '{"valid": true, "reason": "<short explanation IN HEBREW>", "idNumber": "<9-digit number or null>"} ' +
+    'or {"valid": false, "reason": "<short explanation IN HEBREW>", "idNumber": null}. ' +
+    'The "reason" value MUST be in Hebrew with gender-neutral phrasing (use infinitives like לשלוח, impersonal forms like נדרש, avoid אתה/את). ' +
+    '"idNumber" must be the raw digit string only, no spaces or dashes, or null if not found/readable.';
+
+  const raw = await analyzeImage(imageUrl, prompt);
+  try {
+    const cleaned = raw.replace(/```json\n?|\n?```/g, "").trim();
+    const parsed = JSON.parse(cleaned) as { valid?: boolean; reason?: string; idNumber?: string | null };
+    const rawId = typeof parsed.idNumber === "string" ? parsed.idNumber.replace(/\D/g, "") : null;
+    const idNumber = rawId && ID_NUMBER_RE.test(rawId) ? rawId : null;
+    return {
+      valid: parsed.valid === true,
+      reason: typeof parsed.reason === "string" ? parsed.reason : "",
+      idNumber,
+    };
+  } catch {
+    return { valid: false, reason: "שגיאה בעיבוד תשובת המודל", idNumber: null };
   }
 }
 
