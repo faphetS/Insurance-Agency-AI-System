@@ -44,8 +44,8 @@ async function sendReminder(
 
   const text =
     flag === "reminder_24h_sent"
-      ? `תזכורת: קיימת פגישה מתוזמנת ל-${formatDateTime(scheduledAt)}. נשמח להיפגש!`
-      : `תזכורת: הפגישה תתקיים בעוד כשעה (${formatTime(scheduledAt)}). נא להיות מוכנים.`;
+      ? `Reminder: you have a meeting scheduled for ${formatDateTime(scheduledAt)}. We look forward to seeing you!`
+      : `Reminder: your meeting begins in about an hour (${formatTime(scheduledAt)}). Please be ready.`;
 
   const { idMessage } = await sendMessageWithTyping(conv.whatsapp_chat_id, text);
 

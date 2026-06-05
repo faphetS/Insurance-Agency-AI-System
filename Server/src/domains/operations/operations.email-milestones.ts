@@ -239,7 +239,7 @@ export class EmailMilestoneProvider implements BafiProvider {
 /**
  * Scan a single client's mailbox for actionable insurer emails.
  * Uses the same correlation internals as scanForClient (milestone path) but
- * returns {hit, level}[] and targets a recent 14-day window suitable for the
+ * returns {hit, level}[] and targets a recent 24-hour window suitable for the
  * daily digest. Does NOT write tasks or persist policy numbers.
  */
 export async function scanClientEmails(
@@ -253,11 +253,11 @@ export async function scanClientEmails(
   if (opts?.q) {
     q = opts.q;
   } else if (ctx.policy_number) {
-    q = `"${ctx.policy_number}" newer_than:14d`;
+    q = `"${ctx.policy_number}" newer_than:1d`;
   } else if (ctx.email) {
-    q = `("${ctx.clientFullName}" OR ${ctx.email}) newer_than:14d`;
+    q = `("${ctx.clientFullName}" OR ${ctx.email}) newer_than:1d`;
   } else {
-    q = `"${ctx.clientFullName}" newer_than:14d`;
+    q = `"${ctx.clientFullName}" newer_than:1d`;
   }
 
   let hits: MilestoneHit[];

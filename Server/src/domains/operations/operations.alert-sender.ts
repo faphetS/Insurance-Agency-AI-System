@@ -35,7 +35,7 @@ export async function sendOverdueAlert(task: {
     }
 
     const label = TASK_LABELS_HE[task.type] ?? task.type;
-    const body = `🔴 משימה באיחור: "${label}" עבור ${client.full_name as string} — נא לטפל.`;
+    const body = `🔴 Overdue task: "${label}" for ${client.full_name as string} — please action.`;
 
     await sendStaffMessage(chatId, body);
     logger.info({ taskId: task.id, staffId: task.assigned_to }, "sendOverdueAlert: sent");
@@ -72,7 +72,7 @@ export async function sendServiceDueInvite(client: {
     }
 
     const name = client.full_name ?? client.id;
-    const body = `📅 פגישת שירות דו-שנתית: הלקוח ${name} זכאי/ת לפגישת שירות. כדאי לקבוע מועד.`;
+    const body = `📅 Biennial service meeting: client ${name} is due for a service meeting. Please schedule a date.`;
 
     await sendStaffMessage(chatId, body);
     logger.info({ clientId: client.id, staffId }, "sendServiceDueInvite: sent");
@@ -115,8 +115,8 @@ export async function sendSlaAlert(client: {
     }
 
     const name = client.full_name ?? client.id;
-    const stage = client.derived_stage ?? "לא ידוע";
-    const body = `🚨 חריגת SLA: הלקוח ${name} תקוע בשלב "${stage}" מעבר לזמן. נא לטפל.`;
+    const stage = client.derived_stage ?? "unknown";
+    const body = `🚨 SLA breach: client ${name} is stuck at stage "${stage}" past the deadline. Please action.`;
 
     await sendStaffMessage(chatId, body);
     logger.info({ clientId: client.id, staffId }, "sendSlaAlert: sent");

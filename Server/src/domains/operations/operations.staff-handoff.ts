@@ -70,37 +70,37 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
         ? tasks
             .map((t: any, i: number) => {
               const label = TASK_LABELS_HE[t.type] ?? t.type;
-              return `${i + 1}. ${label} — עד ${formatDueDate(t.due_at)}`;
+              return `${i + 1}. ${label} — by ${formatDueDate(t.due_at)}`;
             })
             .join("\n")
-        : "(אין משימות)";
+        : "(no tasks)";
 
     const complexityLine =
       (client as unknown as { complexity?: string | null }).complexity === "complex"
-        ? ["⚠️ תיק מורכב", ""]
+        ? ["⚠️ Complex case", ""]
         : [];
 
     const body = [
-      "📥 תיק חדש להמשך טיפול",
+      "📥 New Client File – Action Required",
       ...complexityLine,
       "",
-      "👤 פרטי לקוח",
-      `שם: ${client.full_name}`,
-      `טלפון: ${client.phone}`,
-      `ת.ז.: ${client.id_number ?? "—"}`,
-      `תאריך לידה: ${client.date_of_birth ?? "—"}`,
-      `סוג פנייה: ${client.inquiry_type}`,
-      `קופת חולים: ${client.health_fund ?? "—"}`,
-      `מספר תיק Bafi: ${client.bafi_file_number ?? "—"}`,
-      `כתובת: ${client.address ?? "—"}`,
-      `מקום עבודה: ${client.workplace ?? "—"}`,
-      `ייפוי כוח חתום: ${client.poa_signed ? "כן" : "לא"}`,
+      "👤 Client Details",
+      `Name: ${client.full_name}`,
+      `Phone: ${client.phone}`,
+      `ID: ${client.id_number ?? "—"}`,
+      `Date of birth: ${client.date_of_birth ?? "—"}`,
+      `Inquiry type: ${client.inquiry_type}`,
+      `Health fund: ${client.health_fund ?? "—"}`,
+      `Bafi file number: ${client.bafi_file_number ?? "—"}`,
+      `Address: ${client.address ?? "—"}`,
+      `Workplace: ${client.workplace ?? "—"}`,
+      `POA signed: ${client.poa_signed ? "Yes" : "No"}`,
       "",
-      "📎 מסמכים",
-      `צילום ת.ז.: ${idUrl ?? "לא זמין במערכת"}`,
-      `ייפוי כוח: ${poaUrl ?? "לא זמין במערכת"}`,
+      "📎 Documents",
+      `ID photo: ${idUrl ?? "not available in system"}`,
+      `POA: ${poaUrl ?? "not available in system"}`,
       "",
-      "📋 משימות מעקב",
+      "📋 Follow-up Tasks",
       taskLines,
     ].join("\n");
 

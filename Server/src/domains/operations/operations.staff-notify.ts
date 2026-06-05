@@ -85,25 +85,25 @@ export async function notifyStaffSummaryReady(meetingId: string): Promise<void> 
       ? trimmed.length > 600
         ? trimmed.slice(0, 600).trimEnd() + "…"
         : trimmed
-      : "(לא נוצרה טיוטת סיכום)";
+      : "(no summary draft generated)";
 
     let body = [
-      "📝 סיכום פגישה מוכן לאישור",
+      "📝 Meeting Summary Ready for Approval",
       "",
-      `לקוח: ${client.full_name as string}`,
-      `מועד הפגישה: ${formatMeetingDate(meeting.scheduled_at as string)}`,
+      `Client: ${client.full_name as string}`,
+      `Meeting date: ${formatMeetingDate(meeting.scheduled_at as string)}`,
       "",
-      "טיוטת סיכום:",
+      "Summary draft:",
       preview,
     ].join("\n");
 
     if (meeting.recording_url) {
-      body += `\n\nהקלטה: ${meeting.recording_url as string}`;
+      body += `\n\nRecording: ${meeting.recording_url as string}`;
     }
 
     const buttons = [
-      { buttonId: `sum_approve:${meetingId}`, buttonText: "✅ אישור" },
-      { buttonId: `sum_edit:${meetingId}`, buttonText: "✏️ עריכה" },
+      { buttonId: `sum_approve:${meetingId}`, buttonText: "✅ Approve" },
+      { buttonId: `sum_edit:${meetingId}`, buttonText: "✏️ Edit" },
     ];
 
     await sendStaffButtons(chatId, body, buttons, "");

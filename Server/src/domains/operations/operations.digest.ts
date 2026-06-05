@@ -336,18 +336,18 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         continue;
       }
 
-      const lines: string[] = ["🗒️ סיכום יומי – משימות פתוחות", ""];
+      const lines: string[] = ["🗒️ Daily Digest – Open Tasks", ""];
 
       if (bucket && bucket.overdueTasks.length > 0) {
-        lines.push(`⏰ משימות באיחור (${bucket.overdueTasks.length}):`);
+        lines.push(`⏰ Overdue Tasks (${bucket.overdueTasks.length}):`);
         for (const t of bucket.overdueTasks) {
-          lines.push(`- ${t.clientName}: ${t.label} (יעד: ${t.due})`);
+          lines.push(`- ${t.clientName}: ${t.label} (due: ${t.due})`);
         }
         lines.push("");
       }
 
       if (bucket && bucket.unanswered.length > 0) {
-        lines.push(`💬 פניות ללא מענה (${bucket.unanswered.length}):`);
+        lines.push(`💬 Unanswered Bot Conversations (${bucket.unanswered.length}):`);
         for (const name of bucket.unanswered) {
           lines.push(`- ${name}`);
         }
@@ -355,15 +355,15 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       }
 
       if (bucket && bucket.waUnanswered.length > 0) {
-        lines.push(`📱 וואצאפ – לקוחות ללא מענה (${bucket.waUnanswered.length}):`);
+        lines.push(`📱 WhatsApp – Clients Without a Reply (${bucket.waUnanswered.length}):`);
         for (const item of bucket.waUnanswered) {
-          lines.push(`- ${item.name} (לפני ${Math.round(item.hoursSince)} שע׳)`);
+          lines.push(`- ${item.name} (${Math.round(item.hoursSince)}h ago)`);
         }
         lines.push("");
       }
 
       if (bucket && bucket.actionableEmails.length > 0) {
-        lines.push(`📧 מיילים לטיפול (${bucket.actionableEmails.length}):`);
+        lines.push(`📧 Emails Requiring Action (${bucket.actionableEmails.length}):`);
         for (const e of bucket.actionableEmails) {
           lines.push(`- ${e.clientName}: ${e.actionSummary}`);
         }
@@ -371,7 +371,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       }
 
       if (bucket && bucket.pendingSummaries.length > 0) {
-        lines.push(`📝 סיכומים לאישור (${bucket.pendingSummaries.length}):`);
+        lines.push(`📝 Summaries Pending Approval (${bucket.pendingSummaries.length}):`);
         for (const name of bucket.pendingSummaries) {
           lines.push(`- ${name}`);
         }
@@ -379,7 +379,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       }
 
       if (bucket && bucket.serviceDue.length > 0) {
-        lines.push(`📅 לקוחות לפגישת שירות (${bucket.serviceDue.length}):`);
+        lines.push(`📅 Clients Due for Service Meeting (${bucket.serviceDue.length}):`);
         for (const name of bucket.serviceDue) {
           lines.push(`- ${name}`);
         }
@@ -476,19 +476,19 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
     agentBreakdown.sort((a, b) => b.count - a.count);
 
     const ownerLines: string[] = [
-      "📊 סיכום יומי – סקירת סוכנות",
+      "📊 Daily Digest – Agency Overview",
       "",
-      `משימות באיחור: ${dashboard.overdue_tasks}`,
-      `סיכומים ממתינים לאישור: ${dashboard.pending_summary_approvals}`,
-      `חריגות SLA: ${dashboard.sla_breaches}`,
-      `פניות ללא מענה (בוט): ${totalUnanswered}`,
-      `פניות ללא מענה (וואצאפ – סריקה): ${waUnansweredScan}`,
-      `אימיילים ממתינים: ${emailPending}`,
-      `מיילים לטיפול (לקוחות): ${actionableEmailCount}`,
-      `לקוחות לפגישת שירות: ${totalServiceDue}`,
+      `Overdue tasks: ${dashboard.overdue_tasks}`,
+      `Summaries pending approval: ${dashboard.pending_summary_approvals}`,
+      `SLA breaches: ${dashboard.sla_breaches}`,
+      `Unanswered conversations (bot): ${totalUnanswered}`,
+      `Unanswered conversations (WhatsApp scan): ${waUnansweredScan}`,
+      `Pending emails: ${emailPending}`,
+      `Emails requiring action (clients): ${actionableEmailCount}`,
+      `Clients due for service meeting: ${totalServiceDue}`,
       "",
-      "לפי סוכן:",
-      ...agentBreakdown.map((a) => `- ${a.name}: ${a.count} פריטים`),
+      "By agent:",
+      ...agentBreakdown.map((a) => `- ${a.name}: ${a.count} items`),
     ];
 
     const ownerBody = ownerLines.join("\n");
