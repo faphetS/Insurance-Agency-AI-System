@@ -2,7 +2,7 @@ import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
 import { classifyMailbox } from "../integrations/gmail/gmail.milestones.js";
 import type { MilestoneHit } from "../integrations/gmail/gmail.milestones.js";
-import type { BafiCheckResult, BafiProvider } from "./operations.types.js";
+import type { MilestoneCheckResult, MilestoneProvider } from "./operations.types.js";
 
 // Correlation uses client email (constrained Gmail search), a persisted
 // policy number, and the Israeli national ID number (when captured during
@@ -177,32 +177,32 @@ async function scanForClient(clientId: string): Promise<MilestoneHit[] | null> {
   return matched;
 }
 
-export class EmailMilestoneProvider implements BafiProvider {
-  async checkForms(clientId: string): Promise<BafiCheckResult> {
+export class EmailMilestoneProvider implements MilestoneProvider {
+  async checkForms(clientId: string): Promise<MilestoneCheckResult> {
     const hits = await scanForClient(clientId);
     if (hits === null) return { found: false };
     return { found: hits.some((h) => h.milestone === "forms_sent") };
   }
 
-  async checkReceipt(clientId: string): Promise<BafiCheckResult> {
+  async checkReceipt(clientId: string): Promise<MilestoneCheckResult> {
     const hits = await scanForClient(clientId);
     if (hits === null) return { found: false };
     return { found: hits.some((h) => h.milestone === "receipt_confirmed") };
   }
 
-  async checkPolicy(clientId: string): Promise<BafiCheckResult> {
+  async checkPolicy(clientId: string): Promise<MilestoneCheckResult> {
     const hits = await scanForClient(clientId);
     if (hits === null) return { found: false };
     return { found: hits.some((h) => h.milestone === "policy_issued") };
   }
 
-  async checkDeposit(clientId: string): Promise<BafiCheckResult> {
+  async checkDeposit(clientId: string): Promise<MilestoneCheckResult> {
     const hits = await scanForClient(clientId);
     if (hits === null) return { found: false };
     return { found: hits.some((h) => h.milestone === "deposit_made") };
   }
 
-  async crossCheck(clientId: string): Promise<BafiCheckResult> {
+  async crossCheck(clientId: string): Promise<MilestoneCheckResult> {
     const hits = await scanForClient(clientId);
     if (hits === null) return { found: false };
 
@@ -235,6 +235,8 @@ export class EmailMilestoneProvider implements BafiProvider {
     }
   }
 }
+
+export const milestoneProvider: MilestoneProvider = new EmailMilestoneProvider();
 
 /**
  * Scan a single client's mailbox for actionable insurer emails.

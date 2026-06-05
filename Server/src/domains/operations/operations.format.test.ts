@@ -19,7 +19,7 @@ describe("TASK_LABELS_HE", () => {
   });
 
   it("maps cross_check to Hebrew label", () => {
-    expect(TASK_LABELS_HE["cross_check"]).toBe("הצלבת מסמכים מול Bafi");
+    expect(TASK_LABELS_HE["cross_check"]).toBe("הצלבת מסמכים");
   });
 
   it("returns undefined for unknown keys", () => {

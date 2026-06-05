@@ -48,7 +48,7 @@ export const TASK_CHAIN_DEFINITION: TaskChainStep[] = [
   { type: "receipt_check", delayDays: 14, description: "Check if receipt was issued" },
   { type: "policy_check", delayDays: 30, description: "Check if policy document is ready" },
   { type: "deposit_check", delayDays: 60, description: "Check if deposit was received" },
-  { type: "cross_check", delayDays: 90, description: "Cross-verify all documents against Bafi records" },
+  { type: "cross_check", delayDays: 90, description: "Cross-verify all documents against email milestone records" },
 ];
 
 export const PIPELINE_STAGE_MAP: Record<TaskType, PipelineStage> = {
@@ -62,17 +62,17 @@ export const PIPELINE_STAGE_MAP: Record<TaskType, PipelineStage> = {
   general: "docs_pending",
 };
 
-export interface BafiCheckResult {
+export interface MilestoneCheckResult {
   found: boolean;
   details?: Record<string, unknown>;
 }
 
-export interface BafiProvider {
-  checkForms(clientId: string): Promise<BafiCheckResult>;
-  checkReceipt(clientId: string): Promise<BafiCheckResult>;
-  checkPolicy(clientId: string): Promise<BafiCheckResult>;
-  checkDeposit(clientId: string): Promise<BafiCheckResult>;
-  crossCheck(clientId: string): Promise<BafiCheckResult>;
+export interface MilestoneProvider {
+  checkForms(clientId: string): Promise<MilestoneCheckResult>;
+  checkReceipt(clientId: string): Promise<MilestoneCheckResult>;
+  checkPolicy(clientId: string): Promise<MilestoneCheckResult>;
+  checkDeposit(clientId: string): Promise<MilestoneCheckResult>;
+  crossCheck(clientId: string): Promise<MilestoneCheckResult>;
   getStaffList(): Promise<Array<{ id: string; name: string; phone?: string }>>;
 }
 

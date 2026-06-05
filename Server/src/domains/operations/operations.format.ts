@@ -3,7 +3,7 @@ export const TASK_LABELS_HE: Record<string, string> = {
   receipt_check: "בדיקת קבלה",
   policy_check: "בדיקת פוליסה",
   deposit_check: "בדיקת הפקדה",
-  cross_check: "הצלבת מסמכים מול Bafi",
+  cross_check: "הצלבת מסמכים",
 };
 
 export function formatDueDate(iso: string): string {

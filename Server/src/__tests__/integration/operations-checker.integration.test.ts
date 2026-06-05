@@ -2,7 +2,7 @@
  * Integration test: operations.checker — checkDueAndOverdueTasks
  *
  * Seeds tasks with due_at in the past and future.
- * Mocks all external I/O (WhatsApp sends, BAFI stubs, AI cross-check, storage).
+ * Mocks all external I/O (WhatsApp sends, milestone stubs, AI cross-check, storage).
  * Asserts:
  *   - Tasks with due_at in the future are NOT processed (no reminder, no status change)
  *   - Past-due task (not yet overdue by >3 days): reminder_sent flips to true,
@@ -10,7 +10,7 @@
  *   - Past-due task (>3 days overdue): status changes to 'overdue',
  *     a notification with reference_key `overdue:<taskId>` is created,
  *     sendOverdueAlert fires (sendMessageWithTyping called for staff)
- *   - BAFI checkForms returns { found: false } (stub) so tasks are NOT completed
+ *   - milestoneProvider.checkForms returns { found: false } so tasks are NOT completed
  *   - checkSummaryApprovals: notifyStaffSummaryReady fires for draft meetings
  *   - checkServiceMeetingEligibility: service_due notification created for eligible client
  *

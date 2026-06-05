@@ -1,7 +1,7 @@
 // Advisory AI cross-check: compares the meeting summary text against what
-// BAFI actually recorded (forms / receipt / policy / deposit presence).
+// the milestone provider recorded (forms / receipt / policy / deposit presence).
 // The output is a human-readable Hebrew assessment for the assigned agent —
-// it is NOT authoritative; the existence-based pass/fail in bafiProvider.crossCheck
+// it is NOT authoritative; the existence-based pass/fail in milestoneProvider.crossCheck
 // remains the machine gate. This module only produces the advisory artifact.
 //
 // Assumptions:
@@ -80,14 +80,14 @@ async function askAiForAssessment(
     `הפקדה: ${flags.deposit ? "נמצאה ✅" : "לא נמצאה ❌"}`,
   ].join("\n");
 
-  const systemPrompt = `אתה עוזר לסוכן ביטוח ישראלי. תפקידך להשוות בין סיכום הפגישה לבין מה שנמצא בפועל במערכת Bafi.
+  const systemPrompt = `אתה עוזר לסוכן ביטוח ישראלי. תפקידך להשוות בין סיכום הפגישה לבין מה שנמצא בפועל במערכת.
 כתוב הערכה קצרה בעברית (עד 5 משפטים) שמציינת:
 1. האם מה שהובטח בפגישה מתאים למה שנמצא בפועל.
 2. אם יש אי-התאמות — ציין אותן בבירור.
 3. אם הכל תואם — ציין זאת בקצרה.
 ההערכה היא לעיון האנושי בלבד ואינה החלטה אוטומטית.`;
 
-  const userMessage = `סיכום הפגישה:\n${summaryText}\n\nתוצאות בדיקת Bafi:\n${checkLines}`;
+  const userMessage = `סיכום הפגישה:\n${summaryText}\n\nתוצאות בדיקת אבני דרך:\n${checkLines}`;
 
   try {
     const assessment = await generateReply(
@@ -104,7 +104,7 @@ async function askAiForAssessment(
 
 /**
  * Produces an advisory Hebrew assessment of whether the meeting summary matches
- * BAFI execution, then surfaces it via notification + WhatsApp to the assigned agent.
+ * milestone execution, then surfaces it via notification + WhatsApp to the assigned agent.
  * Never throws — all errors are logged and swallowed so the caller continues.
  */
 export async function buildCrossCheckAssessment(
@@ -122,11 +122,11 @@ export async function buildCrossCheckAssessment(
     const assessment = await askAiForAssessment(summaryText, flags);
     if (!assessment) return;
 
-    const notifBody = `הצלבת מסמכים (Bafi) — הערכת AI:\n\n${assessment}`;
+    const notifBody = `הצלבת מסמכים — הערכת AI:\n\n${assessment}`;
 
     const newRow = await createNotification({
       type: "cross_check",
-      title: "הצלבת מסמכים Bafi — הערכת AI",
+      title: "הצלבת מסמכים — הערכת AI",
       message: notifBody,
       severity: "warning",
       client_id: clientId,
@@ -147,7 +147,7 @@ export async function buildCrossCheckAssessment(
     }
 
     const waBody = [
-      "🔍 הצלבת מסמכים Bafi — הערכת AI לעיונך:",
+      "🔍 הצלבת מסמכים — הערכת AI לעיונך:",
       "",
       assessment,
     ].join("\n");

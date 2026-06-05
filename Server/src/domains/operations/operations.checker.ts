@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { bafiProvider } from "./operations.bafi.js";
+import { milestoneProvider } from "./operations.email-milestones.js";
 import { createNotification, completeTask } from "./operations.service.js";
 import { notifyStaffSummaryReady } from "./operations.staff-notify.js";
 import { notifyStaffTaskOverdue } from "./operations.staff-reminder.js";
@@ -30,20 +30,20 @@ export async function checkDueAndOverdueTasks(): Promise<void> {
       let result;
       switch (taskType) {
         case "forms_check":
-          result = await bafiProvider.checkForms(clientId);
+          result = await milestoneProvider.checkForms(clientId);
           break;
         case "receipt_check":
-          result = await bafiProvider.checkReceipt(clientId);
+          result = await milestoneProvider.checkReceipt(clientId);
           break;
         case "policy_check":
-          result = await bafiProvider.checkPolicy(clientId);
+          result = await milestoneProvider.checkPolicy(clientId);
           break;
         case "deposit_check":
-          result = await bafiProvider.checkDeposit(clientId);
+          result = await milestoneProvider.checkDeposit(clientId);
           break;
         case "cross_check": {
-          result = await bafiProvider.crossCheck(clientId);
-          // Advisory AI artifact — compare summary text vs BAFI execution.
+          result = await milestoneProvider.crossCheck(clientId);
+          // Advisory AI artifact — compare summary text vs milestone execution.
           // Degrades gracefully: no summary or AI failure is a silent no-op.
           const flags = {
             forms: !!(result.details?.["forms"] as boolean | undefined),

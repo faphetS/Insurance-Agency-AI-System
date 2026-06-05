@@ -28,7 +28,7 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
     const { data: client } = await supabaseAdmin
       .from("clients")
       .select(
-        "full_name, phone, id_number, date_of_birth, inquiry_type, health_fund, poa_signed, address, workplace, bafi_file_number, id_photo_url, poa_doc_url, assigned_to, assigned_handler_id, complexity",
+        "full_name, phone, id_number, date_of_birth, inquiry_type, health_fund, poa_signed, address, workplace, id_photo_url, poa_doc_url, assigned_to, assigned_handler_id, complexity",
       )
       .eq("id", meeting.client_id)
       .maybeSingle();
@@ -91,7 +91,6 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
       `Date of birth: ${client.date_of_birth ?? "—"}`,
       `Inquiry type: ${client.inquiry_type}`,
       `Health fund: ${client.health_fund ?? "—"}`,
-      `Bafi file number: ${client.bafi_file_number ?? "—"}`,
       `Address: ${client.address ?? "—"}`,
       `Workplace: ${client.workplace ?? "—"}`,
       `POA signed: ${client.poa_signed ? "Yes" : "No"}`,

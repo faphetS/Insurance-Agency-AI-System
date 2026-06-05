@@ -14,8 +14,8 @@ export interface ServiceMeetingsSummary {
   clients: ServiceMeetingClient[];
   dueCount: number;
   upcomingCount: number;
-  bafiConnected: boolean;
-  lastBafiSync: null;
+  milestoneConnected: boolean;
+  lastMilestoneSync: null;
 }
 
 export async function getServiceMeetingsSummary(): Promise<ServiceMeetingsSummary> {
@@ -26,7 +26,7 @@ export async function getServiceMeetingsSummary(): Promise<ServiceMeetingsSummar
 
   if (error) {
     logger.error({ error }, "getServiceMeetingsSummary: query failed");
-    return { clients: [], dueCount: 0, upcomingCount: 0, bafiConnected: true, lastBafiSync: null };
+    return { clients: [], dueCount: 0, upcomingCount: 0, milestoneConnected: true, lastMilestoneSync: null };
   }
 
   const clientIds = (data ?? []).map((r: any) => r.id as string);
@@ -87,5 +87,5 @@ export async function getServiceMeetingsSummary(): Promise<ServiceMeetingsSummar
     };
   });
 
-  return { clients, dueCount, upcomingCount, bafiConnected: true, lastBafiSync: null };
+  return { clients, dueCount, upcomingCount, milestoneConnected: true, lastMilestoneSync: null };
 }
