@@ -90,7 +90,12 @@ CREATE TABLE public.clients (
   assigned_handler_id  uuid        REFERENCES public.staff(id) ON DELETE SET NULL,
 
   -- Added by 20260531120000_clients_complexity
-  complexity           text
+  complexity           text,
+
+  -- Added for email milestone matching: persisted when the LLM extracts a
+  -- policy number from a milestone email with definitive/strong confidence.
+  -- Allows subsequent scans to short-circuit by policy # instead of name.
+  policy_number        text
 );
 
 -- ============================================================

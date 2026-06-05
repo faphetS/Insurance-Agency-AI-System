@@ -2,7 +2,7 @@ import { supabaseAdmin } from "../../config/supabase.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { scanCreds } from "../whatsapp/whatsapp.service.js";
-import { scanDayUnanswered } from "./operations.whatsapp-scan.js";
+import { scanDayUnanswered, type DayScanThread } from "./operations.whatsapp-scan.js";
 
 export const WHATSAPP_NUMBERS = [
   { phone: "0559762838", label: "Health, Pension & Finance Dept", displayNumber: "055-976-2838" },
@@ -219,3 +219,10 @@ export const whatsappMonitor: WhatsappMonitor =
   env.WHATSAPP_PROVIDER === "stub"
     ? new StubWhatsappMonitor()
     : new GreenApiWhatsappMonitor();
+
+export async function greenApiUnansweredThreads(): Promise<DayScanThread[]> {
+  const creds = scanCreds();
+  if (!creds) return [];
+  const r = await scanDayUnanswered(creds, { windowMinutes: 24 * 60, thresholdHours: 4 });
+  return r.unanswered;
+}

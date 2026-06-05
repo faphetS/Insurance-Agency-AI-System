@@ -4,7 +4,9 @@ import { logger } from "../../config/logger.js";
 import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
-import { getDashboard, getEmailMonitoring, getWhatsappMonitoring } from "./operations.service.js";
+import { getDashboard, getEmailMonitoring } from "./operations.service.js";
+import { greenApiUnansweredThreads } from "./operations.whatsapp-monitor.js";
+import { type DayScanThread } from "./operations.whatsapp-scan.js";
 
 const UNANSWERED_HOURS = 4;
 
@@ -44,6 +46,7 @@ interface AgentBucket {
   unanswered: string[];
   pendingSummaries: string[];
   serviceDue: string[];
+  waUnanswered: { name: string; hoursSince: number }[];
 }
 
 export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> {
@@ -96,7 +99,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
     // 3b. All clients
     const { data: clientRows } = await supabaseAdmin
       .from("clients")
-      .select("id, full_name, status, last_service_date, assigned_handler_id, assigned_to");
+      .select("id, full_name, status, last_service_date, assigned_handler_id, assigned_to, phone");
 
     const clientMap = new Map<string, {
       full_name: string;
@@ -104,6 +107,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       last_service_date: string | null;
       assigned_handler_id: string | null;
       assigned_to: string;
+      phone: string | null;
     }>();
     for (const c of clientRows ?? []) {
       clientMap.set(c.id as string, {
@@ -112,7 +116,16 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         last_service_date: c.last_service_date as string | null,
         assigned_handler_id: c.assigned_handler_id as string | null,
         assigned_to: c.assigned_to as string,
+        phone: c.phone as string | null,
       });
+    }
+
+    const onlyDigits = (s: string | null | undefined): string => (s ?? "").replace(/\D/g, "");
+
+    const clientByPhone = new Map<string, string>();
+    for (const [clientId, c] of clientMap) {
+      const d = onlyDigits(toChatId(c.phone) ?? c.phone);
+      if (d) clientByPhone.set(d, clientId);
     }
 
     function agentOf(clientId: string): string | null {
@@ -182,13 +195,17 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       return !lsd || lsd <= twoYearsAgoIso;
     });
 
+    // 3f. GreenAPI line-wide unanswered threads (fetched once, reused for owner + per-agent routing)
+    const waThreads: DayScanThread[] = await greenApiUnansweredThreads().catch(() => []);
+    const unmatchedThreads: DayScanThread[] = [];
+
     // 4. Bucket per agent
     const buckets = new Map<string, AgentBucket>();
 
     function getBucket(staffId: string): AgentBucket {
       let b = buckets.get(staffId);
       if (!b) {
-        b = { overdueTasks: [], unanswered: [], pendingSummaries: [], serviceDue: [] };
+        b = { overdueTasks: [], unanswered: [], pendingSummaries: [], serviceDue: [], waUnanswered: [] };
         buckets.set(staffId, b);
       }
       return b;
@@ -229,6 +246,20 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       getBucket(staffId).serviceDue.push(c.full_name as string);
     }
 
+    for (const t of waThreads) {
+      const phone = onlyDigits(t.chatId.split("@")[0]);
+      const clientId = clientByPhone.get(phone);
+      const staffId = clientId ? agentOf(clientId) : null;
+      if (clientId && staffId && staffMap.has(staffId)) {
+        getBucket(staffId).waUnanswered.push({
+          name: clientMap.get(clientId)?.full_name ?? phone,
+          hoursSince: t.hoursSince,
+        });
+      } else {
+        unmatchedThreads.push(t);
+      }
+    }
+
     // 5. Send per-agent digests
     const sentChatIds = new Set<string>();
 
@@ -238,7 +269,8 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         (bucket?.overdueTasks.length ?? 0) +
         (bucket?.unanswered.length ?? 0) +
         (bucket?.pendingSummaries.length ?? 0) +
-        (bucket?.serviceDue.length ?? 0);
+        (bucket?.serviceDue.length ?? 0) +
+        (bucket?.waUnanswered.length ?? 0);
 
       if (totalItems === 0) {
         logger.info({ staffId }, "runDailyDigest: no items for agent — skipping");
@@ -264,6 +296,14 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         lines.push(`💬 פניות ללא מענה (${bucket.unanswered.length}):`);
         for (const name of bucket.unanswered) {
           lines.push(`- ${name}`);
+        }
+        lines.push("");
+      }
+
+      if (bucket && bucket.waUnanswered.length > 0) {
+        lines.push(`📱 וואצאפ – לקוחות ללא מענה (${bucket.waUnanswered.length}):`);
+        for (const item of bucket.waUnanswered) {
+          lines.push(`- ${item.name} (לפני ${Math.round(item.hoursSince)} שע׳)`);
         }
         lines.push("");
       }
@@ -332,7 +372,6 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
 
     let dashboard: Awaited<ReturnType<typeof getDashboard>>;
     let emailPending = 0;
-    let waUnansweredScan = 0;
     try {
       dashboard = await getDashboard();
     } catch (err) {
@@ -353,12 +392,8 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       logger.warn({ err }, "runDailyDigest: getEmailMonitoring failed — using 0");
     }
 
-    try {
-      const waSummary = await getWhatsappMonitoring();
-      waUnansweredScan = waSummary.totalUnanswered ?? 0;
-    } catch (err) {
-      logger.warn({ err }, "runDailyDigest: getWhatsappMonitoring failed — using 0");
-    }
+    // waThreads was already fetched above — reuse to avoid a second GreenAPI scan
+    const waUnansweredScan = waThreads.length;
 
     const totalUnanswered = unansweredClientIds.length;
     const totalServiceDue = serviceDueClients.length;
@@ -371,7 +406,8 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         (bucket?.overdueTasks.length ?? 0) +
         (bucket?.unanswered.length ?? 0) +
         (bucket?.pendingSummaries.length ?? 0) +
-        (bucket?.serviceDue.length ?? 0);
+        (bucket?.serviceDue.length ?? 0) +
+        (bucket?.waUnanswered.length ?? 0);
       agentBreakdown.push({ name: entry.fullName, count });
     }
     agentBreakdown.sort((a, b) => b.count - a.count);
@@ -390,6 +426,15 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       "לפי סוכן:",
       ...agentBreakdown.map((a) => `- ${a.name}: ${a.count} פריטים`),
     ];
+
+    if (unmatchedThreads.length > 0) {
+      ownerLines.push("");
+      ownerLines.push(`📱 וואצאפ – פניות לא מזוהות (${unmatchedThreads.length}):`);
+      for (const t of unmatchedThreads) {
+        const phone = t.chatId.split("@")[0];
+        ownerLines.push(`- ${phone}: ${t.preview} (לפני ${Math.round(t.hoursSince)} שע׳)`);
+      }
+    }
 
     const ownerBody = ownerLines.join("\n");
 
