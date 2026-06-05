@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
+import { sendStaffMessage } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { getSignedDocUrl } from "../../lib/storage.js";
 import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
@@ -19,7 +19,7 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
   try {
     const { data: meeting } = await supabaseAdmin
       .from("meetings")
-      .select("id, client_id")
+      .select("id, client_id, summary_final, summary_draft")
       .eq("id", meetingId)
       .maybeSingle();
 
@@ -28,7 +28,7 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
     const { data: client } = await supabaseAdmin
       .from("clients")
       .select(
-        "full_name, phone, id_number, date_of_birth, inquiry_type, health_fund, poa_signed, address, workplace, id_photo_url, poa_doc_url, assigned_to, assigned_handler_id, complexity",
+        "full_name, phone, id_number, inquiry_type, id_photo_url, poa_doc_url, assigned_to, assigned_handler_id, complexity",
       )
       .eq("id", meeting.client_id)
       .maybeSingle();
@@ -80,6 +80,9 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
         ? ["⚠️ Complex case", ""]
         : [];
 
+    const summaryText = (meeting.summary_final ?? meeting.summary_draft ?? "").trim();
+    const summarySection = summaryText ? ["📝 Meeting Summary", summaryText, ""] : [];
+
     const body = [
       "📥 New Client File – Action Required",
       ...complexityLine,
@@ -88,13 +91,9 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
       `Name: ${client.full_name}`,
       `Phone: ${client.phone}`,
       `ID: ${client.id_number ?? "—"}`,
-      `Date of birth: ${client.date_of_birth ?? "—"}`,
       `Inquiry type: ${client.inquiry_type}`,
-      `Health fund: ${client.health_fund ?? "—"}`,
-      `Address: ${client.address ?? "—"}`,
-      `Workplace: ${client.workplace ?? "—"}`,
-      `POA signed: ${client.poa_signed ? "Yes" : "No"}`,
       "",
+      ...summarySection,
       "📎 Documents",
       `ID photo: ${idUrl ?? "not available in system"}`,
       `POA: ${poaUrl ?? "not available in system"}`,
@@ -103,7 +102,7 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
       taskLines,
     ].join("\n");
 
-    await sendMessageWithTyping(chatId, body);
+    await sendStaffMessage(chatId, body);
     logger.info({ meetingId, staffId }, "notifyStaffHandoff: sent");
   } catch (err) {
     logger.error({ err, meetingId }, "notifyStaffHandoff: unexpected error");
