@@ -194,12 +194,15 @@ const server = app.listen(env.PORT, () => {
       );
     }, 10 * 60 * 1000);
 
-    // Operations: due/overdue task check — every 30 minutes
+    // Operations: due/overdue task (milestone) check — daily (every 24h).
+    // Milestones are day/week-scale (+7/+14/+30/+60/+90d), so a daily check
+    // catches each within a day of its due date without re-scanning mailboxes
+    // (and re-spending LLM calls) every 30 minutes.
     setInterval(() => {
       checkDueAndOverdueTasks().catch((err: unknown) =>
         logger.error({ err }, "operations: checkDueAndOverdueTasks failed"),
       );
-    }, 30 * 60 * 1000);
+    }, 24 * 60 * 60 * 1000);
 
     // Operations: SLA breach check — every 30 minutes
     setInterval(() => {
