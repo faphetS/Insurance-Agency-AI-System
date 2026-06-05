@@ -150,10 +150,12 @@ export async function countUnreadEmails(staffId: string): Promise<number> {
     userId: "me",
     // Last 24h only — the daily digest reports recent activity, not the whole unread backlog.
     q: "is:unread -category:promotions -category:social newer_than:1d",
-    maxResults: 1,
+    maxResults: 100,
   });
 
-  return response.data.resultSizeEstimate ?? 0;
+  // Count actual returned messages — Gmail's resultSizeEstimate is unreliable and
+  // often ignores the date filter (echoing a mailbox-wide estimate).
+  return response.data.messages?.length ?? 0;
 }
 
 export async function getGmailStatus(staffId: string): Promise<{
