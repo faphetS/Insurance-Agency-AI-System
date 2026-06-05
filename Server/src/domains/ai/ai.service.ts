@@ -272,7 +272,7 @@ Additionally, extract (if present in the email):
 
 Actionability (independent of milestone classification — a non-milestone email can still need action):
 - needsAction: true when the email is an insurer/insurance email about a client that REQUIRES the agent to DO something — for example: חסר טופס, נדרשת השלמה, נדחתה הבקשה, ממתין לתשובתך, נדרש חתימה, or any explicit deadline. false for informational emails, automated confirmations, status notices, marketing, or non-insurance correspondence.
-- actionSummary: a short English phrase (≤80 chars) describing what the agent needs to do — null when needsAction is false.
+- actionSummary: a short Hebrew phrase (≤80 chars) describing what the agent needs to do — null when needsAction is false.
 
 Respond ONLY with valid JSON, no markdown, no commentary:
 {"milestone":"<value>","clientName":<string|null>,"idNumber":<string|null>,"policyNumber":<string|null>,"evidence":<string|null>,"needsAction":<bool>,"actionSummary":<string|null>}`;

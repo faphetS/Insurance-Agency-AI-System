@@ -336,18 +336,18 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
         continue;
       }
 
-      const lines: string[] = ["🗒️ Daily Digest – Open Tasks", ""];
+      const lines: string[] = ["🗒️ עדכון יומי – משימות פתוחות", ""];
 
       if (bucket && bucket.overdueTasks.length > 0) {
-        lines.push(`⏰ Overdue Tasks (${bucket.overdueTasks.length}):`);
+        lines.push(`⏰ משימות באיחור (${bucket.overdueTasks.length}):`);
         for (const t of bucket.overdueTasks) {
-          lines.push(`- ${t.clientName}: ${t.label} (due: ${t.due})`);
+          lines.push(`- ${t.clientName}: ${t.label} (יעד: ${t.due})`);
         }
         lines.push("");
       }
 
       if (bucket && bucket.unanswered.length > 0) {
-        lines.push(`💬 Unanswered Bot Conversations (${bucket.unanswered.length}):`);
+        lines.push(`💬 שיחות בוט ללא מענה (${bucket.unanswered.length}):`);
         for (const name of bucket.unanswered) {
           lines.push(`- ${name}`);
         }
@@ -355,15 +355,15 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       }
 
       if (bucket && bucket.waUnanswered.length > 0) {
-        lines.push(`📱 WhatsApp – Clients Without a Reply (${bucket.waUnanswered.length}):`);
+        lines.push(`📱 וואטסאפ – לקוחות ללא מענה (${bucket.waUnanswered.length}):`);
         for (const item of bucket.waUnanswered) {
-          lines.push(`- ${item.name} (${Math.round(item.hoursSince)}h ago)`);
+          lines.push(`- ${item.name} (לפני ${Math.round(item.hoursSince)} שע')`);
         }
         lines.push("");
       }
 
       if (bucket && bucket.actionableEmails.length > 0) {
-        lines.push(`📧 Emails Requiring Action (${bucket.actionableEmails.length}):`);
+        lines.push(`📧 מיילים הדורשים טיפול (${bucket.actionableEmails.length}):`);
         for (const e of bucket.actionableEmails) {
           lines.push(`- ${e.clientName}: ${e.actionSummary}`);
         }
@@ -371,7 +371,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       }
 
       if (bucket && bucket.pendingSummaries.length > 0) {
-        lines.push(`📝 Summaries Pending Approval (${bucket.pendingSummaries.length}):`);
+        lines.push(`📝 סיכומים הממתינים לאישור (${bucket.pendingSummaries.length}):`);
         for (const name of bucket.pendingSummaries) {
           lines.push(`- ${name}`);
         }
@@ -379,7 +379,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       }
 
       if (bucket && bucket.serviceDue.length > 0) {
-        lines.push(`📅 Clients Due for Service Meeting (${bucket.serviceDue.length}):`);
+        lines.push(`📅 לקוחות לפגישת שירות תקופתית (${bucket.serviceDue.length}):`);
         for (const name of bucket.serviceDue) {
           lines.push(`- ${name}`);
         }
@@ -467,17 +467,17 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
     agentBreakdown.sort((a, b) => b.count - a.count);
 
     const ownerLines: string[] = [
-      "📊 Daily Digest – Agency Overview",
+      "📊 עדכון יומי – תמונת מצב הסוכנות",
       "",
-      `Overdue tasks: ${dashboard.overdue_tasks}`,
-      `Summaries pending approval: ${dashboard.pending_summary_approvals}`,
-      `SLA breaches: ${dashboard.sla_breaches}`,
-      `Unanswered conversations (WhatsApp scan): ${waUnansweredScan}`,
-      `Emails requiring action (clients): ${actionableEmailCount}`,
-      `Clients due for service meeting: ${totalServiceDue}`,
+      `משימות באיחור: ${dashboard.overdue_tasks}`,
+      `סיכומים הממתינים לאישור: ${dashboard.pending_summary_approvals}`,
+      `חריגות מזמן טיפול: ${dashboard.sla_breaches}`,
+      `שיחות ללא מענה (סריקת וואטסאפ): ${waUnansweredScan}`,
+      `מיילים הדורשים טיפול (לקוחות): ${actionableEmailCount}`,
+      `לקוחות לפגישת שירות תקופתית: ${totalServiceDue}`,
       "",
-      "By agent:",
-      ...agentBreakdown.map((a) => `- ${a.name}: ${a.count} items`),
+      "לפי סוכן:",
+      ...agentBreakdown.map((a) => `- ${a.name}: ${a.count} פריטים`),
     ];
 
     const ownerBody = ownerLines.join("\n");

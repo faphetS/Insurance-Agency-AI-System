@@ -124,16 +124,16 @@ export async function sendSummaryToClient(meetingId: string): Promise<void> {
       return;
     }
 
-    const summaryText = (meeting.summary_final as string | null) ?? "(no summary)";
+    const summaryText = (meeting.summary_final as string | null) ?? "(אין סיכום)";
     const body = [
-      "📋 Your meeting summary:",
+      "📋 סיכום הפגישה שלך:",
       "",
       summaryText,
       "",
-      "Please confirm that the details are correct.",
+      "נא לאשר שהפרטים נכונים.",
     ].join("\n");
 
-    const buttons = [{ buttonId: `client_confirm:${meetingId}`, buttonText: "✅ Confirm" }];
+    const buttons = [{ buttonId: `client_confirm:${meetingId}`, buttonText: "✅ אישור" }];
 
     const { idMessage } = await sendInteractiveButtonsWithTyping(chatId, body, buttons, "");
 
@@ -173,14 +173,14 @@ export async function handleClientConfirm(
     await createTaskChain(meetingId);
     await notifyStaffHandoff(meetingId);
 
-    const { idMessage } = await sendMessageWithTyping(chatId, "Thank you! The summary has been confirmed and we will follow up.");
+    const { idMessage } = await sendMessageWithTyping(chatId, "תודה! הסיכום אושר ונמשיך בטיפול.");
 
     if (conversationId) {
       await supabaseAdmin.from("messages").insert({
         conversation_id: conversationId,
         direction: "outbound",
         sent_by: "bot",
-        body: "Thank you! The summary has been confirmed and we will follow up.",
+        body: "תודה! הסיכום אושר ונמשיך בטיפול.",
         status: "sent",
         whatsapp_message_id: idMessage,
       });

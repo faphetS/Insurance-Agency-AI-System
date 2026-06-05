@@ -4,7 +4,7 @@ import { milestoneProvider } from "./operations.email-milestones.js";
 import { createNotification, completeTask } from "./operations.service.js";
 import { notifyStaffSummaryReady } from "./operations.staff-notify.js";
 import { notifyStaffTaskOverdue } from "./operations.staff-reminder.js";
-import { sendOverdueAlert, sendSlaAlert, sendServiceDueInvite } from "./operations.alert-sender.js";
+import { sendOverdueAlert, sendSlaAlert, sendServiceDueToClient } from "./operations.alert-sender.js";
 import { buildCrossCheckAssessment } from "./operations.cross-check.js";
 import type { TaskType } from "./operations.types.js";
 
@@ -184,7 +184,7 @@ export async function checkServiceMeetingEligibility(): Promise<void> {
 
   const { data: clients, error } = await supabaseAdmin
     .from("clients")
-    .select("id, full_name, last_service_date, assigned_handler_id, assigned_to")
+    .select("id, full_name, phone, last_service_date, assigned_handler_id, assigned_to")
     .eq("status", "active")
     .or(`last_service_date.is.null,last_service_date.lte.${twoYearsAgoStr}`);
 
@@ -205,11 +205,12 @@ export async function checkServiceMeetingEligibility(): Promise<void> {
       });
 
       if (newRow) {
-        await sendServiceDueInvite({
+        // Retention outreach goes to the CLIENT directly (conversational line),
+        // not the staff — a proactive invite to book a periodic service meeting.
+        await sendServiceDueToClient({
           id: client.id as string,
           full_name: client.full_name as string | null,
-          assigned_handler_id: client.assigned_handler_id as string | null,
-          assigned_to: client.assigned_to as string | null,
+          phone: client.phone as string | null,
         });
       }
     } catch (err) {

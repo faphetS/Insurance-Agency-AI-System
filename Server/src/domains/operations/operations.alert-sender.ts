@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { sendStaffMessage } from "../whatsapp/whatsapp.service.js";
+import { sendStaffMessage, sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { TASK_LABELS_HE } from "./operations.format.js";
 
@@ -35,7 +35,7 @@ export async function sendOverdueAlert(task: {
     }
 
     const label = TASK_LABELS_HE[task.type] ?? task.type;
-    const body = `🔴 Overdue task: "${label}" for ${client.full_name as string} — please action.`;
+    const body = `🔴 משימה באיחור: "${label}" עבור ${client.full_name as string} — נא לטפל.`;
 
     await sendStaffMessage(chatId, body);
     logger.info({ taskId: task.id, staffId: task.assigned_to }, "sendOverdueAlert: sent");
@@ -44,40 +44,33 @@ export async function sendOverdueAlert(task: {
   }
 }
 
-// Sends to the assigned agent, NOT the client directly — the agent is responsible
-// for scheduling the meeting, and unsolicited outreach to clients must be avoided.
-export async function sendServiceDueInvite(client: {
+// Biennial retention outreach: messages the CLIENT directly on the conversational
+// line (instance #1), proactively inviting them to book a periodic service meeting
+// ~2 years after their last one. This is a retention strategy — not a staff alert.
+export async function sendServiceDueToClient(client: {
   id: string;
   full_name: string | null;
-  assigned_handler_id: string | null;
-  assigned_to: string | null;
+  phone: string | null;
 }): Promise<void> {
   try {
-    const staffId = client.assigned_handler_id ?? client.assigned_to;
-    if (!staffId) {
-      logger.warn({ clientId: client.id }, "sendServiceDueInvite: no staff assigned to client");
-      return;
-    }
-
-    const { data: staff } = await supabaseAdmin
-      .from("staff")
-      .select("full_name, phone")
-      .eq("id", staffId)
-      .maybeSingle();
-
-    const chatId = toChatId(staff?.phone ?? null);
+    const chatId = toChatId(client.phone ?? null);
     if (!chatId) {
-      logger.warn({ clientId: client.id, staffId }, "sendServiceDueInvite: staff has no usable phone");
+      logger.warn({ clientId: client.id }, "sendServiceDueToClient: client has no usable phone");
       return;
     }
 
-    const name = client.full_name ?? client.id;
-    const body = `📅 Biennial service meeting: client ${name} is due for a service meeting. Please schedule a date.`;
+    const name = client.full_name?.trim();
+    const body = [
+      `שלום${name ? " " + name : ""} 😊`,
+      "עברו שנתיים מאז הפגישה האחרונה שלנו — זה הזמן לפגישת שירות תקופתית.",
+      "נשמח לבדוק יחד שהביטוחים שלך עדיין מתאימים לצרכים שלך ולעדכן במידת הצורך.",
+      "מתי נוח לך שנקבע פגישה? 📅",
+    ].join("\n");
 
-    await sendStaffMessage(chatId, body);
-    logger.info({ clientId: client.id, staffId }, "sendServiceDueInvite: sent");
+    await sendMessageWithTyping(chatId, body);
+    logger.info({ clientId: client.id }, "sendServiceDueToClient: sent");
   } catch (err) {
-    logger.error({ err, clientId: client.id }, "sendServiceDueInvite: unexpected error");
+    logger.error({ err, clientId: client.id }, "sendServiceDueToClient: unexpected error");
   }
 }
 
@@ -115,8 +108,8 @@ export async function sendSlaAlert(client: {
     }
 
     const name = client.full_name ?? client.id;
-    const stage = client.derived_stage ?? "unknown";
-    const body = `🚨 SLA breach: client ${name} is stuck at stage "${stage}" past the deadline. Please action.`;
+    const stage = client.derived_stage ?? "לא ידוע";
+    const body = `🚨 חריגה מזמן טיפול: הלקוח ${name} תקוע בשלב "${stage}" מעבר למועד היעד. נא לטפל.`;
 
     await sendStaffMessage(chatId, body);
     logger.info({ clientId: client.id, staffId }, "sendSlaAlert: sent");

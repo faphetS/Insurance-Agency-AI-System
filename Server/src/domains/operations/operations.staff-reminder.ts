@@ -36,7 +36,7 @@ export async function notifyStaffTaskOverdue(task: {
     }
 
     const label = TASK_LABELS_HE[task.type] ?? task.type;
-    const body = `🔔 Reminder: the task "${label}" for client ${client.full_name} has not been completed yet (due: ${formatDueDate(task.due_at)}). Please action.`;
+    const body = `🔔 תזכורת: המשימה "${label}" עבור הלקוח ${client.full_name} טרם הושלמה (יעד: ${formatDueDate(task.due_at)}). נא לטפל.`;
 
     await sendStaffMessage(chatId, body);
     logger.info({ taskId: task.id, staffId: task.assigned_to }, "notifyStaffTaskOverdue: sent");

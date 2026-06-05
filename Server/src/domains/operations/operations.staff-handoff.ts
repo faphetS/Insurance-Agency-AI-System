@@ -70,35 +70,35 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
         ? tasks
             .map((t: any, i: number) => {
               const label = TASK_LABELS_HE[t.type] ?? t.type;
-              return `${i + 1}. ${label} — by ${formatDueDate(t.due_at)}`;
+              return `${i + 1}. ${label} — עד ${formatDueDate(t.due_at)}`;
             })
             .join("\n")
-        : "(no tasks)";
+        : "(אין משימות)";
 
     const complexityLine =
       (client as unknown as { complexity?: string | null }).complexity === "complex"
-        ? ["⚠️ Complex case", ""]
+        ? ["⚠️ מקרה מורכב", ""]
         : [];
 
     const summaryText = (meeting.summary_final ?? meeting.summary_draft ?? "").trim();
-    const summarySection = summaryText ? ["📝 Meeting Summary", summaryText, ""] : [];
+    const summarySection = summaryText ? ["📝 סיכום הפגישה", summaryText, ""] : [];
 
     const body = [
-      "📥 New Client File – Action Required",
+      "📥 תיק לקוח חדש – נדרש טיפול",
       ...complexityLine,
       "",
-      "👤 Client Details",
-      `Name: ${client.full_name}`,
-      `Phone: ${client.phone}`,
-      `ID: ${client.id_number ?? "—"}`,
-      `Inquiry type: ${client.inquiry_type}`,
+      "👤 פרטי הלקוח",
+      `שם: ${client.full_name}`,
+      `טלפון: ${client.phone}`,
+      `ת"ז: ${client.id_number ?? "—"}`,
+      `סוג הפנייה: ${client.inquiry_type}`,
       "",
       ...summarySection,
-      "📎 Documents",
-      `ID photo: ${idUrl ?? "not available in system"}`,
-      `POA: ${poaUrl ?? "not available in system"}`,
+      "📎 מסמכים",
+      `צילום ת"ז: ${idUrl ?? "לא זמין במערכת"}`,
+      `ייפוי כוח: ${poaUrl ?? "לא זמין במערכת"}`,
       "",
-      "📋 Follow-up Tasks",
+      "📋 משימות המשך",
       taskLines,
     ].join("\n");
 
