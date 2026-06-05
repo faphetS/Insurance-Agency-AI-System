@@ -60,7 +60,9 @@ export async function checkDueAndOverdueTasks(): Promise<void> {
 
       if (result.found) {
         await completeTask(task.id as string);
-      } else {
+      } else if (taskType !== "cross_check") {
+        // cross_check is automatic, not a staff to-do — its only output is the
+        // advisory assessment sent above; never nag "please action" for it.
         const dueAt = new Date(task.due_at as string);
         const overdueByMs = now.getTime() - dueAt.getTime();
         const overdueByDays = overdueByMs / (1000 * 60 * 60 * 24);

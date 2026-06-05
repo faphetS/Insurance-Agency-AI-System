@@ -14,7 +14,7 @@ import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
 import { generateReply } from "../ai/ai.service.js";
 import { createNotification } from "./operations.service.js";
-import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
+import { sendStaffMessage } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 
 interface CrossCheckFlags {
@@ -152,7 +152,7 @@ export async function buildCrossCheckAssessment(
       assessment,
     ].join("\n");
 
-    await sendMessageWithTyping(staffTarget.chatId, waBody);
+    await sendStaffMessage(staffTarget.chatId, waBody);
     logger.info(
       { clientId, staffId: staffTarget.staffId },
       "buildCrossCheckAssessment: advisory sent",
