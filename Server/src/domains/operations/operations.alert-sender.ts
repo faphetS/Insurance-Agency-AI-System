@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
+import { sendStaffMessage } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { TASK_LABELS_HE } from "./operations.format.js";
 
@@ -37,7 +37,7 @@ export async function sendOverdueAlert(task: {
     const label = TASK_LABELS_HE[task.type] ?? task.type;
     const body = `🔴 משימה באיחור: "${label}" עבור ${client.full_name as string} — נא לטפל.`;
 
-    await sendMessageWithTyping(chatId, body);
+    await sendStaffMessage(chatId, body);
     logger.info({ taskId: task.id, staffId: task.assigned_to }, "sendOverdueAlert: sent");
   } catch (err) {
     logger.error({ err, taskId: task.id }, "sendOverdueAlert: unexpected error");
@@ -74,7 +74,7 @@ export async function sendServiceDueInvite(client: {
     const name = client.full_name ?? client.id;
     const body = `📅 פגישת שירות דו-שנתית: הלקוח ${name} זכאי/ת לפגישת שירות. כדאי לקבוע מועד.`;
 
-    await sendMessageWithTyping(chatId, body);
+    await sendStaffMessage(chatId, body);
     logger.info({ clientId: client.id, staffId }, "sendServiceDueInvite: sent");
   } catch (err) {
     logger.error({ err, clientId: client.id }, "sendServiceDueInvite: unexpected error");
@@ -118,7 +118,7 @@ export async function sendSlaAlert(client: {
     const stage = client.derived_stage ?? "לא ידוע";
     const body = `🚨 חריגת SLA: הלקוח ${name} תקוע בשלב "${stage}" מעבר לזמן. נא לטפל.`;
 
-    await sendMessageWithTyping(chatId, body);
+    await sendStaffMessage(chatId, body);
     logger.info({ clientId: client.id, staffId }, "sendSlaAlert: sent");
   } catch (err) {
     logger.error({ err, clientId: client.id }, "sendSlaAlert: unexpected error");

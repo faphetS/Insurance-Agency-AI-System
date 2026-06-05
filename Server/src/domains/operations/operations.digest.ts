@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
+import { sendStaffMessage } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
 import { getDashboard, getEmailMonitoring } from "./operations.service.js";
@@ -327,7 +327,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       const body = lines.join("\n").trimEnd();
 
       try {
-        await sendMessageWithTyping(entry.chatId, body);
+        await sendStaffMessage(entry.chatId, body);
         sentChatIds.add(entry.chatId);
         logger.info({ staffId, totalItems }, "runDailyDigest: sent agent digest");
       } catch (err) {
@@ -439,7 +439,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
     const ownerBody = ownerLines.join("\n");
 
     try {
-      await sendMessageWithTyping(ownerEntry.chatId, ownerBody);
+      await sendStaffMessage(ownerEntry.chatId, ownerBody);
       logger.info({ ownerStaffId }, "runDailyDigest: sent owner overview");
     } catch (err) {
       logger.error({ err, ownerStaffId }, "runDailyDigest: failed to send owner overview");

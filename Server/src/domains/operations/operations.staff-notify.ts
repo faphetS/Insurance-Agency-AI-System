@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { sendInteractiveButtonsWithTyping } from "../whatsapp/whatsapp.service.js";
+import { sendStaffButtons } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 
 const TZ = "Asia/Jerusalem";
@@ -106,7 +106,7 @@ export async function notifyStaffSummaryReady(meetingId: string): Promise<void> 
       { buttonId: `sum_edit:${meetingId}`, buttonText: "✏️ עריכה" },
     ];
 
-    await sendInteractiveButtonsWithTyping(chatId, body, buttons, "");
+    await sendStaffButtons(chatId, body, buttons, "");
 
     // 6. Log success
     logger.info({ meetingId, staffId }, "notifyStaffSummaryReady: sent");

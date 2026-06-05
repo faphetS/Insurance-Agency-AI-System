@@ -233,3 +233,103 @@ export async function ensureHistorySettings(): Promise<void> {
     outgoingWebhook: "yes",
   });
 }
+
+// Instance #2 is the operational line — shared with the channel scanner.
+// GREENAPI_SCAN_* creds serve both purposes (pull-based scanning + staff notifications).
+export function opsCreds(): GreenApiCreds | null {
+  return scanCreds();
+}
+
+export async function sendMessageWith(
+  creds: GreenApiCreds,
+  chatId: string,
+  text: string,
+): Promise<{ idMessage: string }> {
+  return requestWith<{ idMessage: string }>(creds, "POST", "sendMessage", {
+    chatId,
+    message: text,
+  });
+}
+
+export async function sendTypingWith(
+  creds: GreenApiCreds,
+  chatId: string,
+  typingTimeMs = 2000,
+): Promise<void> {
+  const url = `${creds.baseUrl}/waInstance${creds.idInstance}/sendTyping/${creds.token}`;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, typingTime: typingTimeMs }),
+    });
+  } catch (err) {
+    logger.warn({ err, chatId }, "sendTypingWith failed — continuing");
+  }
+}
+
+export async function sendMessageWithTypingWith(
+  creds: GreenApiCreds,
+  chatId: string,
+  message: string,
+  typingMs = 2000,
+): Promise<{ idMessage: string }> {
+  await sendTypingWith(creds, chatId, typingMs);
+  await new Promise((r) => setTimeout(r, typingMs));
+  return sendMessageWith(creds, chatId, message);
+}
+
+export async function sendInteractiveButtonsWith(
+  creds: GreenApiCreds,
+  chatId: string,
+  body: string,
+  buttons: { buttonId: string; buttonText: string }[],
+  footer?: string,
+): Promise<{ idMessage: string }> {
+  if (buttons.length === 0 || buttons.length > 3) {
+    throw new AppError(400, "buttons must have 1–3 items", "INVALID_BUTTONS");
+  }
+  for (const btn of buttons) {
+    if (btn.buttonText.length > 25) {
+      throw new AppError(
+        400,
+        `buttonText "${btn.buttonText}" exceeds 25 characters`,
+        "INVALID_BUTTON_TEXT",
+      );
+    }
+  }
+
+  return requestWith<{ idMessage: string }>(creds, "POST", "sendInteractiveButtonsReply", {
+    chatId,
+    body,
+    footer: footer ?? "",
+    buttons: buttons.map((b) => ({
+      buttonId: b.buttonId,
+      buttonText: b.buttonText,
+    })),
+  });
+}
+
+// Convenience helper: sends a staff-facing text message via instance #2 (operational line),
+// falling back to instance #1 (env) when ops creds are unset.
+export async function sendStaffMessage(
+  chatId: string,
+  text: string,
+): Promise<{ idMessage: string }> {
+  const c = opsCreds();
+  return c ? sendMessageWithTypingWith(c, chatId, text) : sendMessageWithTyping(chatId, text);
+}
+
+// Convenience helper: sends staff-facing interactive buttons via instance #2 (operational line),
+// falling back to instance #1 (env) when ops creds are unset.
+export async function sendStaffButtons(
+  chatId: string,
+  body: string,
+  buttons: { buttonId: string; buttonText: string }[],
+  footer?: string,
+): Promise<{ idMessage: string }> {
+  const c = opsCreds();
+  return c
+    ? sendInteractiveButtonsWith(c, chatId, body, buttons, footer)
+    : sendInteractiveButtonsWithTyping(chatId, body, buttons, footer);
+}
