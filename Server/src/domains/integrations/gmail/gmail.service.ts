@@ -148,7 +148,8 @@ export async function countUnreadEmails(staffId: string): Promise<number> {
 
   const response = await gmail.users.messages.list({
     userId: "me",
-    q: "is:unread -category:promotions -category:social",
+    // Last 24h only — the daily digest reports recent activity, not the whole unread backlog.
+    q: "is:unread -category:promotions -category:social newer_than:1d",
     maxResults: 1,
   });
 
