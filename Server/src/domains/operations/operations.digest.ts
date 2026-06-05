@@ -5,7 +5,7 @@ import { env } from "../../config/env.js";
 import { sendStaffMessage } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
-import { getDashboard, getEmailMonitoring } from "./operations.service.js";
+import { getDashboard } from "./operations.service.js";
 import { greenApiUnansweredThreads } from "./operations.whatsapp-monitor.js";
 import { type DayScanThread } from "./operations.whatsapp-scan.js";
 import { scanClientEmails } from "./operations.email-milestones.js";
@@ -433,7 +433,6 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
     }
 
     let dashboard: Awaited<ReturnType<typeof getDashboard>>;
-    let emailPending = 0;
     try {
       dashboard = await getDashboard();
     } catch (err) {
@@ -447,17 +446,9 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       };
     }
 
-    try {
-      const emailResult = await getEmailMonitoring();
-      emailPending = emailResult.totalPending ?? 0;
-    } catch (err) {
-      logger.warn({ err }, "runDailyDigest: getEmailMonitoring failed — using 0");
-    }
-
     // waThreads was already fetched above — only matched (known-client) threads count
     const waUnansweredScan = matchedWaCount;
 
-    const totalUnanswered = unansweredClientIds.length;
     const totalServiceDue = serviceDueClients.length;
 
     // Per-agent breakdown: name → total item count
@@ -481,9 +472,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       `Overdue tasks: ${dashboard.overdue_tasks}`,
       `Summaries pending approval: ${dashboard.pending_summary_approvals}`,
       `SLA breaches: ${dashboard.sla_breaches}`,
-      `Unanswered conversations (bot): ${totalUnanswered}`,
       `Unanswered conversations (WhatsApp scan): ${waUnansweredScan}`,
-      `Pending emails: ${emailPending}`,
       `Emails requiring action (clients): ${actionableEmailCount}`,
       `Clients due for service meeting: ${totalServiceDue}`,
       "",
