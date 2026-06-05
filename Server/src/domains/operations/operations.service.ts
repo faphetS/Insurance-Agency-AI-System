@@ -242,9 +242,12 @@ export async function createTaskChain(meetingId: string) {
     throw new Error("Failed to create task chain");
   }
 
+  // Confirmed summary = a completed service touchpoint → start the biennial clock.
+  // (The biennial service meeting also ends in a confirmed summary, so this makes
+  // the 24-month cycle self-sustaining.)
   await supabaseAdmin
     .from("clients")
-    .update({ pipeline_stage: "forms" })
+    .update({ pipeline_stage: "forms", last_service_date: now.toISOString().slice(0, 10) })
     .eq("id", clientId);
 
   await createNotification({
