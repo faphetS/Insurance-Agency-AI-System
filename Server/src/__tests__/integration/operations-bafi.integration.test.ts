@@ -4,9 +4,13 @@
  * Seeds active staff in the DB and asserts:
  *   - getStaffList() returns all active staff mapped to { id, name, phone? }
  *   - getStaffList() excludes inactive staff (is_active = false)
- *   - checkForms / checkReceipt / checkPolicy / checkDeposit / crossCheck
+ *   - checkForms / checkReceipt / checkPolicy / checkDeposit
  *     all return { found: false } when no Gmail integration is active
  *   - None of the check methods throw
+ *
+ * Note: crossCheck is no longer a method on milestoneProvider. The cross_check
+ * task step derives its flags directly from sibling task completion status via
+ * crossCheckFlagsFromTasks() in operations.checker.ts.
  *
  * No external I/O is required for these tests — milestoneProvider.getStaffList
  * queries the DB directly; the check* methods fall back to { found: false }
@@ -175,17 +179,11 @@ describe("milestoneProvider — check methods return { found: false } without Gm
     expect(result).toMatchObject({ found: false });
   });
 
-  it("crossCheck returns { found: false }", async () => {
-    const result = await milestoneProvider.crossCheck(fakeClientId);
-    expect(result).toMatchObject({ found: false });
-  });
-
   it("none of the check methods throw", async () => {
     await expect(milestoneProvider.checkForms(fakeClientId)).resolves.not.toThrow();
     await expect(milestoneProvider.checkReceipt(fakeClientId)).resolves.not.toThrow();
     await expect(milestoneProvider.checkPolicy(fakeClientId)).resolves.not.toThrow();
     await expect(milestoneProvider.checkDeposit(fakeClientId)).resolves.not.toThrow();
-    await expect(milestoneProvider.crossCheck(fakeClientId)).resolves.not.toThrow();
   });
 });
 

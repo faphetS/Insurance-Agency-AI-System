@@ -202,21 +202,6 @@ export class EmailMilestoneProvider implements MilestoneProvider {
     return { found: hits.some((h) => h.milestone === "deposit_made") };
   }
 
-  async crossCheck(clientId: string): Promise<MilestoneCheckResult> {
-    const hits = await scanForClient(clientId);
-    if (hits === null) return { found: false };
-
-    const forms = hits.some((h) => h.milestone === "forms_sent");
-    const receipt = hits.some((h) => h.milestone === "receipt_confirmed");
-    const policy = hits.some((h) => h.milestone === "policy_issued");
-    const deposit = hits.some((h) => h.milestone === "deposit_made");
-
-    return {
-      found: forms && receipt && policy && deposit,
-      details: { forms, receipt, policy, deposit },
-    };
-  }
-
   async getStaffList(): Promise<Array<{ id: string; name: string; phone?: string }>> {
     try {
       const { data, error } = await supabaseAdmin

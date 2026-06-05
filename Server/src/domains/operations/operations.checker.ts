@@ -8,12 +8,40 @@ import { sendOverdueAlert, sendSlaAlert, sendServiceDueInvite } from "./operatio
 import { buildCrossCheckAssessment } from "./operations.cross-check.js";
 import type { TaskType } from "./operations.types.js";
 
+async function crossCheckFlagsFromTasks(
+  meetingId: string | null,
+  clientId: string,
+): Promise<{ forms: boolean; receipt: boolean; policy: boolean; deposit: boolean }> {
+  let query = supabaseAdmin.from("tasks").select("type, status");
+
+  if (meetingId) {
+    query = query.eq("meeting_id", meetingId);
+  } else {
+    query = query.eq("client_id", clientId);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    logger.error({ error, meetingId, clientId }, "crossCheckFlagsFromTasks: query failed — defaulting all false");
+    return { forms: false, receipt: false, policy: false, deposit: false };
+  }
+
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  return {
+    forms: rows.some((r) => r["type"] === "forms_check" && r["status"] === "completed"),
+    receipt: rows.some((r) => r["type"] === "receipt_check" && r["status"] === "completed"),
+    policy: rows.some((r) => r["type"] === "policy_check" && r["status"] === "completed"),
+    deposit: rows.some((r) => r["type"] === "deposit_check" && r["status"] === "completed"),
+  };
+}
+
 export async function checkDueAndOverdueTasks(): Promise<void> {
   const now = new Date();
 
   const { data: tasks, error } = await supabaseAdmin
     .from("tasks")
-    .select("id, client_id, type, due_at, status, assigned_to, reminder_sent")
+    .select("id, client_id, type, due_at, status, assigned_to, reminder_sent, meeting_id")
     .eq("status", "pending")
     .lte("due_at", now.toISOString());
 
@@ -42,16 +70,21 @@ export async function checkDueAndOverdueTasks(): Promise<void> {
           result = await milestoneProvider.checkDeposit(clientId);
           break;
         case "cross_check": {
-          result = await milestoneProvider.crossCheck(clientId);
-          // Advisory AI artifact — compare summary text vs milestone execution.
-          // Degrades gracefully: no summary or AI failure is a silent no-op.
-          const flags = {
-            forms: !!(result.details?.["forms"] as boolean | undefined),
-            receipt: !!(result.details?.["receipt"] as boolean | undefined),
-            policy: !!(result.details?.["policy"] as boolean | undefined),
-            deposit: !!(result.details?.["deposit"] as boolean | undefined),
+          // Derive flags from sibling task completion — the recorded status is the
+          // source of truth and is immune to email-window expiry or LLM variance.
+          const flags = await crossCheckFlagsFromTasks(
+            task.meeting_id as string | null,
+            clientId,
+          );
+          result = {
+            found: flags.forms && flags.receipt && flags.policy && flags.deposit,
+            details: flags,
           };
-          await buildCrossCheckAssessment(clientId, task.id as string, flags);
+          // Advisory only when there's a discrepancy — if all four milestones are
+          // complete there's nothing to flag, so skip the assessment entirely.
+          if (!result.found) {
+            await buildCrossCheckAssessment(clientId, task.id as string, flags);
+          }
           break;
         }
         default:

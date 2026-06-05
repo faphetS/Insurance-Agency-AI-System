@@ -1,8 +1,8 @@
-// Advisory AI cross-check: compares the meeting summary text against what
-// the milestone provider recorded (forms / receipt / policy / deposit presence).
+// Advisory AI cross-check: compares the meeting summary text against the
+// milestone flags derived from sibling task completion status in the DB.
 // The output is a human-readable Hebrew assessment for the assigned agent —
-// it is NOT authoritative; the existence-based pass/fail in milestoneProvider.crossCheck
-// remains the machine gate. This module only produces the advisory artifact.
+// it is NOT authoritative; the sibling-task completion gate (operations.checker.ts)
+// is the machine gate. This module only produces the advisory artifact.
 //
 // Assumptions:
 // - "most recent meeting" is determined by scheduled_at DESC for the client.

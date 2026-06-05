@@ -72,7 +72,6 @@ export interface MilestoneProvider {
   checkReceipt(clientId: string): Promise<MilestoneCheckResult>;
   checkPolicy(clientId: string): Promise<MilestoneCheckResult>;
   checkDeposit(clientId: string): Promise<MilestoneCheckResult>;
-  crossCheck(clientId: string): Promise<MilestoneCheckResult>;
   getStaffList(): Promise<Array<{ id: string; name: string; phone?: string }>>;
 }
 
