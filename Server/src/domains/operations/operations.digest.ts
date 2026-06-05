@@ -197,7 +197,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
 
     // 3f. GreenAPI line-wide unanswered threads (fetched once, reused for owner + per-agent routing)
     const waThreads: DayScanThread[] = await greenApiUnansweredThreads().catch(() => []);
-    const unmatchedThreads: DayScanThread[] = [];
+    let matchedWaCount = 0;
 
     // 4. Bucket per agent
     const buckets = new Map<string, AgentBucket>();
@@ -255,8 +255,7 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
           name: clientMap.get(clientId)?.full_name ?? phone,
           hoursSince: t.hoursSince,
         });
-      } else {
-        unmatchedThreads.push(t);
+        matchedWaCount++;
       }
     }
 
@@ -392,8 +391,8 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       logger.warn({ err }, "runDailyDigest: getEmailMonitoring failed — using 0");
     }
 
-    // waThreads was already fetched above — reuse to avoid a second GreenAPI scan
-    const waUnansweredScan = waThreads.length;
+    // waThreads was already fetched above — only matched (known-client) threads count
+    const waUnansweredScan = matchedWaCount;
 
     const totalUnanswered = unansweredClientIds.length;
     const totalServiceDue = serviceDueClients.length;
@@ -426,15 +425,6 @@ export async function runDailyDigest(opts?: { force?: boolean }): Promise<void> 
       "לפי סוכן:",
       ...agentBreakdown.map((a) => `- ${a.name}: ${a.count} פריטים`),
     ];
-
-    if (unmatchedThreads.length > 0) {
-      ownerLines.push("");
-      ownerLines.push(`📱 וואצאפ – פניות לא מזוהות (${unmatchedThreads.length}):`);
-      for (const t of unmatchedThreads) {
-        const phone = t.chatId.split("@")[0];
-        ownerLines.push(`- ${phone}: ${t.preview} (לפני ${Math.round(t.hoursSince)} שע׳)`);
-      }
-    }
 
     const ownerBody = ownerLines.join("\n");
 
