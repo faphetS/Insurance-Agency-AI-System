@@ -132,19 +132,23 @@ async function persistPolicyNumber(clientId: string, policyNumber: string): Prom
   }
 }
 
+// Build a Gmail query matching ANY of the client's stable identifiers. Searching
+// broadly (name + ID + policy + email) is essential: each milestone email
+// references the client differently, so narrowing to a single identifier (e.g. a
+// persisted policy number) would miss the others.
+function buildClientQuery(ctx: ClientContext, window: string): string {
+  const terms = [`"${ctx.clientFullName}"`];
+  if (ctx.id_number) terms.push(`"${ctx.id_number}"`);
+  if (ctx.policy_number) terms.push(`"${ctx.policy_number}"`);
+  if (ctx.email) terms.push(ctx.email);
+  return `(${terms.join(" OR ")}) ${window}`;
+}
+
 async function scanForClient(clientId: string): Promise<MilestoneHit[] | null> {
   const ctx = await loadClientContext(clientId);
   if (!ctx) return null;
 
-  // Build the Gmail search query from the most specific signal available.
-  let q: string;
-  if (ctx.policy_number) {
-    q = `"${ctx.policy_number}" newer_than:90d`;
-  } else if (ctx.email) {
-    q = `("${ctx.clientFullName}" OR ${ctx.email}) newer_than:90d`;
-  } else {
-    q = `"${ctx.clientFullName}" newer_than:90d`;
-  }
+  const q = buildClientQuery(ctx, "newer_than:90d");
 
   let hits: MilestoneHit[];
   try {
@@ -236,16 +240,7 @@ export async function scanClientEmails(
   const ctx = await loadClientContext(clientId);
   if (!ctx) return null;
 
-  let q: string;
-  if (opts?.q) {
-    q = opts.q;
-  } else if (ctx.policy_number) {
-    q = `"${ctx.policy_number}" newer_than:1d`;
-  } else if (ctx.email) {
-    q = `("${ctx.clientFullName}" OR ${ctx.email}) newer_than:1d`;
-  } else {
-    q = `"${ctx.clientFullName}" newer_than:1d`;
-  }
+  const q = opts?.q ?? buildClientQuery(ctx, "newer_than:1d");
 
   let hits: MilestoneHit[];
   try {
