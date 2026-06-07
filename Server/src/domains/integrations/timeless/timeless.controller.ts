@@ -19,12 +19,12 @@ export const timelessController = {
 
     const payload = req.body as TimelessWebhookPayload;
 
-    logger.info({ meetingId: payload.id }, "timeless: webhook received");
+    logger.info({ meetingId: payload.id, event: payload.event }, "timeless: webhook received");
 
     res.status(200).json({ status: "ok" });
 
     await recordEvent();
-    ingestTimelessMeeting(payload.id).catch((err: unknown) =>
+    ingestTimelessMeeting(payload.id, payload.event).catch((err: unknown) =>
       logger.error({ err, meetingId: payload.id }, "timeless: ingest failed"),
     );
   },

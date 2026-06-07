@@ -171,7 +171,7 @@ export async function handleClientConfirm(
     if (!claimed) return;
 
     await createTaskChain(meetingId);
-    await notifyStaffHandoff(meetingId);
+    await notifyStaffHandoff(meetingId, {});
 
     const { idMessage } = await sendMessageWithTyping(chatId, "תודה! הסיכום אושר ונמשיך בטיפול.");
 
@@ -192,7 +192,7 @@ export async function handleClientConfirm(
   }
 }
 
-export async function createTaskChain(meetingId: string) {
+export async function createTaskChain(meetingId: string): Promise<{ created: boolean }> {
   const { data: meeting, error: meetingErr } = await supabaseAdmin
     .from("meetings")
     .select("id, client_id")
@@ -218,6 +218,19 @@ export async function createTaskChain(meetingId: string) {
     (client?.assigned_handler_id as string | null) ?? (client?.assigned_to as string | null);
   if (!assignedTo) {
     throw new NotFoundError("Staff member assigned to client");
+  }
+
+  // Idempotency guard: if tasks already exist for this meeting, skip insert
+  const { data: existingTask } = await supabaseAdmin
+    .from("tasks")
+    .select("id")
+    .eq("meeting_id", meetingId)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingTask) {
+    logger.debug({ meetingId }, "createTaskChain: tasks already exist — skipping");
+    return { created: false };
   }
 
   const now = new Date();
@@ -261,6 +274,52 @@ export async function createTaskChain(meetingId: string) {
   });
 
   logger.info({ meetingId, clientId, taskCount: tasks.length }, "createTaskChain: created");
+  return { created: true };
+}
+
+export async function assignStaffToMeeting(
+  meetingId: string,
+  staffId: string,
+  ownerChatId: string,
+): Promise<void> {
+  const { data: meeting } = await supabaseAdmin
+    .from("meetings")
+    .select("id, client_id")
+    .eq("id", meetingId)
+    .maybeSingle();
+
+  if (!meeting) {
+    await sendMessageWithTyping(ownerChatId, "❌ הפגישה לא נמצאה.");
+    return;
+  }
+
+  const { data: staff } = await supabaseAdmin
+    .from("staff")
+    .select("full_name, phone")
+    .eq("id", staffId)
+    .maybeSingle();
+
+  if (!staff) {
+    await sendMessageWithTyping(ownerChatId, "❌ העובד לא נמצא.");
+    return;
+  }
+
+  const clientId = meeting.client_id as string;
+  const fullName = staff.full_name as string;
+
+  await supabaseAdmin
+    .from("clients")
+    .update({ assigned_handler_id: staffId })
+    .eq("id", clientId);
+
+  const { created } = await createTaskChain(meetingId);
+
+  if (created) {
+    await notifyStaffHandoff(meetingId, { viaConversationalBot: true });
+    await sendMessageWithTyping(ownerChatId, `✅ הוקצה ל${fullName}`);
+  } else {
+    await sendMessageWithTyping(ownerChatId, "✅ כבר הוקצה");
+  }
 }
 
 export async function completeTask(taskId: string) {

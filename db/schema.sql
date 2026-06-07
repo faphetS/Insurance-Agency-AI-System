@@ -139,7 +139,11 @@ CREATE TABLE public.meetings (
 
   -- Added by 20260521100000_meetings_summary_notify_columns
   staff_summary_notified_at  timestamptz,
-  summary_edit_chat_id       text
+  summary_edit_chat_id       text,
+
+  -- Added by post-meeting-summary pipeline (staff-picker + client email)
+  staff_picker_sent_at       timestamptz,
+  client_summary_emailed_at  timestamptz
 );
 
 -- ============================================================

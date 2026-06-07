@@ -87,6 +87,36 @@ export async function getQrCode(): Promise<{
   );
 }
 
+export async function sendButtons(
+  chatId: string,
+  body: string,
+  buttons: { buttonId: string; buttonText: string }[],
+  footer?: string,
+): Promise<{ idMessage: string }> {
+  if (buttons.length === 0) {
+    throw new AppError(400, "buttons must have at least 1 item", "INVALID_BUTTONS");
+  }
+  for (const btn of buttons) {
+    if (btn.buttonText.length > 25) {
+      throw new AppError(
+        400,
+        `buttonText "${btn.buttonText}" exceeds 25 characters`,
+        "INVALID_BUTTON_TEXT",
+      );
+    }
+  }
+
+  return request<{ idMessage: string }>("POST", "sendInteractiveButtonsReply", {
+    chatId,
+    body,
+    footer: footer ?? "",
+    buttons: buttons.map((b) => ({
+      buttonId: b.buttonId,
+      buttonText: b.buttonText,
+    })),
+  });
+}
+
 export async function sendInteractiveButtons(
   chatId: string,
   body: string,
@@ -310,26 +340,23 @@ export async function sendInteractiveButtonsWith(
   });
 }
 
-// Convenience helper: sends a staff-facing text message via instance #2 (operational line),
-// falling back to instance #1 (env) when ops creds are unset.
+// Staff-facing text — sent via instance #1 (the conversational connection). Staff numbers
+// are blocklisted from the lead/intake flow (isStaffChat), so reusing this line is safe.
+// Instance #2 (operational line) is reserved for the lead-scanning feature only.
 export async function sendStaffMessage(
   chatId: string,
   text: string,
 ): Promise<{ idMessage: string }> {
-  const c = opsCreds();
-  return c ? sendMessageWithTypingWith(c, chatId, text) : sendMessageWithTyping(chatId, text);
+  return sendMessageWithTyping(chatId, text);
 }
 
-// Convenience helper: sends staff-facing interactive buttons via instance #2 (operational line),
-// falling back to instance #1 (env) when ops creds are unset.
+// Staff-facing buttons — sent via instance #1 (the conversational connection); staff numbers
+// are blocklisted from intake, so reusing this line is safe.
 export async function sendStaffButtons(
   chatId: string,
   body: string,
   buttons: { buttonId: string; buttonText: string }[],
   footer?: string,
 ): Promise<{ idMessage: string }> {
-  const c = opsCreds();
-  return c
-    ? sendInteractiveButtonsWith(c, chatId, body, buttons, footer)
-    : sendInteractiveButtonsWithTyping(chatId, body, buttons, footer);
+  return sendInteractiveButtonsWithTyping(chatId, body, buttons, footer);
 }

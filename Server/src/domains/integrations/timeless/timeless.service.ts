@@ -4,7 +4,10 @@ import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { AppError } from "../../../lib/errors.js";
 import { createNotification } from "../../operations/operations.service.js";
-import { notifyStaffSummaryReady } from "../../operations/operations.staff-notify.js";
+import { ensureHebrew } from "../../ai/ai.service.js";
+import { sendMessage, sendButtons } from "../../whatsapp/whatsapp.service.js";
+import { toChatId } from "../../whatsapp/whatsapp.util.js";
+import { getOwnerGmailIntegration, sendGmailEmail } from "../gmail/gmail.service.js";
 import {
   createWebhook,
   deleteWebhook,
@@ -17,6 +20,8 @@ import {
 import type { TimelessMeeting, TimelessTranscript } from "./timeless.types.js";
 
 const WEBHOOK_EVENTS = ["meeting.transcript_ready", "meeting.initial_summary_ready"];
+
+const TZ = "Asia/Jerusalem";
 
 function webhookUrl(): string {
   return `${env.BACKEND_URL}/api/integrations/timeless/webhook`;
@@ -198,6 +203,229 @@ async function parkUnmatched(
   }
 }
 
+// F6: detect summary document by title (Hebrew + English terms) with single-doc fallback
+export function resolveSummaryDoc(
+  documents: TimelessMeeting["documents"],
+): { id: string; title: string; created_at: string } | undefined {
+  const docs = documents ?? [];
+  const SUMMARY_TERMS = ["summary", "recap", "notes", "minutes", "סיכום", "תקציר"];
+  const matched = docs
+    .filter((d) => SUMMARY_TERMS.some((term) => (d.title ?? "").toLowerCase().includes(term)))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  if (matched.length > 0) return matched[0];
+  if (docs.length === 1) return docs[0];
+  return undefined;
+}
+
+function formatMeetingDate(iso: string): string {
+  return new Intl.DateTimeFormat("he-IL", {
+    timeZone: TZ,
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(iso));
+}
+
+export async function sendSummaryToOwner(meetingId: string, clientId: string): Promise<void> {
+  const chatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
+  if (!env.SUMMARY_RECIPIENT_PHONE || !chatId) {
+    logger.warn({ meetingId }, "timeless: no SUMMARY_RECIPIENT_PHONE configured — skipping owner send");
+    return;
+  }
+
+  // Load meeting data
+  const { data: meeting } = await supabaseAdmin
+    .from("meetings")
+    .select("summary_draft, scheduled_at, recording_url")
+    .eq("id", meetingId)
+    .maybeSingle();
+
+  if (!meeting || !meeting.summary_draft) {
+    logger.warn({ meetingId }, "timeless.sendSummaryToOwner: no summary_draft found");
+    return;
+  }
+
+  // Load client name
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("full_name")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  const clientName = (client?.full_name as string | null) ?? "לקוח לא ידוע";
+
+  // Guarantee Hebrew
+  const hebrew = await ensureHebrew(meeting.summary_draft as string);
+
+  // Atomic claim — only proceed if not already sent
+  const { data: claimed } = await supabaseAdmin
+    .from("meetings")
+    .update({
+      summary_final: hebrew,
+      summary_status: "sent",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", meetingId)
+    .neq("summary_status", "sent")
+    .select("id")
+    .maybeSingle();
+
+  if (!claimed) {
+    logger.debug({ meetingId }, "timeless.sendSummaryToOwner: already sent — skipping");
+    return;
+  }
+
+  // Build Hebrew WhatsApp body
+  const scheduledAt = meeting.scheduled_at as string | null;
+  const dateStr = scheduledAt ? formatMeetingDate(scheduledAt) : "תאריך לא ידוע";
+
+  let body = [
+    "📋 סיכום פגישה",
+    "",
+    `לקוח: ${clientName}`,
+    `תאריך הפגישה: ${dateStr}`,
+    "",
+    hebrew,
+  ].join("\n");
+
+  if (meeting.recording_url) {
+    body += `\n\nהקלטה: ${meeting.recording_url as string}`;
+  }
+
+  try {
+    // Send via the conversational bot (GreenAPI instance #1) — the owner's required wiring.
+    await sendMessage(chatId, body);
+    logger.info({ meetingId, clientId }, "timeless: owner summary sent");
+  } catch (err) {
+    logger.error({ err, meetingId }, "timeless.sendSummaryToOwner: send failed — reverting claim");
+    // Revert claim so next poll/event can retry
+    await supabaseAdmin
+      .from("meetings")
+      .update({ summary_status: "draft", summary_final: null })
+      .eq("id", meetingId);
+    throw err;
+  }
+}
+
+export async function sendStaffPickerToOwner(meetingId: string): Promise<void> {
+  const chatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
+  if (!chatId) {
+    logger.warn({ meetingId }, "timeless.sendStaffPickerToOwner: no SUMMARY_RECIPIENT_PHONE configured");
+    return;
+  }
+
+  const { data: staffList } = await supabaseAdmin
+    .from("staff")
+    .select("id, full_name")
+    .eq("is_active", true)
+    .order("full_name", { ascending: true });
+
+  if (!staffList || staffList.length === 0) {
+    logger.warn({ meetingId }, "timeless.sendStaffPickerToOwner: no active staff found");
+    return;
+  }
+
+  // Idempotency claim
+  const { data: claimed } = await supabaseAdmin
+    .from("meetings")
+    .update({ staff_picker_sent_at: new Date().toISOString() })
+    .eq("id", meetingId)
+    .is("staff_picker_sent_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (!claimed) {
+    logger.debug({ meetingId }, "timeless.sendStaffPickerToOwner: already sent — skipping");
+    return;
+  }
+
+  const buttons = (staffList as Array<{ id: string; full_name: string }>).map((s) => ({
+    buttonId: `assign_staff:${meetingId}:${s.id}`,
+    buttonText: String(s.full_name).slice(0, 25),
+  }));
+
+  await sendButtons(chatId, "👤 בחר/י את הגורם המטפל בלקוח:", buttons);
+}
+
+export async function sendClientSummaryEmail(meetingId: string, clientId: string): Promise<void> {
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("full_name, email")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  const email = (client?.email as string | null) ?? null;
+  if (!email) {
+    logger.info({ meetingId, clientId }, "timeless.sendClientSummaryEmail: client has no email — skipping");
+    return;
+  }
+
+  // Idempotency claim
+  const { data: claimed } = await supabaseAdmin
+    .from("meetings")
+    .update({ client_summary_emailed_at: new Date().toISOString() })
+    .eq("id", meetingId)
+    .is("client_summary_emailed_at", null)
+    .select("summary_final, summary_draft")
+    .maybeSingle();
+
+  if (!claimed) {
+    logger.debug({ meetingId }, "timeless.sendClientSummaryEmail: already sent — skipping");
+    return;
+  }
+
+  const integration = await getOwnerGmailIntegration();
+  if (!integration) {
+    logger.warn({ meetingId }, "timeless.sendClientSummaryEmail: no owner Gmail integration — reverting claim");
+    await supabaseAdmin
+      .from("meetings")
+      .update({ client_summary_emailed_at: null })
+      .eq("id", meetingId);
+    return;
+  }
+
+  const summaryFinal = (claimed as Record<string, unknown>).summary_final as string | null;
+  const summaryDraft = (claimed as Record<string, unknown>).summary_draft as string | null;
+  const hebrew = (summaryFinal ?? summaryDraft ?? "").trim();
+
+  if (!hebrew) {
+    logger.warn({ meetingId }, "timeless.sendClientSummaryEmail: no summary text — reverting claim");
+    await supabaseAdmin
+      .from("meetings")
+      .update({ client_summary_emailed_at: null })
+      .eq("id", meetingId);
+    return;
+  }
+
+  const fullName = (client?.full_name as string | null) ?? "";
+  const subject = "סיכום הפגישה שלך";
+  const body = [
+    `שלום ${fullName},`,
+    "",
+    "מצורף סיכום הפגישה שלנו:",
+    "",
+    hebrew,
+    "",
+    "בברכה,",
+    "צוות שקד",
+  ].join("\n");
+
+  try {
+    await sendGmailEmail(integration, email, subject, body);
+    logger.info({ meetingId, clientId, email }, "timeless.sendClientSummaryEmail: sent");
+  } catch (err) {
+    logger.error({ err, meetingId }, "timeless.sendClientSummaryEmail: send failed — reverting claim");
+    await supabaseAdmin
+      .from("meetings")
+      .update({ client_summary_emailed_at: null })
+      .eq("id", meetingId);
+  }
+}
+
 async function applyIngest(
   ourMeetingId: string,
   clientId: string,
@@ -211,14 +439,13 @@ async function applyIngest(
   const transcript = transcriptData ? formatTranscript(transcriptData) : null;
   const recordingUrl = recordingData?.recording_url ?? null;
 
-  let summaryDraft: string | null = null;
-  const summaryDoc = (timelessMeeting.documents ?? [])
-    .filter((d) => (d.title ?? "").toLowerCase().includes("summary"))
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  // F6: robust summary-document detection
+  let summaryRaw: string | null = null;
+  const summaryDoc = resolveSummaryDoc(timelessMeeting.documents);
 
   if (summaryDoc) {
     const doc = await getDocument(summaryDoc.id, "markdown").catch(() => null);
-    summaryDraft = doc?.content ?? null;
+    summaryRaw = doc?.content ?? null;
   }
 
   const { error } = await supabaseAdmin
@@ -226,9 +453,8 @@ async function applyIngest(
     .update({
       timeless_meeting_id: timelessMeeting.id,
       transcript,
-      summary_draft: summaryDraft,
+      summary_draft: summaryRaw,
       recording_url: recordingUrl,
-      summary_status: "draft",
       updated_at: new Date().toISOString(),
     })
     .eq("id", ourMeetingId);
@@ -238,30 +464,52 @@ async function applyIngest(
     throw new AppError(500, "Failed to update meeting with Timeless data", "TIMELESS_INGEST_FAILED");
   }
 
-  await createNotification({
-    type: "summary_ready",
-    title: "Meeting summary ready for approval",
-    message: "A meeting transcript and AI summary have arrived from Timeless.",
-    severity: "warning",
-    client_id: clientId,
-    meeting_id: ourMeetingId,
-    reference_key: `summary_ready:${ourMeetingId}`,
-  });
+  if (summaryRaw) {
+    await createNotification({
+      type: "summary_ready",
+      title: "Meeting summary ready",
+      message: "A meeting transcript and AI summary have arrived from Timeless.",
+      severity: "warning",
+      client_id: clientId,
+      meeting_id: ourMeetingId,
+      reference_key: `summary_ready:${ourMeetingId}`,
+    });
 
-  await notifyStaffSummaryReady(ourMeetingId);
+    await sendSummaryToOwner(ourMeetingId, clientId);
 
-  logger.info({ ourMeetingId, timelessId: timelessMeeting.id }, "timeless: meeting ingested");
+    // Staff-picker (to owner) + client summary email — each isolated so one failure
+    // doesn't block the others. Both are independently idempotent.
+    await sendStaffPickerToOwner(ourMeetingId).catch((err: unknown) =>
+      logger.error({ err, ourMeetingId }, "timeless: staff-picker send failed"),
+    );
+    await sendClientSummaryEmail(ourMeetingId, clientId).catch((err: unknown) =>
+      logger.error({ err, ourMeetingId }, "timeless: client summary email failed"),
+    );
+  }
+
+  logger.info({ ourMeetingId, timelessId: timelessMeeting.id, hasSummary: !!summaryRaw }, "timeless: meeting ingested");
 }
 
-export async function ingestTimelessMeeting(meetingId: string): Promise<void> {
+export async function ingestTimelessMeeting(meetingId: string, event?: string): Promise<void> {
+  // F1/F3: check for existing matched meeting (with summary back-fill support)
   const { data: existingMatch } = await supabaseAdmin
     .from("meetings")
-    .select("id")
+    .select("id, client_id, summary_draft, summary_status")
     .eq("timeless_meeting_id", meetingId)
     .maybeSingle();
 
   if (existingMatch) {
-    logger.debug({ meetingId }, "timeless.ingest: already ingested, skipping");
+    const existingSummary = (existingMatch.summary_draft as string | null | undefined) ?? "";
+    if (existingSummary.trim()) {
+      // Already fully ingested with a summary — true idempotency
+      logger.debug({ meetingId }, "timeless.ingest: already ingested with summary, skipping");
+      return;
+    }
+
+    // Back-fill: matched but summary_draft is empty — re-fetch and try to capture the summary
+    logger.info({ meetingId, event }, "timeless.ingest: back-filling summary for already-matched meeting");
+    const timelessMeeting = await getMeeting(meetingId, "documents");
+    await applyIngest(existingMatch.id as string, existingMatch.client_id as string, timelessMeeting);
     return;
   }
 
@@ -281,9 +529,14 @@ export async function ingestTimelessMeeting(meetingId: string): Promise<void> {
 
   const candidates = await fetchCandidates(timelessMeeting.start_time);
   const staffEmails = await fetchStaffEmails();
+
+  // F2: null-guard participant emails
   const participantEmails = new Set(
-    timelessMeeting.participants.map((p) => p.email.toLowerCase()),
+    timelessMeeting.participants
+      .filter((p) => p?.email)
+      .map((p) => p.email.toLowerCase()),
   );
+
   const tTime = new Date(timelessMeeting.start_time).getTime();
 
   type ScoredCandidate = MeetingCandidate & { score: number };
@@ -291,7 +544,8 @@ export async function ingestTimelessMeeting(meetingId: string): Promise<void> {
   const scored: ScoredCandidate[] = candidates.map((c) => {
     let score = 0;
     if (c.client_email && participantEmails.has(c.client_email.toLowerCase())) score += 10;
-    if (timelessMeeting.host && staffEmails.has(timelessMeeting.host.email.toLowerCase())) score += 5;
+    // F2: null-guard host email
+    if (timelessMeeting.host?.email && staffEmails.has(timelessMeeting.host.email.toLowerCase())) score += 5;
     const diffMin = Math.abs(new Date(c.scheduled_at).getTime() - tTime) / 60_000;
     if (diffMin <= 5) score += 5;
     else if (diffMin <= 15) score += 2;
@@ -301,18 +555,24 @@ export async function ingestTimelessMeeting(meetingId: string): Promise<void> {
     return { ...c, score };
   });
 
-  scored.sort((a, b) => b.score - a.score);
-  const top = scored[0];
-  const runnerUp = scored[1];
+  // F7: hard email gate — only auto-match candidates whose client_email is in participantEmails
+  const emailMatched = scored.filter(
+    (c) => c.client_email && participantEmails.has(c.client_email.toLowerCase()),
+  );
 
-  if (!top || top.score < 10) {
+  if (emailMatched.length === 0) {
     const reason: UnmatchedReason = candidates.length === 0 ? "no_candidates" : "low_score";
     await parkUnmatched(timelessMeeting, reason, scored.slice(0, 3).map((c) => c.id));
     return;
   }
 
+  // Among email-matched candidates, keep existing scoring for ranking
+  emailMatched.sort((a, b) => b.score - a.score);
+  const top = emailMatched[0];
+  const runnerUp = emailMatched[1];
+
   if (runnerUp && top.score - runnerUp.score < 5) {
-    await parkUnmatched(timelessMeeting, "ambiguous", scored.slice(0, 3).map((c) => c.id));
+    await parkUnmatched(timelessMeeting, "ambiguous", emailMatched.slice(0, 3).map((c) => c.id));
     return;
   }
 

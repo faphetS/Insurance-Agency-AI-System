@@ -36,12 +36,16 @@ async function runPoll(): Promise<void> {
 
   const { data: alreadyIngested } = await supabaseAdmin
     .from("meetings")
-    .select("timeless_meeting_id")
+    .select("timeless_meeting_id, summary_draft")
     .in("timeless_meeting_id", timelessIds)
     .not("timeless_meeting_id", "is", null);
 
+  // Only exclude meetings that already have a non-empty summary_draft; back-fill the rest
+  type IngestedRow = { timeless_meeting_id: string; summary_draft?: string | null };
   const ingestedSet = new Set(
-    (alreadyIngested ?? []).map((r: any) => r.timeless_meeting_id as string),
+    ((alreadyIngested ?? []) as IngestedRow[])
+      .filter((r) => r.summary_draft && r.summary_draft.trim())
+      .map((r) => r.timeless_meeting_id),
   );
 
   const toIngest = timelessIds.filter((id) => !ingestedSet.has(id));

@@ -74,6 +74,8 @@ const envSchema = z.object({
 
   // Timeless.day (meeting recording + transcripts)
   TIMELESS_API_KEY: z.string().optional(),
+  // The single WhatsApp number that receives the Hebrew meeting summary (owner line).
+  SUMMARY_RECIPIENT_PHONE: z.string().optional(),
 
   // Provider toggles — set to "stub" to disable live API calls
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),

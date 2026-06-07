@@ -7,6 +7,7 @@ import type { GmailIntegration, ParsedEmail } from "./gmail.types.js";
 
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send",
 ];
 
 function createOAuth2Client() {
@@ -126,6 +127,69 @@ export async function getValidAccessToken(integration: GmailIntegration): Promis
   }
 
   return credentials.access_token;
+}
+
+export async function getAuthenticatedGmailClient(integration: GmailIntegration) {
+  const accessToken = await getValidAccessToken(integration);
+  const client = createOAuth2Client();
+  client.setCredentials({ access_token: accessToken });
+  return google.gmail({ version: "v1", auth: client });
+}
+
+export async function sendGmailEmail(
+  integration: GmailIntegration,
+  to: string,
+  subject: string,
+  bodyText: string,
+): Promise<{ id: string }> {
+  const encodedSubject = `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
+  const encodedBody = Buffer.from(bodyText, "utf8").toString("base64");
+
+  const raw = [
+    `From: ${integration.email}`,
+    `To: ${to}`,
+    `Subject: ${encodedSubject}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    encodedBody,
+  ].join("\r\n");
+
+  const rawBase64url = Buffer.from(raw, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+
+  const gmail = await getAuthenticatedGmailClient(integration);
+  const res = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw: rawBase64url },
+  });
+
+  return { id: res.data.id ?? "" };
+}
+
+export async function getOwnerGmailIntegration(): Promise<GmailIntegration | null> {
+  const { data: ownerStaff } = await supabaseAdmin
+    .from("staff")
+    .select("id")
+    .eq("role", "owner")
+    .eq("is_active", true)
+    .limit(1)
+    .maybeSingle();
+
+  if (!ownerStaff) return null;
+
+  const { data: integration } = await supabaseAdmin
+    .from("gmail_integrations")
+    .select("*")
+    .eq("staff_id", (ownerStaff as { id: string }).id)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  return (integration as GmailIntegration | null) ?? null;
 }
 
 export async function countUnreadEmails(staffId: string): Promise<number> {

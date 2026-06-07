@@ -38,6 +38,20 @@ vi.mock("./timeless.client.js", () => ({
   getDocument: vi.fn(),
 }));
 
+vi.mock("../../ai/ai.service.js", () => ({
+  isHebrew: vi.fn().mockReturnValue(true),
+  ensureHebrew: vi.fn().mockResolvedValue("mock hebrew"),
+  generateReply: vi.fn().mockResolvedValue("mock reply"),
+}));
+
+vi.mock("../../whatsapp/whatsapp.service.js", () => ({
+  sendStaffMessage: vi.fn().mockResolvedValue({ idMessage: "mock-id" }),
+}));
+
+vi.mock("../../whatsapp/whatsapp.util.js", () => ({
+  toChatId: vi.fn().mockReturnValue("972500000000@c.us"),
+}));
+
 import { verifySignature } from "./timeless.service.js";
 import { AppError } from "../../../lib/errors.js";
 

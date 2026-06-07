@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { sendStaffMessage } from "../whatsapp/whatsapp.service.js";
+import { sendStaffMessage, sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { getSignedDocUrl } from "../../lib/storage.js";
 import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
@@ -15,7 +15,10 @@ async function resolveDocLink(stored: string | null | undefined): Promise<string
   return getSignedDocUrl(stored, SIGNED_TTL);
 }
 
-export async function notifyStaffHandoff(meetingId: string): Promise<void> {
+export async function notifyStaffHandoff(
+  meetingId: string,
+  opts: { viaConversationalBot?: boolean } = {},
+): Promise<void> {
   try {
     const { data: meeting } = await supabaseAdmin
       .from("meetings")
@@ -102,7 +105,11 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
       taskLines,
     ].join("\n");
 
-    await sendStaffMessage(chatId, body);
+    if (opts.viaConversationalBot) {
+      await sendMessageWithTyping(chatId, body);
+    } else {
+      await sendStaffMessage(chatId, body);
+    }
     logger.info({ meetingId, staffId }, "notifyStaffHandoff: sent");
   } catch (err) {
     logger.error({ err, meetingId }, "notifyStaffHandoff: unexpected error");

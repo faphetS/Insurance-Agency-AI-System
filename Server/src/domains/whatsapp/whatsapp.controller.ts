@@ -4,7 +4,7 @@ import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { handleIncomingMessage } from "../ai/ai.orchestrator.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
-import { finalizeSummary, handleClientConfirm } from "../operations/operations.service.js";
+import { finalizeSummary, handleClientConfirm, assignStaffToMeeting } from "../operations/operations.service.js";
 import * as whatsappService from "./whatsapp.service.js";
 import {
   incomingMessageSchema,
@@ -13,7 +13,7 @@ import {
   extractPayload,
   clixToInternal,
 } from "./whatsapp.validator.js";
-import { isStaffChat, extractButtonId } from "./whatsapp.util.js";
+import { isStaffChat, extractButtonId, toChatId } from "./whatsapp.util.js";
 import { wantsHuman, handleHumanEscalation } from "./whatsapp.escalation.js";
 
 export const whatsappController = {
@@ -194,6 +194,27 @@ export const whatsappController = {
 
     // Derive phone from chatId (format: "1234567890@c.us" or "group@g.us")
     const contactPhone = chatId.split("@")[0] ?? chatId;
+
+    // The owner number is OPERATIONAL-ONLY: it must never enter the lead/intake
+    // conversational flow (no info collection, no auto-reply). Handle its operational
+    // buttons (staff assignment) and silently ignore anything else. Gated on the
+    // configured owner/summary-recipient number so it works even when that number is
+    // not a staff row (e.g. the testing number).
+    const ownerChatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
+    if (ownerChatId && chatId === ownerChatId) {
+      res.status(200).json({ ok: true });
+      const assignMatch = /^assign_staff:([^:]+):([^:]+)$/.exec(extractButtonId(webhookBody));
+      if (assignMatch) {
+        setImmediate(() =>
+          assignStaffToMeeting(assignMatch[1]!, assignMatch[2]!, chatId).catch((err: unknown) =>
+            logger.error({ err, chatId }, "assignStaffToMeeting failed"),
+          ),
+        );
+      } else {
+        logger.info({ chatId }, "owner message ignored — operational-only number (no lead/intake)");
+      }
+      return;
+    }
 
     // Staff intercept — if this chat belongs to a staff member, handle separately
     const staff = await isStaffChat(chatId);

@@ -68,6 +68,7 @@ export interface TimelessWebhook {
 
 export interface TimelessWebhookPayload {
   id: string;
+  event?: string;
   [key: string]: unknown;
 }
 

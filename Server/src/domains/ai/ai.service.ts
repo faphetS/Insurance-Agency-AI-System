@@ -6,6 +6,22 @@ import { AppError } from "../../lib/errors.js";
 const openai = new OpenAI({ apiKey: env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api/v1" });
 const FALLBACK_MODEL = "google/gemini-2.5-flash";
 
+export function isHebrew(text: string): boolean {
+  if (!text || !text.trim()) return false;
+  const hebrew = (text.match(/[ְ-׿]/g) ?? []).length;
+  const latin = (text.match(/[A-Za-z]/g) ?? []).length;
+  return hebrew > 0 && hebrew >= latin;
+}
+
+export async function ensureHebrew(text: string): Promise<string> {
+  if (isHebrew(text)) return text;
+  const systemPrompt =
+    "Translate the following meeting summary to natural Hebrew. " +
+    "Preserve the structure, line breaks, and bullet points exactly. " +
+    "Output ONLY the Hebrew translation with no preamble, explanation, or additional text.";
+  return generateReply([{ role: "user", text }], systemPrompt, "google/gemini-2.5-flash");
+}
+
 export interface ChatTurn {
   role: "user" | "model";
   text: string;
