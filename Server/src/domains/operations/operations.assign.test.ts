@@ -101,7 +101,7 @@ describe("assignStaffToMeeting", () => {
   it("happy path: updates client, calls notifyStaffHandoff, sends הוקצה reply", async () => {
     const meetingBuilder = makeBuilder({ data: { id: MEETING_ID, client_id: CLIENT_ID }, error: null });
     const staffBuilder = makeBuilder({ data: { full_name: "אריאל כהן", phone: "0501234567" }, error: null });
-    const clientUpdateBuilder = makeBuilder({ data: null, error: null });
+    const clientUpdateBuilder = makeBuilder({ data: { id: CLIENT_ID }, error: null }); // first-tap claim wins
     // createTaskChain needs: meetings.select, clients.select, tasks.select (no existing), tasks.insert, clients.update, notifications.upsert
     const meetingForChainBuilder = makeBuilder({ data: { id: MEETING_ID, client_id: CLIENT_ID }, error: null });
     const clientForChainBuilder = makeBuilder({ data: { assigned_to: STAFF_ID, assigned_handler_id: null }, error: null });
@@ -124,9 +124,11 @@ describe("assignStaffToMeeting", () => {
 
     await assignStaffToMeeting(MEETING_ID, STAFF_ID, OWNER_CHAT_ID);
 
-    // Client assigned_handler_id updated
+    // Client assigned_handler_id claimed atomically (only when currently null)
     const clientUpdateFn = clientUpdateBuilder["update"] as ReturnType<typeof vi.fn>;
     expect(clientUpdateFn).toHaveBeenCalledWith({ assigned_handler_id: STAFF_ID });
+    const clientIsFn = clientUpdateBuilder["is"] as ReturnType<typeof vi.fn>;
+    expect(clientIsFn).toHaveBeenCalledWith("assigned_handler_id", null);
 
     // notifyStaffHandoff called with viaConversationalBot: true
     expect(mockNotifyStaffHandoff).toHaveBeenCalledOnce();
@@ -139,22 +141,21 @@ describe("assignStaffToMeeting", () => {
     expect(message).toContain("הוקצה");
   });
 
-  it("double-tap / already assigned: does NOT call notifyStaffHandoff, reply contains כבר הוקצה", async () => {
+  it("already assigned (claim fails): no overwrite, no notifyStaffHandoff, reply names the current handler", async () => {
     const meetingBuilder = makeBuilder({ data: { id: MEETING_ID, client_id: CLIENT_ID }, error: null });
     const staffBuilder = makeBuilder({ data: { full_name: "דנה לוי", phone: "0509876543" }, error: null });
-    const clientUpdateBuilder = makeBuilder({ data: null, error: null });
-    // createTaskChain: meeting + client exist, but existing task found → created: false
-    const meetingForChainBuilder = makeBuilder({ data: { id: MEETING_ID, client_id: CLIENT_ID }, error: null });
-    const clientForChainBuilder = makeBuilder({ data: { assigned_to: STAFF_ID, assigned_handler_id: null }, error: null });
-    const existingTaskBuilder = makeBuilder({ data: { id: "task-existing" }, error: null }); // task exists
+    // Atomic claim fails — a handler is already set, so 0 rows updated
+    const claimBuilder = makeBuilder({ data: null, error: null });
+    // Look up the current handler to report it back
+    const currentClientBuilder = makeBuilder({ data: { assigned_handler_id: "existing-staff" }, error: null });
+    const currentStaffBuilder = makeBuilder({ data: { full_name: "מירב ששון" }, error: null });
 
     setupFromSequence([
-      meetingBuilder,
-      staffBuilder,
-      clientUpdateBuilder,
-      meetingForChainBuilder,
-      clientForChainBuilder,
-      existingTaskBuilder,
+      meetingBuilder,        // meetings.select
+      staffBuilder,          // staff.select
+      claimBuilder,          // clients.update atomic claim → fails
+      currentClientBuilder,  // clients.select assigned_handler_id
+      currentStaffBuilder,   // staff.select full_name (current handler)
     ]);
 
     await assignStaffToMeeting(MEETING_ID, STAFF_ID, OWNER_CHAT_ID);
@@ -164,6 +165,7 @@ describe("assignStaffToMeeting", () => {
     const [chatId, message] = mockSendMessageWithTyping.mock.calls[0] as [string, string];
     expect(chatId).toBe(OWNER_CHAT_ID);
     expect(message).toContain("כבר הוקצה");
+    expect(message).toContain("מירב ששון"); // reports the existing handler, not the re-tapped staff
   });
 
   it("staff not found: replies with ❌ העובד לא נמצא, no task chain, no handoff", async () => {

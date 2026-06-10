@@ -307,19 +307,44 @@ export async function assignStaffToMeeting(
   const clientId = meeting.client_id as string;
   const fullName = staff.full_name as string;
 
-  await supabaseAdmin
+  // First-tap-wins: atomically claim the assignment only if no handler is set yet.
+  // Concurrent or duplicate taps (including the incoming+outgoing self-chat double-fire)
+  // race on this conditional update — exactly one wins and triggers the chain + handoff;
+  // the rest leave the assignment untouched and just report who it's already assigned to.
+  const { data: claimed } = await supabaseAdmin
     .from("clients")
     .update({ assigned_handler_id: staffId })
-    .eq("id", clientId);
+    .eq("id", clientId)
+    .is("assigned_handler_id", null)
+    .select("id")
+    .maybeSingle();
 
-  const { created } = await createTaskChain(meetingId);
-
-  if (created) {
-    await notifyStaffHandoff(meetingId, { viaConversationalBot: true });
-    await sendMessageWithTyping(ownerChatId, `✅ הוקצה ל${fullName}`);
-  } else {
-    await sendMessageWithTyping(ownerChatId, "✅ כבר הוקצה");
+  if (!claimed) {
+    const { data: cur } = await supabaseAdmin
+      .from("clients")
+      .select("assigned_handler_id")
+      .eq("id", clientId)
+      .maybeSingle();
+    const currentId = (cur?.assigned_handler_id as string | null) ?? null;
+    let currentName = "";
+    if (currentId) {
+      const { data: curStaff } = await supabaseAdmin
+        .from("staff")
+        .select("full_name")
+        .eq("id", currentId)
+        .maybeSingle();
+      currentName = (curStaff?.full_name as string | null) ?? "";
+    }
+    await sendMessageWithTyping(
+      ownerChatId,
+      currentName ? `✅ כבר הוקצה ל${currentName}` : "✅ כבר הוקצה",
+    );
+    return;
   }
+
+  await createTaskChain(meetingId);
+  await notifyStaffHandoff(meetingId, { viaConversationalBot: true });
+  await sendMessageWithTyping(ownerChatId, `✅ הוקצה ל${fullName}`);
 }
 
 export async function completeTask(taskId: string) {
