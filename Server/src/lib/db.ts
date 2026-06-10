@@ -440,8 +440,10 @@ export class QueryBuilder {
     let offsetClause = "";
 
     if (this._isSingle || this._isMaybeSingle) {
-      // Fetch at most 2 rows so we can detect ambiguity for .single()
-      limitClause = "LIMIT 2";
+      // Honor an explicit .limit() — e.g. .limit(1).maybeSingle() means "first
+      // match or null" and must NOT error when many rows match. Only fall back to
+      // LIMIT 2 (ambiguity detection) when no explicit limit was chained.
+      limitClause = this._limit !== null ? `LIMIT ${this._limit}` : "LIMIT 2";
     } else if (this._limit !== null) {
       limitClause = `LIMIT ${this._limit}`;
     }
