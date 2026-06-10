@@ -109,7 +109,7 @@ export async function sendButtons(
   return request<{ idMessage: string }>("POST", "sendInteractiveButtonsReply", {
     chatId,
     body,
-    footer: footer ?? "",
+    ...(footer ? { footer } : {}),
     buttons: buttons.map((b) => ({
       buttonId: b.buttonId,
       buttonText: b.buttonText,
@@ -139,7 +139,7 @@ export async function sendInteractiveButtons(
   return request<{ idMessage: string }>("POST", "sendInteractiveButtonsReply", {
     chatId,
     body,
-    footer: footer ?? "",
+    ...(footer ? { footer } : {}),
     buttons: buttons.map((b) => ({
       buttonId: b.buttonId,
       buttonText: b.buttonText,
@@ -332,7 +332,7 @@ export async function sendInteractiveButtonsWith(
   return requestWith<{ idMessage: string }>(creds, "POST", "sendInteractiveButtonsReply", {
     chatId,
     body,
-    footer: footer ?? "",
+    ...(footer ? { footer } : {}),
     buttons: buttons.map((b) => ({
       buttonId: b.buttonId,
       buttonText: b.buttonText,
