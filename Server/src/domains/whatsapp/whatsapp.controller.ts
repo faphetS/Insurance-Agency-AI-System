@@ -119,6 +119,25 @@ export const whatsappController = {
         return;
       }
 
+      // Owner self-chat: when SUMMARY_RECIPIENT_PHONE is the bot's own WhatsApp line,
+      // a staff-picker button tapped in "Note-to-Self" arrives as an OUTGOING message
+      // (the bot's number sending to itself). Treat it as the owner's assignment action,
+      // mirroring the incoming owner block. In production the owner is a separate phone,
+      // so its taps arrive as incoming and this branch is simply never taken.
+      const ownerChatIdOut = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
+      if (ownerChatIdOut && outChatId === ownerChatIdOut) {
+        const assignMatch = /^assign_staff:([^:]+):([^:]+)$/.exec(extractButtonId(webhookBody));
+        if (assignMatch) {
+          res.status(200).json({ ok: true });
+          setImmediate(() =>
+            assignStaffToMeeting(assignMatch[1]!, assignMatch[2]!, outChatId).catch((err: unknown) =>
+              logger.error({ err, chatId: outChatId }, "assignStaffToMeeting (self-chat outgoing) failed"),
+            ),
+          );
+          return;
+        }
+      }
+
       // Check if this outgoing message was sent by our bot — don't self-pause
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const idMessage = outboundResult.data.idMessage ?? (webhookBody as Record<string, any>)?.idMessage;
