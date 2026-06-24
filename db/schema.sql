@@ -377,6 +377,32 @@ CREATE TABLE public.timeless_unmatched_meetings (
 );
 
 -- ============================================================
+-- 15. COMMITMENTS
+--     Tracks outgoing/incoming commitments extracted from WhatsApp
+--     self-chat scans. fire_at drives the scheduled reminder job;
+--     source_message_id enables idempotent dedup per GreenAPI message.
+-- ============================================================
+CREATE TABLE public.commitments (
+  id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  chat_id           text        NOT NULL,
+  contact_name      text,
+  direction         text        NOT NULL CHECK (direction IN ('outgoing', 'incoming')),
+  source_message_id text,
+  source_text       text        NOT NULL,
+  commitment_text   text        NOT NULL,
+  counterparty      text,
+  due_date          date,
+  due_time          time,
+  kind              text        NOT NULL CHECK (kind IN ('timed', 'date_only', 'floating')),
+  fire_at           timestamptz NOT NULL,
+  status            text        NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'sent', 'cancelled')),
+  sent_at           timestamptz,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now()
+);
+
+-- ============================================================
 -- DEFERRED FOREIGN KEY: meetings.conversation_id → conversations
 -- Added after both tables exist (meetings refs conversations
 -- which was created in the same migration batch, but meetings
@@ -482,6 +508,14 @@ CREATE INDEX idx_timeless_unmatched_created
   ON public.timeless_unmatched_meetings (created_at DESC)
   WHERE resolved_at IS NULL;
 
+-- Commitments table indexes
+CREATE UNIQUE INDEX idx_commitments_source_message_id_unique
+  ON public.commitments (source_message_id)
+  WHERE source_message_id IS NOT NULL;
+
+CREATE INDEX idx_commitments_status_fire_at
+  ON public.commitments (status, fire_at);
+
 -- ============================================================
 -- TRIGGERS — handle_updated_at
 -- Preserves the trigger from the initial schema on the tables
@@ -514,6 +548,10 @@ CREATE TRIGGER set_updated_at
 
 CREATE TRIGGER set_updated_at
   BEFORE UPDATE ON public.tasks
+  FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+CREATE TRIGGER set_updated_at
+  BEFORE UPDATE ON public.commitments
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 -- ============================================================

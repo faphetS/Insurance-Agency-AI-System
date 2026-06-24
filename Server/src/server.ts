@@ -6,6 +6,7 @@ import { ensureClientDocumentsBucket } from "./lib/storage.js";
 import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeless.service.js";
 import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
 import { startDailyDigestCron } from "./domains/operations/operations.digest.js";
+import { startCommitmentCrons } from "./domains/commitments/commitments.service.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import {
@@ -167,6 +168,7 @@ const server = app.listen(env.PORT, () => {
   // live WhatsApp messages, mutating prod data, or overwriting production webhooks)
   if (isPublicWebhook) {
     startDailyDigestCron();
+    startCommitmentCrons();
 
     // Calendar sync: initial run after 30s, then every 3 minutes
     setTimeout(() => {

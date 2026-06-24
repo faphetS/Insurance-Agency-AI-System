@@ -54,6 +54,8 @@ const envSchema = z.object({
   // OpenRouter AI
   OPENROUTER_API_KEY: z.string().min(1),
   AI_MODEL: z.string().default("google/gemini-3.1-pro-preview"),
+  // AI model used for commitment extraction and composition (lighter model preferred)
+  COMMITMENT_AI_MODEL: z.string().default("google/gemini-3.1-flash-lite"),
 
   // Google Calendar (OAuth 2.0)
   GOOGLE_CLIENT_ID: z.string().min(1),
