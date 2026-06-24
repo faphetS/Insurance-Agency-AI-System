@@ -4,9 +4,11 @@
  * Drives handleIntake() through all slots (welcome → full_name → email →
  * inquiry_type → id_photo → poa → done) against a real throwaway Postgres DB
  * (insurance_test). All external I/O is mocked:
- *   - ai.service  (classifyIntakeResponse, analyzeImage, classifyComplexity)
+ *   - ai.service  (classifyIntakeResponse, validateIdPhoto, classifyComplexity)
  *   - whatsapp.service (sendMessageWithTyping, sendInteractiveButtonsWithTyping)
- *   - lib/storage (persistRemoteFile)
+ *   - lib/storage (fetchRemoteFile)
+ *   - domains/integrations/google/google.drive (uploadLeadDocument)
+ *   - domains/integrations/google/leads-mirror.service (mirrorLeadToSheet)
  *   - operations.service (createNotification) — fire-and-forget side effect
  */
 
@@ -19,7 +21,7 @@ import { randomUUID } from "node:crypto";
 
 vi.mock("../../domains/ai/ai.service.js", () => ({
   classifyIntakeResponse: vi.fn(),
-  analyzeImage: vi.fn(),
+  validateIdPhoto: vi.fn(),
   classifyComplexity: vi.fn(),
 }));
 
@@ -31,8 +33,15 @@ vi.mock("../../domains/whatsapp/whatsapp.service.js", () => ({
 }));
 
 vi.mock("../../lib/storage.js", () => ({
-  persistRemoteFile: vi.fn(),
-  extFor: vi.fn().mockReturnValue("jpg"),
+  fetchRemoteFile: vi.fn(),
+}));
+
+vi.mock("../../domains/integrations/google/google.drive.js", () => ({
+  uploadLeadDocument: vi.fn(),
+}));
+
+vi.mock("../../domains/integrations/google/leads-mirror.service.js", () => ({
+  mirrorLeadToSheet: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../domains/operations/operations.service.js", () => ({
@@ -50,21 +59,23 @@ import { pool } from "../../lib/db.js";
 import type { MessagePayload } from "../../domains/whatsapp/whatsapp.validator.js";
 import {
   classifyIntakeResponse,
-  analyzeImage,
+  validateIdPhoto,
   classifyComplexity,
 } from "../../domains/ai/ai.service.js";
 import { sendMessageWithTyping } from "../../domains/whatsapp/whatsapp.service.js";
-import { persistRemoteFile } from "../../lib/storage.js";
+import { fetchRemoteFile } from "../../lib/storage.js";
+import { uploadLeadDocument } from "../../domains/integrations/google/google.drive.js";
 
 // ---------------------------------------------------------------------------
 // Typed cast helpers for vi mocks
 // ---------------------------------------------------------------------------
 
 const mockClassify = classifyIntakeResponse as ReturnType<typeof vi.fn>;
-const mockAnalyzeImage = analyzeImage as ReturnType<typeof vi.fn>;
+const mockValidateIdPhoto = validateIdPhoto as ReturnType<typeof vi.fn>;
 const mockClassifyComplexity = classifyComplexity as ReturnType<typeof vi.fn>;
 const mockSendMsg = sendMessageWithTyping as ReturnType<typeof vi.fn>;
-const mockPersistFile = persistRemoteFile as ReturnType<typeof vi.fn>;
+const mockFetchRemoteFile = fetchRemoteFile as ReturnType<typeof vi.fn>;
+const mockUploadLeadDocument = uploadLeadDocument as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Seed / teardown helpers
@@ -242,11 +253,15 @@ describe("intake.orchestrator — full slot flow", () => {
     expect(rows[0]?.intake_current_slot).toBe("id_photo");
   });
 
-  it("id_photo slot: valid image passes OCR, persists file, advances to poa", async () => {
-    mockAnalyzeImage.mockResolvedValueOnce(
-      JSON.stringify({ valid: true, reason: "תעודת זהות תקינה" }),
-    );
-    mockPersistFile.mockResolvedValueOnce("clients/test/id_photo_123.jpg");
+  it("id_photo slot: valid image passes OCR, uploads to Drive, advances to poa", async () => {
+    const idWebViewLink = "https://drive.google.com/file/d/drive-id-1/view";
+    mockValidateIdPhoto.mockResolvedValueOnce({
+      valid: true,
+      reason: "תעודת זהות תקינה",
+      idNumber: "123456789",
+    });
+    mockFetchRemoteFile.mockResolvedValueOnce(Buffer.from("fake-bytes"));
+    mockUploadLeadDocument.mockResolvedValueOnce({ fileId: "drive-id-1", webViewLink: idWebViewLink });
 
     const result = await handleIntake(
       seeds.conversationId,
@@ -256,39 +271,39 @@ describe("intake.orchestrator — full slot flow", () => {
     );
 
     expect(result.consumed).toBe(true);
-    expect(mockAnalyzeImage).toHaveBeenCalledWith(
-      "https://example.com/fake-id.jpg",
-      expect.stringContaining("government-issued ID"),
-    );
-    expect(mockPersistFile).toHaveBeenCalledWith(
-      "https://example.com/fake-id.jpg",
-      expect.stringContaining("id_photo_"),
-      "image/jpeg",
+    expect(mockValidateIdPhoto).toHaveBeenCalledWith("https://example.com/fake-id.jpg");
+    expect(mockUploadLeadDocument).toHaveBeenCalledOnce();
+    expect(mockUploadLeadDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ name: expect.stringMatching(/ - ID$/), mimeType: "image/jpeg" }),
     );
 
     const { rows } = await pool.query<{
       id_photo_url: string;
       id_validated: boolean;
+      id_number: string | null;
       intake_current_slot: string;
     }>(
-      `SELECT id_photo_url, id_validated, intake_current_slot FROM clients WHERE id = $1`,
+      `SELECT id_photo_url, id_validated, id_number, intake_current_slot FROM clients WHERE id = $1`,
       [seeds.clientId],
     );
-    expect(rows[0]?.id_photo_url).toBe("clients/test/id_photo_123.jpg");
+    expect(rows[0]?.id_photo_url).toBe(idWebViewLink);
     expect(rows[0]?.id_validated).toBe(true);
+    expect(rows[0]?.id_number).toBe("123456789");
     expect(rows[0]?.intake_current_slot).toBe("poa");
 
-    // Document row persisted
+    // Document row persisted with Drive webViewLink
     const { rows: docRows } = await pool.query(
       `SELECT type, file_url FROM documents WHERE client_id = $1 AND type = 'id_photo'`,
       [seeds.clientId],
     );
     expect(docRows.length).toBeGreaterThan(0);
-    expect(docRows[0]?.file_url).toBe("clients/test/id_photo_123.jpg");
+    expect(docRows[0]?.file_url).toBe(idWebViewLink);
   });
 
-  it("poa slot: document upload persists poa_doc_url and finalizes intake", async () => {
-    mockPersistFile.mockResolvedValueOnce("clients/test/poa_456.pdf");
+  it("poa slot: document upload to Drive persists poa_doc_url and finalizes intake", async () => {
+    const poaWebViewLink = "https://drive.google.com/file/d/drive-poa-1/view";
+    mockFetchRemoteFile.mockResolvedValueOnce(Buffer.from("fake-poa-bytes"));
+    mockUploadLeadDocument.mockResolvedValueOnce({ fileId: "drive-poa-1", webViewLink: poaWebViewLink });
     mockClassifyComplexity.mockResolvedValueOnce("simple");
 
     const poaPayload: MessagePayload = {
@@ -307,10 +322,8 @@ describe("intake.orchestrator — full slot flow", () => {
     );
 
     expect(result.consumed).toBe(true);
-    expect(mockPersistFile).toHaveBeenCalledWith(
-      "https://example.com/poa.pdf",
-      expect.stringContaining("poa_"),
-      "application/pdf",
+    expect(mockUploadLeadDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ name: expect.stringMatching(/ - POA$/) }),
     );
 
     // Read final client state
@@ -326,18 +339,19 @@ describe("intake.orchestrator — full slot flow", () => {
        FROM clients WHERE id = $1`,
       [seeds.clientId],
     );
-    expect(rows[0]?.poa_doc_url).toBe("clients/test/poa_456.pdf");
+    expect(rows[0]?.poa_doc_url).toBe(poaWebViewLink);
     expect(rows[0]?.intake_state).toBe("completed");
     expect(rows[0]?.intake_current_slot).toBe("done");
     expect(rows[0]?.intake_completed_at).not.toBeNull();
     expect(rows[0]?.pipeline_stage).toBe("meeting_scheduling");
 
-    // POA document row
+    // POA document row with Drive webViewLink
     const { rows: docRows } = await pool.query(
-      `SELECT type FROM documents WHERE client_id = $1 AND type = 'poa'`,
+      `SELECT type, file_url FROM documents WHERE client_id = $1 AND type = 'poa'`,
       [seeds.clientId],
     );
     expect(docRows.length).toBeGreaterThan(0);
+    expect(docRows[0]?.file_url).toBe(poaWebViewLink);
 
     // Pending meeting row created by finalize()
     const { rows: meetingRows } = await pool.query(
@@ -421,8 +435,12 @@ describe("intake.orchestrator — poa skip", () => {
     seeds = await seed();
     mockSendMsg.mockResolvedValue({ idMessage: "setup-id" });
     mockClassify.mockResolvedValue({ valid: true, extracted: "Test Lead" });
-    mockAnalyzeImage.mockResolvedValue(JSON.stringify({ valid: true, reason: "ok" }));
-    mockPersistFile.mockResolvedValue("clients/test/id_skip.jpg");
+    mockValidateIdPhoto.mockResolvedValue({ valid: true, reason: "ok", idNumber: undefined });
+    mockFetchRemoteFile.mockResolvedValue(Buffer.from("fake-bytes"));
+    mockUploadLeadDocument.mockResolvedValue({
+      fileId: "drive-skip-1",
+      webViewLink: "https://drive.google.com/file/d/drive-skip-1/view",
+    });
     mockClassifyComplexity.mockResolvedValue("simple");
 
     // Drive through welcome → full_name → email → inquiry_type → id_photo
