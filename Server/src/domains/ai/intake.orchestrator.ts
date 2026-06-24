@@ -14,7 +14,9 @@ import {
 } from "./intake.prompts.js";
 import { validateIdPhoto, classifyComplexity, classifyIntakeResponse } from "./ai.service.js";
 import { createNotification } from "../operations/operations.service.js";
-import { persistRemoteFile, extFor } from "../../lib/storage.js";
+import { fetchRemoteFile } from "../../lib/storage.js";
+import { uploadLeadDocument } from "../integrations/google/google.drive.js";
+import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
 
 // ---------------------------------------------------------------------------
 // Type helpers — the DB types file predates the migration; cast as needed
@@ -230,6 +232,12 @@ async function finalize(
     logger.error({ conversationId, err }, "intake: failed to send done message");
   }
 
+  try {
+    await mirrorLeadToSheet(clientId);
+  } catch (err) {
+    logger.error({ err, clientId }, "finalize: lead sheet mirror failed");
+  }
+
   await supabaseAdmin
     .from("conversations")
     .update({ bot_paused: true })
@@ -238,20 +246,6 @@ async function finalize(
   logger.info({ conversationId, clientId }, "intake: completed");
 }
 
-async function persistIntakeFile(
-  clientId: string,
-  kind: "id_photo" | "poa",
-  payload: Extract<MessagePayload, { kind: "image" | "document" }>,
-): Promise<string | null> {
-  const ext = extFor(payload.mimeType, payload.fileName);
-  const destPath = `clients/${clientId}/${kind}_${Date.now()}.${ext}`;
-  const stored = await persistRemoteFile(payload.fileUrl, destPath, payload.mimeType);
-  if (!stored) {
-    logger.warn({ clientId, kind }, "intake: file persist failed");
-    return null;
-  }
-  return stored;
-}
 
 // ---------------------------------------------------------------------------
 // Per-slot handlers
@@ -425,15 +419,41 @@ async function handleIdPhoto(
 
   const extractedIdNumber = ocrResult.idNumber;
 
-  const ref = await persistIntakeFile(clientId, "id_photo", payload);
+  // Load client name for Drive filename (best-effort fallback to phone)
+  const { data: clientRow } = await supabaseAdmin
+    .from("clients")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select("full_name, phone" as any)
+    .eq("id", clientId)
+    .maybeSingle();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const nameRow = clientRow as any as { full_name?: string | null; phone?: string | null } | null;
+  const fullName = nameRow?.full_name ?? nameRow?.phone ?? clientId;
 
-  if (!ref) {
-    const retryText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את תעודת הזהות.";
+  const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את תעודת הזהות.";
+
+  const bytes = await fetchRemoteFile(payload.fileUrl);
+  if (!bytes) {
     try {
-      const { idMessage } = await sendMessageWithTyping(chatId, retryText);
-      await persistOutbound(conversationId, retryText, idMessage);
+      const { idMessage } = await sendMessageWithTyping(chatId, resendText);
+      await persistOutbound(conversationId, resendText, idMessage);
     } catch (sendErr) {
-      logger.error({ sendErr }, "intake: failed to send file-persist error message");
+      logger.error({ sendErr }, "intake: failed to send file-fetch error message");
+    }
+    return;
+  }
+
+  const up = await uploadLeadDocument({
+    name: `${fullName} - ID`,
+    mimeType: payload.mimeType ?? "image/jpeg",
+    bytes,
+  });
+  if (!up) {
+    try {
+      const { idMessage } = await sendMessageWithTyping(chatId, resendText);
+      await persistOutbound(conversationId, resendText, idMessage);
+    } catch (sendErr) {
+      logger.error({ sendErr }, "intake: failed to send drive-upload error message");
     }
     return;
   }
@@ -441,20 +461,20 @@ async function handleIdPhoto(
   await supabaseAdmin.from("documents").insert({
     client_id: clientId,
     type: "id_photo",
-    file_url: ref,
+    file_url: up.webViewLink,
     file_name: payload.fileName ?? null,
     mime_type: payload.mimeType ?? null,
   });
 
-  const photoUpdate: ClientIntakeUpdate = { id_photo_url: ref, id_validated: true };
+  const photoUpdate: ClientIntakeUpdate = {
+    id_photo_url: up.webViewLink,
+    id_validated: true,
+    ...(extractedIdNumber ? { id_number: extractedIdNumber } : {}),
+  };
   if (extractedIdNumber) {
-    photoUpdate.id_number = extractedIdNumber;
     logger.info({ clientId, idNumber: extractedIdNumber }, "intake: ID number extracted and will be persisted");
   }
   await updateClient(clientId, photoUpdate);
-
-  // Best-effort: if id_number was extracted but the combined update failed silently
-  // (updateClient swallows errors), there is nothing more to do — intake is not blocked.
 
   await advanceTo(conversationId, chatId, clientId, "poa");
 }
@@ -482,15 +502,41 @@ async function handlePoa(
   }
 
   if (payload.kind === "image" || payload.kind === "document") {
-    const ref = await persistIntakeFile(clientId, "poa", payload);
+    // Load client name for Drive filename (best-effort fallback to phone)
+    const { data: clientRow } = await supabaseAdmin
+      .from("clients")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .select("full_name, phone" as any)
+      .eq("id", clientId)
+      .maybeSingle();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nameRow = clientRow as any as { full_name?: string | null; phone?: string | null } | null;
+    const fullName = nameRow?.full_name ?? nameRow?.phone ?? clientId;
 
-    if (!ref) {
-      const retryText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את ייפוי הכוח.";
+    const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את ייפוי הכוח.";
+
+    const bytes = await fetchRemoteFile(payload.fileUrl);
+    if (!bytes) {
       try {
-        const { idMessage } = await sendMessageWithTyping(chatId, retryText);
-        await persistOutbound(conversationId, retryText, idMessage);
+        const { idMessage } = await sendMessageWithTyping(chatId, resendText);
+        await persistOutbound(conversationId, resendText, idMessage);
       } catch (sendErr) {
-        logger.error({ sendErr }, "intake: failed to send poa file-persist error message");
+        logger.error({ sendErr }, "intake: failed to send poa file-fetch error message");
+      }
+      return;
+    }
+
+    const up = await uploadLeadDocument({
+      name: `${fullName} - POA`,
+      mimeType: payload.mimeType ?? "application/pdf",
+      bytes,
+    });
+    if (!up) {
+      try {
+        const { idMessage } = await sendMessageWithTyping(chatId, resendText);
+        await persistOutbound(conversationId, resendText, idMessage);
+      } catch (sendErr) {
+        logger.error({ sendErr }, "intake: failed to send poa drive-upload error message");
       }
       return;
     }
@@ -498,12 +544,12 @@ async function handlePoa(
     await supabaseAdmin.from("documents").insert({
       client_id: clientId,
       type: "poa",
-      file_url: ref,
+      file_url: up.webViewLink,
       file_name: payload.fileName ?? null,
       mime_type: payload.mimeType ?? null,
     });
 
-    await updateClient(clientId, { poa_doc_url: ref });
+    await updateClient(clientId, { poa_doc_url: up.webViewLink });
     await advanceTo(conversationId, chatId, clientId, "done");
     return;
   }

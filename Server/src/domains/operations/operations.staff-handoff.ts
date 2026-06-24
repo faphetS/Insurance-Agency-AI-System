@@ -7,11 +7,12 @@ import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
 
 const SIGNED_TTL = 604_800; // 7 days in seconds
 
-// Legacy rows store an expired GreenAPI http(s) URL → treat as unavailable.
-// New rows store a Storage object path → mint a signed URL.
 async function resolveDocLink(stored: string | null | undefined): Promise<string | null> {
   if (!stored) return null;
-  if (/^https?:\/\//i.test(stored)) return null;
+  if (/^https?:\/\//i.test(stored)) {
+    if (/drive\.google\.com|googleusercontent/i.test(stored)) return stored;
+    return null; // legacy expired GreenAPI URL — treat as unavailable
+  }
   return getSignedDocUrl(stored, SIGNED_TTL);
 }
 

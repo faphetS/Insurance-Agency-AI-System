@@ -44,6 +44,19 @@ export const INQUIRY_TYPES = [
 
 export type InquiryType = (typeof INQUIRY_TYPES)[number];
 
+export const INQUIRY_TYPE_HE: Record<InquiryType, string> = {
+  life: "ביטוח חיים",
+  health: "ביטוח בריאות",
+  property: "ביטוח רכוש",
+  vehicle: "ביטוח רכב",
+  liability: "ביטוח חבות",
+  business: "ביטוח עסקי",
+  pension: "ביטוח פנסיוני",
+  travel: "ביטוח נסיעות",
+  mortgage: "ביטוח משכנתא",
+  general: "כללי",
+};
+
 export const SLOT_ORDER = [
   "welcome",
   "full_name",

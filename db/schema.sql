@@ -85,6 +85,7 @@ CREATE TABLE public.clients (
                          'id_photo', 'poa', 'done'
                        )),
   intake_completed_at  timestamptz,
+  mirrored_to_sheet_at timestamptz,                                    -- set once when the lead has been appended to the Google leads sheet (idempotency)
 
   -- Added by 20260519100000_bafi_extend_clients — KEPT (staff routing)
   assigned_handler_id  uuid        REFERENCES public.staff(id) ON DELETE SET NULL,

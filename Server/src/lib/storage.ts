@@ -40,6 +40,43 @@ export function extFor(mimeType?: string | null, fileName?: string | null): stri
   return "bin";
 }
 
+export async function fetchRemoteFile(sourceUrl: string): Promise<Buffer | null> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20_000);
+
+    let res: Response;
+    try {
+      res = await fetch(sourceUrl, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!res.ok) {
+      logger.warn({ sourceUrl, status: res.status }, "fetchRemoteFile: fetch failed");
+      return null;
+    }
+
+    const contentLength = res.headers.get("Content-Length");
+    if (contentLength && Number(contentLength) > 15 * 1024 * 1024) {
+      logger.warn({ sourceUrl, contentLength }, "fetchRemoteFile: file exceeds 15MB limit");
+      return null;
+    }
+
+    const buf = Buffer.from(await res.arrayBuffer());
+
+    if (buf.byteLength > 15 * 1024 * 1024) {
+      logger.warn({ sourceUrl, size: buf.byteLength }, "fetchRemoteFile: downloaded file exceeds 15MB");
+      return null;
+    }
+
+    return buf;
+  } catch (err) {
+    logger.warn({ err, sourceUrl }, "fetchRemoteFile: unexpected error");
+    return null;
+  }
+}
+
 export async function persistRemoteFile(
   sourceUrl: string,
   destPath: string,

@@ -81,6 +81,17 @@ const envSchema = z.object({
   // The single WhatsApp number that receives the Hebrew meeting summary (owner line).
   SUMMARY_RECIPIENT_PHONE: z.string().optional(),
 
+  // Google Workspace (Sheets + Drive lead mirror)
+  LEADS_SPREADSHEET_ID: z
+    .string()
+    .default("11TwqEQzqh3Yul9dWQfX2s8__yfH0hbcI71f_TF1pAjw"),
+  LEADS_SHEET_TAB: z.string().default("לידים חדשים"),
+  LEADS_DRIVE_FOLDER_ID: z
+    .string()
+    .default("1iwvNhMS2982JhzEemEJdq0-XQdqwGOXv"),
+  // Disabled only when explicitly set to "false" (z.coerce.boolean treats any non-empty string as true).
+  LEADS_MIRROR_ENABLED: z.string().default("true").transform((v) => v.trim().toLowerCase() !== "false"),
+
   // Provider toggles — set to "stub" to disable live API calls
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
   WHATSAPP_PROVIDER: z.enum(["stub", "live"]).default("live"),
