@@ -10,6 +10,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Staff-facing UX is **WhatsApp / email notifications**, not a web UI.
 - There is **no frontend** anymore. A throwaway React inspector app once lived under `Client/`; it was deleted during the Postgres migration (2026-06-03).
 
+> **📍 Flow reference:** `SYSTEM_FLOW.md` (repo root) is the canonical end-to-end behavioral map — conversational + operational flow, scheduled-job cadences, and **where every piece of data is saved** — traced from source on 2026-06-24. Read it first for "how the system behaves," and keep it updated when the flow changes.
+
+> **BAFI is dropped (2026-06-24):** the agency will not pursue any BAFI integration. BAFI reference docs/assets live in `temp-files/` (gitignored). The Historical context section below is kept only as a record — do not build BAFI features.
+
 > **Migration note (2026-06-03):** the backend was moved OFF Supabase onto self-hosted Postgres. Some details below changed accordingly. See **Historical context** at the bottom for the old Supabase + duplicated-BAFI setup, which is intentionally preserved as a record.
 
 ## Temp Files
