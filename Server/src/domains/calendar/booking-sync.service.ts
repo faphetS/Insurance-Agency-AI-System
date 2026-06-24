@@ -88,6 +88,23 @@ async function matchEventToClient(event: calendar_v3.Schema$Event): Promise<Matc
   return toResult(closest);
 }
 
+function extractZoomLink(event: calendar_v3.Schema$Event): string | null {
+  const ZOOM_RE = /https?:\/\/[a-z0-9.-]*zoom\.us\/[^\s"'<>]+/i;
+
+  const locationMatch = event.location?.match(ZOOM_RE);
+  if (locationMatch) return locationMatch[0];
+
+  for (const ep of event.conferenceData?.entryPoints ?? []) {
+    const epMatch = ep.uri?.match(ZOOM_RE);
+    if (epMatch) return epMatch[0];
+  }
+
+  const descMatch = event.description?.match(ZOOM_RE);
+  if (descMatch) return descMatch[0];
+
+  return null;
+}
+
 function formatDateTime(iso: string): string {
   const date = new Date(iso);
   return new Intl.DateTimeFormat("he-IL", {
@@ -177,11 +194,13 @@ export async function syncNewBookings(): Promise<void> {
       pendingMeeting = data;
     }
 
+    const zoomLink = extractZoomLink(event);
+
     const meetingUpdate = {
       scheduled_at: event.start.dateTime,
       calendar_event_id: event.id,
       status: "scheduled",
-      type: "google_meet",
+      type: zoomLink ? "zoom" : "google_meet",
       updated_at: new Date().toISOString(),
     };
 
@@ -247,7 +266,8 @@ export async function syncNewBookings(): Promise<void> {
 
       if (conv?.whatsapp_chat_id) {
         const formattedDate = formatDateTime(event.start.dateTime);
-        const confirmMsg = `הפגישה אושרה לתאריך ${formattedDate}. תישלח תזכורת לפני המועד.`;
+        let confirmMsg = `הפגישה אושרה לתאריך ${formattedDate}. תישלח תזכורת לפני המועד.`;
+        if (zoomLink) confirmMsg += `\n\nקישור לפגישת זום: ${zoomLink}`;
 
         try {
           const { idMessage } = await sendMessageWithTyping(conv.whatsapp_chat_id, confirmMsg);
