@@ -72,6 +72,10 @@ const envSchema = z.object({
     .url()
     .default("http://localhost:3000/api/integrations/gmail/callback"),
 
+  // Google Workspace OAuth 2.0 (Sheets + Drive + Gmail — agency account)
+  GOOGLE_WS_CLIENT_ID: z.string().optional(),
+  GOOGLE_WS_CLIENT_SECRET: z.string().optional(),
+
   // Timeless.day (meeting recording + transcripts)
   TIMELESS_API_KEY: z.string().optional(),
   // The single WhatsApp number that receives the Hebrew meeting summary (owner line).
