@@ -4,7 +4,7 @@ import { logger } from "../../config/logger.js";
 import { AppError } from "../../lib/errors.js";
 
 const openai = new OpenAI({ apiKey: env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api/v1" });
-const FALLBACK_MODEL = "google/gemini-2.5-flash";
+const FALLBACK_MODEL = env.AI_FALLBACK_MODEL;
 
 export function isHebrew(text: string): boolean {
   if (!text || !text.trim()) return false;
@@ -281,6 +281,16 @@ export async function analyzeImage(
     logger.debug({ model: resolvedModel, chars: text.length }, "AI image analysis complete");
     return text;
   } catch (err) {
+    if (resolvedModel !== FALLBACK_MODEL) {
+      logger.warn({ model: resolvedModel, err }, "Image analysis primary model failed — retrying with fallback");
+      const response = await openai.chat.completions.create(
+        { model: FALLBACK_MODEL, messages },
+        { timeout: 30_000 },
+      );
+      const text = response.choices[0]?.message?.content ?? "";
+      logger.debug({ model: FALLBACK_MODEL, chars: text.length }, "AI image analysis complete (fallback)");
+      return text;
+    }
     logger.error({ err }, "OpenRouter chat completion failed");
     throw new AppError(502, "AI model failed to analyze image", "AI_ERROR");
   }

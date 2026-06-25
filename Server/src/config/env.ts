@@ -53,7 +53,9 @@ const envSchema = z.object({
 
   // OpenRouter AI
   OPENROUTER_API_KEY: z.string().min(1),
-  AI_MODEL: z.string().default("google/gemini-3.1-pro-preview"),
+  AI_MODEL: z.string().default("google/gemini-2.5-flash"),
+  // Fallback model used when AI_MODEL fails (one retry before giving up); applies to text + image paths
+  AI_FALLBACK_MODEL: z.string().default("google/gemini-3.1-pro-preview"),
   // AI model used for commitment extraction and composition (lighter model preferred)
   COMMITMENT_AI_MODEL: z.string().default("google/gemini-3.1-flash-lite"),
 
