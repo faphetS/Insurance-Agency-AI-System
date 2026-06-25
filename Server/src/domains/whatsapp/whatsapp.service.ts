@@ -1,6 +1,12 @@
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { AppError } from "../../lib/errors.js";
+import { supabaseAdmin } from "../../config/supabase.js";
+import {
+  clixSendCreds,
+  clixSendText,
+  clixSendButtons,
+} from "./whatsapp.clix-send.js";
 
 export interface GreenApiCreds {
   idInstance: string;
@@ -63,10 +69,60 @@ async function request<T>(
   return requestWith<T>(envCreds(), method, path, body);
 }
 
+/**
+ * Determine which outbound gateway to use for a given chatId.
+ *
+ * Returns "clix" only when ALL of these hold:
+ *   1. A conversation row exists for that chatId.
+ *   2. That conversation's whatsapp_instance_id points to a row with a non-null gateway_customer_id.
+ *   3. CLIX_SEND_URL + CLIX_SEND_TOKEN are both set.
+ *
+ * Falls back to "greenapi" on ANY error, missing row, or absent creds — this guarantees
+ * that existing GreenAPI conversations are never affected.
+ */
+export async function resolveGatewayForChat(chatId: string): Promise<"clix" | "greenapi"> {
+  try {
+    const { data: conv, error: convErr } = await supabaseAdmin
+      .from("conversations")
+      .select("whatsapp_instance_id")
+      .eq("whatsapp_chat_id", chatId)
+      .maybeSingle();
+
+    if (convErr || !conv?.whatsapp_instance_id) return "greenapi";
+
+    const { data: inst, error: instErr } = await supabaseAdmin
+      .from("whatsapp_instances")
+      .select("gateway_customer_id")
+      .eq("id", conv.whatsapp_instance_id)
+      .maybeSingle();
+
+    if (instErr || !inst?.gateway_customer_id) return "greenapi";
+
+    if (!clixSendCreds()) return "greenapi";
+
+    return "clix";
+  } catch {
+    return "greenapi";
+  }
+}
+
+/**
+ * Synthesised unique id for a Clix outbound send (the gateway returns no message id we
+ * persist). Prevents whatsapp_message_id unique-index collisions when an outbound Clix
+ * reply is stored — an empty string is not NULL and would collide on the 2nd send.
+ */
+function clixOutboundId(): string {
+  return `clix-out:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export async function sendMessage(
   chatId: string,
   text: string,
 ): Promise<{ idMessage: string }> {
+  if (await resolveGatewayForChat(chatId) === "clix") {
+    await clixSendText(chatId, text);
+    return { idMessage: clixOutboundId() };
+  }
   return request<{ idMessage: string }>("POST", "sendMessage", {
     chatId,
     message: text,
@@ -177,9 +233,16 @@ export async function sendMessageWithTyping(
   message: string,
   typingMs = 2000,
 ): Promise<{ idMessage: string }> {
+  if (await resolveGatewayForChat(chatId) === "clix") {
+    await clixSendText(chatId, message);
+    return { idMessage: clixOutboundId() };
+  }
   await sendTyping(chatId, typingMs);
   await new Promise((r) => setTimeout(r, typingMs));
-  return sendMessage(chatId, message);
+  return request<{ idMessage: string }>("POST", "sendMessage", {
+    chatId,
+    message,
+  });
 }
 
 export async function sendInteractiveButtonsWithTyping(
@@ -189,6 +252,10 @@ export async function sendInteractiveButtonsWithTyping(
   footer?: string,
   typingMs = 2000,
 ): Promise<{ idMessage: string }> {
+  if (await resolveGatewayForChat(chatId) === "clix") {
+    await clixSendButtons(chatId, body, buttons, undefined, footer);
+    return { idMessage: clixOutboundId() };
+  }
   await sendTyping(chatId, typingMs);
   await new Promise((r) => setTimeout(r, typingMs));
   return sendInteractiveButtons(chatId, body, buttons, footer);

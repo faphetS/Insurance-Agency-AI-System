@@ -58,6 +58,7 @@ export const whatsappController = {
     let webhookBody: Record<string, unknown> = rawBody;
     let clixInstanceId: string | null = null;
     let isOperational = false;
+    let clixMedia: import("./whatsapp.validator.js").ClixMediaAttachment | null = null;
 
     if (isClixShaped) {
       // CLIX gateway path
@@ -76,6 +77,7 @@ export const whatsappController = {
           { messageType: kind, mimetype, fileName, base64Length: base64.length },
           "Clix media received — placeholder stored, base64 NOT persisted",
         );
+        clixMedia = clixResult.media;
       }
 
       webhookBody = clixResult.payload;
@@ -224,7 +226,9 @@ export const whatsappController = {
     const idMessage = inbound.idMessage;
 
     // Extract normalised payload (text | image | document)
-    const payload = extractPayload(inbound, webhookBody);
+    // Pass clixMedia so Clix image/document messages produce a proper media payload with base64
+    // instead of the placeholder text that clixToInternal wrote into the normalised body.
+    const payload = extractPayload(inbound, webhookBody, clixMedia);
 
     // Derive the body to store in messages table
     const messageBody =

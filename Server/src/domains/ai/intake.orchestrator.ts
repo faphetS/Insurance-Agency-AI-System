@@ -374,7 +374,10 @@ async function handleIdPhoto(
   }
 
   // Combined OCR pass: validate the ID photo AND extract the ID number in one call.
-  const imageUrl = payload.fileUrl;
+  // For Clix-path payloads the media arrives as base64 (no remote URL); pass a data URL.
+  const imageUrl = payload.base64
+    ? `data:${payload.mimeType ?? "image/jpeg"};base64,${payload.base64}`
+    : payload.fileUrl;
   let ocrResult: Awaited<ReturnType<typeof validateIdPhoto>> | undefined;
   try {
     ocrResult = await validateIdPhoto(imageUrl);
@@ -421,7 +424,9 @@ async function handleIdPhoto(
 
   const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את תעודת הזהות.";
 
-  const bytes = await fetchRemoteFile(payload.fileUrl);
+  const bytes = payload.base64
+    ? Buffer.from(payload.base64, "base64")
+    : await fetchRemoteFile(payload.fileUrl);
   if (!bytes) {
     try {
       const { idMessage } = await sendMessageWithTyping(chatId, resendText);
@@ -504,7 +509,9 @@ async function handlePoa(
 
     const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את ייפוי הכוח.";
 
-    const bytes = await fetchRemoteFile(payload.fileUrl);
+    const bytes = payload.base64
+      ? Buffer.from(payload.base64, "base64")
+      : await fetchRemoteFile(payload.fileUrl);
     if (!bytes) {
       try {
         const { idMessage } = await sendMessageWithTyping(chatId, resendText);

@@ -99,6 +99,11 @@ const envSchema = z.object({
   // Clix (WClixAPI) gateway — inbound webhook token (Milestone 1: receive & store)
   CLIX_WEBHOOK_TOKEN: z.string().min(16),
 
+  // Clix outbound send API (Milestone 2: reply via Clix for Clix conversations)
+  // Both must be set to enable Clix outbound; leave blank to keep dormant.
+  CLIX_SEND_URL: z.string().url().optional(),
+  CLIX_SEND_TOKEN: z.string().optional(),
+
   // Provider toggles — set to "stub" to disable live API calls
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
   WHATSAPP_PROVIDER: z.enum(["stub", "live"]).default("live"),

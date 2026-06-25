@@ -120,14 +120,29 @@ export type MessagePayload =
 
 /**
  * Extract a normalised MessagePayload from a validated inbound message.
- * Priority: image > document > button response > text.
+ * Priority: clixMedia (if provided) > image > document > button response > text.
  * rawBody is the unvalidated webhook body — used to read fields that
  * Zod's strict parsing may have stripped.
+ * clixMedia is the Clix-path media attachment from clixToInternal — carries base64 inline
+ * and bypasses the GreenAPI fileUrl path entirely.
  */
 export function extractPayload(
   inbound: IncomingMessagePayload,
   rawBody?: Record<string, unknown>,
+  clixMedia?: ClixMediaAttachment | null,
 ): MessagePayload {
+  // Clix media path: the normalised payload carries only a placeholder text; the real
+  // media data (kind + base64) lives on the ClixMediaAttachment passed by the controller.
+  if (clixMedia) {
+    return {
+      kind: clixMedia.kind === "video" ? "image" : clixMedia.kind,
+      fileUrl: "",
+      base64: clixMedia.base64,
+      mimeType: clixMedia.mimetype,
+      fileName: clixMedia.fileName,
+      caption: clixMedia.caption,
+    };
+  }
   const md = inbound.messageData;
 
   if (md.imageMessageData?.downloadUrl) {
@@ -331,9 +346,28 @@ export function clixToInternal(body: unknown): ClixToInternalResult | null {
       };
     }
   } else {
+    // Button-tap detection: Clix delivers a button response as a text message where
+    // the body is a JSON string like {"id":"opt_a"}. Normalise it to the buttonId so
+    // downstream sees the same value as a GreenAPI button tap.
+    let resolvedText = message ?? "";
+    if (messageType === "text" && resolvedText.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(resolvedText) as unknown;
+        if (
+          parsed !== null &&
+          typeof parsed === "object" &&
+          !Array.isArray(parsed) &&
+          typeof (parsed as Record<string, unknown>).id === "string"
+        ) {
+          resolvedText = (parsed as { id: string }).id;
+        }
+      } catch {
+        // Not JSON — treat as plain text
+      }
+    }
     messageData = {
       typeMessage: "textMessage",
-      textMessageData: { textMessage: message ?? "" },
+      textMessageData: { textMessage: resolvedText },
     };
   }
 
