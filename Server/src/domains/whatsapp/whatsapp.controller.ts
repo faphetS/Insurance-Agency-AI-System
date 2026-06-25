@@ -24,11 +24,27 @@ export const whatsappController = {
   async handleWebhook(req: Request, res: Response): Promise<void> {
     // 1. Verify token — accept either Authorization: Bearer <token> (GreenAPI
     // style) OR a ?token=<token> query param (for gateways that can't set headers).
+    // Clix also uses ?token= (it cannot set custom headers).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawBody = req.body as Record<string, any>;
+    const isClixShaped = !rawBody.typeWebhook && rawBody.customerId && rawBody.type;
+
     const authHeader = req.headers.authorization;
     const tokenParam = typeof req.query["token"] === "string" ? req.query["token"] : null;
     const headerOk = authHeader === `Bearer ${env.GREENAPI_WEBHOOK_TOKEN}`;
-    const queryOk = tokenParam === env.GREENAPI_WEBHOOK_TOKEN;
-    if (!headerOk && !queryOk) {
+    const queryOkGreen = tokenParam === env.GREENAPI_WEBHOOK_TOKEN;
+    const queryOkClix = tokenParam === env.CLIX_WEBHOOK_TOKEN;
+
+    if (!headerOk && !queryOkGreen && !queryOkClix) {
+      if (isClixShaped) {
+        // Clix-shaped body with wrong/missing token → 401 (Clix reads it; no retry storm)
+        logger.warn(
+          { hasQueryToken: tokenParam !== null },
+          "Clix webhook token mismatch — returning 401",
+        );
+        res.status(401).json({ ok: false, error: "Unauthorized" });
+        return;
+      }
       logger.warn(
         { authHeader, hasQueryToken: tokenParam !== null },
         "Webhook token mismatch — returning 200 to prevent retry storms",
@@ -39,19 +55,27 @@ export const whatsappController = {
 
     // 2. Detect gateway format and normalise to a common body for downstream parsing.
     //    GreenAPI payloads always carry `typeWebhook`; CLIX payloads carry `customerId`+`type`.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rawBody = req.body as Record<string, any>;
     let webhookBody: Record<string, unknown> = rawBody;
     let clixInstanceId: string | null = null;
     let isOperational = false;
 
-    if (!rawBody.typeWebhook && rawBody.customerId && rawBody.type) {
+    if (isClixShaped) {
       // CLIX gateway path
       const clixResult = clixToInternal(rawBody);
       if (!clixResult) {
-        logger.warn({ body: rawBody }, "CLIX webhook failed normalisation — ignoring");
+        // null means outgoing echo or malformed — silently ack
+        logger.info({ customerId: rawBody.customerId, type: rawBody.type }, "Clix webhook skipped (outgoing echo or malformed)");
         res.status(200).json({ ok: true });
         return;
+      }
+
+      // Log media receipt without persisting base64
+      if (clixResult.media) {
+        const { kind, mimetype, fileName, base64 } = clixResult.media;
+        logger.info(
+          { messageType: kind, mimetype, fileName, base64Length: base64.length },
+          "Clix media received — placeholder stored, base64 NOT persisted",
+        );
       }
 
       webhookBody = clixResult.payload;

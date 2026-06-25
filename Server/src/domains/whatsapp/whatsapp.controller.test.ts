@@ -29,6 +29,7 @@ const {
 vi.mock("../../config/env.js", () => ({
   env: {
     GREENAPI_WEBHOOK_TOKEN: "tok",
+    CLIX_WEBHOOK_TOKEN: "clix-secret-token-x1",
     SUMMARY_RECIPIENT_PHONE: "639219909210",
     NODE_ENV: "test",
     FRONTEND_URL: "http://localhost:5173",
@@ -257,5 +258,63 @@ describe("whatsappController.handleWebhook — owner operational-only routing", 
     await new Promise<void>((r) => setImmediate(r));
 
     expect(mockHandleIntake).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Clix token guard
+// ---------------------------------------------------------------------------
+
+function makeClixTextBody(): Record<string, unknown> {
+  return {
+    customerId: "clix-inst-1",
+    type: "incoming",
+    chatType: "private",
+    from: "639123456789",
+    pushName: "Clix User",
+    message: "Hello from Clix",
+    messageType: "text",
+    timestamp: 1718900000,
+  };
+}
+
+describe("whatsappController.handleWebhook — Clix token guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("Clix-shaped body with wrong token → 401", async () => {
+    const req = {
+      headers: {},
+      query: { token: "wrong-token" },
+      body: makeClixTextBody(),
+    } as unknown as Request;
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(401);
+    expect((res.json as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false }),
+    );
+  });
+
+  it("Clix-shaped body with correct token → 200", async () => {
+    // clixToInternal will parse and normalise, then instance lookup runs;
+    // mock supabase to return an unknown (inactive) instance so it short-circuits
+    // after the token check with a 200.
+    const instanceBuilder = makeBuilder({ data: null, error: null });
+    setupFrom([instanceBuilder]);
+
+    const req = {
+      headers: {},
+      query: { token: "clix-secret-token-x1" },
+      body: makeClixTextBody(),
+    } as unknown as Request;
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
   });
 });

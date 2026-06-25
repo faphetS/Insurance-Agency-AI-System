@@ -494,3 +494,26 @@ ON CONFLICT (gateway_customer_id) DO NOTHING;
 --   INSERT INTO public.whatsapp_instances (label, phone_number, role, purpose, is_active)
 --   VALUES ('Scan line (GreenAPI #2)', '<scan phone>', 'bot', 'operational', true);
 
+-- ============================================================
+-- CLIX conversational line — seed template (DO NOT activate until customerId is known)
+--
+-- Milestone 1 (receive & store only, NO outbound replies):
+--   purpose = 'operational'  ← the store-only webhook path; the router never calls the
+--                               conversational reply pipeline for this purpose value.
+--   is_active = true          ← lets the webhook handler recognise inbound messages.
+--
+-- Milestone 2 (full conversational bot, outbound Clix send built):
+--   Flip purpose → 'conversational' via the runtime INSERT below.
+--
+-- Runtime INSERT — run on the VPS once the real customerId is available
+-- (replace <CLIX_CUSTOMER_ID> and <CLIX_PHONE_NUMBER> with real values):
+--
+--   INSERT INTO public.whatsapp_instances
+--     (label, phone_number, role, gateway_customer_id, purpose, is_active)
+--   VALUES
+--     ('Clix conversational line', '<CLIX_PHONE_NUMBER>', 'bot', '<CLIX_CUSTOMER_ID>', 'operational', true)
+--   ON CONFLICT (gateway_customer_id)
+--     DO UPDATE SET purpose   = EXCLUDED.purpose,
+--                   is_active = EXCLUDED.is_active;
+-- ============================================================
+

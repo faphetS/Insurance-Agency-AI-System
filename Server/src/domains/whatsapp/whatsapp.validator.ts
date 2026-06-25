@@ -107,7 +107,12 @@ export type MessagePayload =
   | { kind: "text"; text: string }
   | {
       kind: "image" | "document";
+      // GreenAPI delivers a remote download URL; always present on the GreenAPI path.
+      // On the Clix path (Milestone 2), fileUrl will be absent and base64 will be set.
       fileUrl: string;
+      // Clix delivers media inline as base64. Carried here so Milestone 2 can decode
+      // it to a Buffer and upload to Drive. NEVER persisted to the DB.
+      base64?: string;
       mimeType?: string;
       fileName?: string;
       caption?: string;
@@ -210,69 +215,138 @@ export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 // CLIX gateway — inbound webhook schema + normalisation adapter
 // ---------------------------------------------------------------------------
 
+const clixMediaObjectSchema = z.object({
+  base64: z.string(),
+  mimetype: z.string().optional(),
+  caption: z.string().optional(),
+  fileName: z.string().optional(),
+});
+
 export const clixWebhookSchema = z.object({
   customerId: z.string(),
-  type: z.enum(["incoming", "outgoing"]),
+  type: z.string(),
   chatType: z.string(),
   from: z.string(),
+  participant: z.string().optional(),
   pushName: z.string().optional(),
   message: z.string().optional(),
   messageType: z.string(),
   timestamp: z.number(),
+  // Media arrives under either "image" or "media" key
+  image: clixMediaObjectSchema.optional(),
+  media: clixMediaObjectSchema.optional(),
 });
 
 export type ClixWebhookPayload = z.infer<typeof clixWebhookSchema>;
 
+// Internal: carries the base64 media alongside the normalised payload so the
+// controller can log it without persisting it, and Milestone 2 can route it
+// to Drive without re-parsing the raw body.
+export type ClixMediaAttachment = {
+  kind: "image" | "document" | "video";
+  base64: string;
+  mimetype?: string;
+  fileName?: string;
+  caption?: string;
+};
+
+export type ClixToInternalResult = {
+  payload: Record<string, unknown>;
+  customerId: string;
+  media: ClixMediaAttachment | null;
+};
+
+const MEDIA_TYPES = new Set(["image", "document", "video"]);
+
 /**
- * Normalise a CLIX webhook body into the GreenAPI shape the controller
- * already processes, plus the originating customerId for instance resolution.
- * Returns null if the payload fails validation (caller should return 200 quietly).
+ * Normalise a Clix webhook body into the GreenAPI shape the controller already
+ * processes, plus the originating customerId for instance resolution and an
+ * optional media attachment for Milestone 2 Drive upload.
+ *
+ * Returns null when:
+ *   - the body fails schema validation (malformed)
+ *   - type !== "incoming" (outgoing echo — caller returns 200 silently)
  */
-export function clixToInternal(
-  body: unknown,
-): { payload: Record<string, unknown>; customerId: string } | null {
+export function clixToInternal(body: unknown): ClixToInternalResult | null {
   const parsed = clixWebhookSchema.safeParse(body);
   if (!parsed.success) return null;
 
-  const { customerId, type, chatType, from, pushName, message, messageType, timestamp } =
-    parsed.data;
+  const {
+    customerId,
+    type,
+    chatType,
+    from,
+    participant,
+    pushName,
+    message,
+    messageType,
+    timestamp,
+    image,
+    media,
+  } = parsed.data;
 
-  // Synthesise a stable dedupe id: clix:<customerId>:<from>:<timestamp>:<msgHash>
-  const msgHash = createHash("sha1")
-    .update(message ?? "")
-    .digest("hex")
-    .slice(0, 12);
+  // Skip outgoing echoes — caller returns 200 silently
+  if (type !== "incoming") return null;
+
+  // Synthesise a stable dedupe id: clix:<customerId>:<from>:<timestamp>:<hash>
+  const hashInput = messageType === "text" ? (message ?? "") : (image?.fileName ?? media?.fileName ?? messageType);
+  const msgHash = createHash("sha1").update(hashInput).digest("hex").slice(0, 12);
   const idMessage = `clix:${customerId}:${from}:${timestamp}:${msgHash}`;
 
   // Non-private chats (groups) get @g.us suffix so the existing group filter drops them
   const chatIdSuffix = chatType === "private" ? "@c.us" : "@g.us";
   const chatId = `${from}${chatIdSuffix}`;
 
-  const typeWebhook =
-    type === "incoming" ? "incomingMessageReceived" : "outgoingMessageReceived";
+  // Groups: sender is `participant`, not `from`
+  const senderChatId = participant ? `${participant}${chatIdSuffix}` : chatId;
 
-  // Build messageData in GreenAPI shape
-  const messageData: Record<string, unknown> =
-    messageType === "text"
-      ? {
-          typeMessage: "textMessage",
-          textMessageData: { textMessage: message ?? "" },
-        }
-      : {
-          typeMessage: `${messageType}Message`,
-          textMessageData: { textMessage: `[${messageType}]` },
-        };
+  let messageData: Record<string, unknown>;
+  let mediaAttachment: ClixMediaAttachment | null = null;
+
+  if (MEDIA_TYPES.has(messageType)) {
+    const mediaObj = image ?? media ?? null;
+    const resolvedKind = (messageType === "image" || messageType === "video" || messageType === "document")
+      ? messageType
+      : "document";
+    const fileName = mediaObj?.fileName;
+    const placeholder =
+      messageType === "image"
+        ? `[image: ${fileName ?? "photo"}]`
+        : messageType === "video"
+          ? "[video]"
+          : `[document: ${fileName ?? "file"}]`;
+
+    messageData = {
+      typeMessage: "textMessage",
+      textMessageData: { textMessage: placeholder },
+    };
+
+    if (mediaObj) {
+      mediaAttachment = {
+        kind: resolvedKind as ClixMediaAttachment["kind"],
+        base64: mediaObj.base64,
+        mimetype: mediaObj.mimetype,
+        fileName: mediaObj.fileName,
+        caption: mediaObj.caption,
+      };
+    }
+  } else {
+    messageData = {
+      typeMessage: "textMessage",
+      textMessageData: { textMessage: message ?? "" },
+    };
+  }
 
   const payload: Record<string, unknown> = {
-    typeWebhook,
+    typeWebhook: "incomingMessageReceived",
     idMessage,
     senderData: {
-      chatId,
+      chatId: senderChatId,
       senderName: pushName ?? undefined,
-      sender: chatId,
+      sender: senderChatId,
     },
     messageData,
   };
 
-  return { payload, customerId };
+  return { payload, customerId, media: mediaAttachment };
 }

@@ -94,6 +94,9 @@ const envSchema = z.object({
   // Disabled only when explicitly set to "false" (z.coerce.boolean treats any non-empty string as true).
   LEADS_MIRROR_ENABLED: z.string().default("true").transform((v) => v.trim().toLowerCase() !== "false"),
 
+  // Clix (WClixAPI) gateway — inbound webhook token (Milestone 1: receive & store)
+  CLIX_WEBHOOK_TOKEN: z.string().min(16),
+
   // Provider toggles — set to "stub" to disable live API calls
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
   WHATSAPP_PROVIDER: z.enum(["stub", "live"]).default("live"),
