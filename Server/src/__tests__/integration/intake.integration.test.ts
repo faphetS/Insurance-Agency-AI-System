@@ -9,7 +9,6 @@
  *   - lib/storage (fetchRemoteFile)
  *   - domains/integrations/google/google.drive (uploadLeadDocument)
  *   - domains/integrations/google/leads-mirror.service (mirrorLeadToSheet)
- *   - operations.service (createNotification) — fire-and-forget side effect
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -42,12 +41,6 @@ vi.mock("../../domains/integrations/google/google.drive.js", () => ({
 
 vi.mock("../../domains/integrations/google/leads-mirror.service.js", () => ({
   mirrorLeadToSheet: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("../../domains/operations/operations.service.js", () => ({
-  createNotification: vi.fn().mockResolvedValue(null),
-  finalizeSummary: vi.fn().mockResolvedValue(undefined),
-  handleClientConfirm: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------

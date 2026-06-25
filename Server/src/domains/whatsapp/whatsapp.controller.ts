@@ -2,9 +2,8 @@ import type { Request, Response } from "express";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
-import { handleIncomingMessage } from "../ai/ai.orchestrator.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
-import { finalizeSummary, handleClientConfirm, assignStaffToMeeting } from "../operations/operations.service.js";
+import { assignStaffToMeeting } from "../meetings/meeting-handoff.service.js";
 import * as whatsappService from "./whatsapp.service.js";
 import {
   incomingMessageSchema,
@@ -235,70 +234,11 @@ export const whatsappController = {
       return;
     }
 
-    // Staff intercept — if this chat belongs to a staff member, handle separately
+    // Staff intercept — if this chat belongs to a staff member, log and skip.
+    // (The approve/edit summary flow has been retired.)
     const staff = await isStaffChat(chatId);
     if (staff) {
       res.status(200).json({ ok: true });
-
-      setImmediate(async () => {
-        try {
-          const buttonId = extractButtonId(webhookBody);
-
-          const approveMatch = /^sum_approve:(.+)$/.exec(buttonId);
-          const editMatch = /^sum_edit:(.+)$/.exec(buttonId);
-
-          if (approveMatch) {
-            const meetingId = approveMatch[1]!;
-            await finalizeSummary(meetingId);
-            await whatsappService.sendMessageWithTyping(chatId, "✅ הסיכום אושר.");
-          } else if (editMatch) {
-            const meetingId = editMatch[1]!;
-            // Clear any prior edit session for this chat
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (supabaseAdmin as any)
-              .from("meetings")
-              .update({ summary_edit_chat_id: null })
-              .eq("summary_edit_chat_id", chatId);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (supabaseAdmin as any)
-              .from("meetings")
-              .update({ summary_edit_chat_id: chatId })
-              .eq("id", meetingId);
-            await whatsappService.sendMessageWithTyping(
-              chatId,
-              "אוקיי, אנא שלח/י את נוסח הסיכום המעודכן.",
-            );
-          } else {
-            // Plain text — find an open edit session for this chat
-            const inboundText =
-              payload.kind === "text" ? payload.text : "";
-            if (inboundText) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const { data: editMeeting } = await (supabaseAdmin as any)
-                .from("meetings")
-                .select("id")
-                .eq("summary_edit_chat_id", chatId)
-                .eq("summary_status", "draft")
-                .order("updated_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-
-              if (editMeeting) {
-                await finalizeSummary(editMeeting.id as string, inboundText);
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                await (supabaseAdmin as any)
-                  .from("meetings")
-                  .update({ summary_edit_chat_id: null })
-                  .eq("id", editMeeting.id);
-                await whatsappService.sendMessageWithTyping(chatId, "✅ הסיכום עודכן ואושר.");
-              }
-            }
-          }
-        } catch (err) {
-          logger.error({ err, chatId }, "Staff WhatsApp handler error");
-        }
-      });
-
       return;
     }
 
@@ -470,32 +410,16 @@ export const whatsappController = {
           return;
         }
 
-        const confirmMatch = /^client_confirm:(.+)$/.exec(extractButtonId(webhookBody));
-        if (confirmMatch) {
-          await handleClientConfirm(confirmMatch[1]!, chatId, conversationId);
-          return;
-        }
-
         if (linkedClientId) {
-          const { consumed } = await handleIntake(
+          await handleIntake(
             conversationId,
             linkedClientId,
             chatId,
             payload,
           );
-          if (consumed) return;
         }
-        await handleIncomingMessage(conversationId, textForAi);
       } catch (err) {
         logger.error({ conversationId, err }, "Async message processing error");
-        try {
-          await whatsappService.sendMessageWithTyping(
-            chatId,
-            "מצטערים, יש כעת קושי בעיבוד ההודעה. נציג ייצור קשר בהקדם.",
-          );
-        } catch (sendErr) {
-          logger.error({ conversationId, sendErr }, "Failed to send error fallback message");
-        }
       }
     });
   },

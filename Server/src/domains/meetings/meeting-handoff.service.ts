@@ -3,7 +3,6 @@ import { logger } from "../../config/logger.js";
 import { sendStaffMessage, sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 import { getSignedDocUrl } from "../../lib/storage.js";
-import { TASK_LABELS_HE, formatDueDate } from "./operations.format.js";
 
 const SIGNED_TTL = 604_800; // 7 days in seconds
 
@@ -60,24 +59,8 @@ export async function notifyStaffHandoff(
       return;
     }
 
-    const { data: tasks } = await supabaseAdmin
-      .from("tasks")
-      .select("type, due_at")
-      .eq("meeting_id", meetingId)
-      .order("due_at", { ascending: true });
-
     const idUrl = await resolveDocLink(client.id_photo_url);
     const poaUrl = await resolveDocLink(client.poa_doc_url);
-
-    const taskLines =
-      tasks && tasks.length > 0
-        ? tasks
-            .map((t: any, i: number) => {
-              const label = TASK_LABELS_HE[t.type] ?? t.type;
-              return `${i + 1}. ${label} — עד ${formatDueDate(t.due_at)}`;
-            })
-            .join("\n")
-        : "(אין משימות)";
 
     const complexityLine =
       (client as unknown as { complexity?: string | null }).complexity === "complex"
@@ -102,8 +85,7 @@ export async function notifyStaffHandoff(
       `צילום ת"ז: ${idUrl ?? "לא זמין במערכת"}`,
       `ייפוי כוח: ${poaUrl ?? "לא זמין במערכת"}`,
       "",
-      "📋 משימות המשך",
-      taskLines,
+      "📋 הלקוח הוקצה לטיפולך — נא לבדוק את הפרטים ולהמשיך בהתאם.",
     ].join("\n");
 
     if (opts.viaConversationalBot) {
@@ -115,4 +97,78 @@ export async function notifyStaffHandoff(
   } catch (err) {
     logger.error({ err, meetingId }, "notifyStaffHandoff: unexpected error");
   }
+}
+
+export async function assignStaffToMeeting(
+  meetingId: string,
+  staffId: string,
+  ownerChatId: string,
+): Promise<void> {
+  const { data: meeting } = await supabaseAdmin
+    .from("meetings")
+    .select("id, client_id")
+    .eq("id", meetingId)
+    .maybeSingle();
+
+  if (!meeting) {
+    await sendMessageWithTyping(ownerChatId, "❌ הפגישה לא נמצאה.");
+    return;
+  }
+
+  const { data: staff } = await supabaseAdmin
+    .from("staff")
+    .select("full_name, phone")
+    .eq("id", staffId)
+    .maybeSingle();
+
+  if (!staff) {
+    await sendMessageWithTyping(ownerChatId, "❌ העובד לא נמצא.");
+    return;
+  }
+
+  const clientId = meeting.client_id as string;
+  const fullName = staff.full_name as string;
+
+  // First-tap-wins: atomically claim the assignment only if no handler is set yet.
+  const { data: claimed } = await supabaseAdmin
+    .from("clients")
+    .update({ assigned_handler_id: staffId })
+    .eq("id", clientId)
+    .is("assigned_handler_id", null)
+    .select("id")
+    .maybeSingle();
+
+  if (!claimed) {
+    const { data: cur } = await supabaseAdmin
+      .from("clients")
+      .select("assigned_handler_id")
+      .eq("id", clientId)
+      .maybeSingle();
+    const currentId = (cur?.assigned_handler_id as string | null) ?? null;
+    let currentName = "";
+    if (currentId) {
+      const { data: curStaff } = await supabaseAdmin
+        .from("staff")
+        .select("full_name")
+        .eq("id", currentId)
+        .maybeSingle();
+      currentName = (curStaff?.full_name as string | null) ?? "";
+    }
+    await sendMessageWithTyping(
+      ownerChatId,
+      currentName ? `✅ כבר הוקצה ל${currentName}` : "✅ כבר הוקצה",
+    );
+    return;
+  }
+
+  // Set last_service_date = today if not already set (starts the biennial clock).
+  const today = new Date().toISOString().slice(0, 10);
+  await supabaseAdmin
+    .from("clients")
+    .update({ last_service_date: today })
+    .eq("id", clientId)
+    .is("last_service_date", null);
+
+  await notifyStaffHandoff(meetingId, { viaConversationalBot: true });
+  await sendMessageWithTyping(ownerChatId, `✅ הוקצה ל${fullName}`);
 }

@@ -3,7 +3,6 @@ import { supabaseAdmin } from "../../../config/supabase.js";
 import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { AppError } from "../../../lib/errors.js";
-import { createNotification } from "../../operations/operations.service.js";
 import { ensureHebrew } from "../../ai/ai.service.js";
 import { sendMessage, sendButtons } from "../../whatsapp/whatsapp.service.js";
 import { toChatId } from "../../whatsapp/whatsapp.util.js";
@@ -465,16 +464,6 @@ async function applyIngest(
   }
 
   if (summaryRaw) {
-    await createNotification({
-      type: "summary_ready",
-      title: "Meeting summary ready",
-      message: "A meeting transcript and AI summary have arrived from Timeless.",
-      severity: "warning",
-      client_id: clientId,
-      meeting_id: ourMeetingId,
-      reference_key: `summary_ready:${ourMeetingId}`,
-    });
-
     await sendSummaryToOwner(ourMeetingId, clientId);
 
     // Staff-picker (to owner) + client summary email — each isolated so one failure

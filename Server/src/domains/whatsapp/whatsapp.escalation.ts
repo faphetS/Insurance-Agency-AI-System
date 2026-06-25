@@ -1,6 +1,5 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { createNotification } from "../operations/operations.service.js";
 import { sendMessageWithTyping } from "./whatsapp.service.js";
 import { toChatId } from "./whatsapp.util.js";
 
@@ -16,9 +15,6 @@ export async function handleHumanEscalation(
   chatId: string,
 ): Promise<void> {
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    const referenceKey = `escalation:${conversationId}:${today}`;
-
     // Pause bot for 2 hours
     const pausedUntil = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
     await supabaseAdmin
@@ -99,18 +95,8 @@ export async function handleHumanEscalation(
       }
     }
 
-    // Create in-app notification (idempotent by reference_key)
-    const notif = await createNotification({
-      type: "whatsapp_unanswered",
-      title: "לקוח ביקש נציג אנושי",
-      message: `לקוח בשיחה ${conversationId} ביקש להעביר לנציג אנושי.`,
-      severity: "urgent",
-      client_id: clientId ?? undefined,
-      reference_key: referenceKey,
-    });
-
     logger.info(
-      { conversationId, chatId, notifCreated: !!notif },
+      { conversationId, chatId },
       "handleHumanEscalation: escalation complete",
     );
   } catch (err) {

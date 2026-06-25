@@ -22,12 +22,6 @@ vi.mock("../../../config/supabase.js", () => ({
   supabaseAdmin: { from: mockFrom },
 }));
 
-vi.mock("../../operations/operations.service.js", () => ({
-  createNotification: vi.fn(),
-}));
-vi.mock("../../operations/operations.staff-notify.js", () => ({
-  notifyStaffSummaryReady: vi.fn(),
-}));
 vi.mock("./timeless.client.js", () => ({
   listWebhooks: vi.fn(),
   createWebhook: vi.fn(),

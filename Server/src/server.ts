@@ -5,16 +5,10 @@ import { setWebhookSettings } from "./domains/whatsapp/whatsapp.service.js";
 import { ensureClientDocumentsBucket } from "./lib/storage.js";
 import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeless.service.js";
 import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
-import { startDailyDigestCron } from "./domains/operations/operations.digest.js";
 import { startCommitmentCrons } from "./domains/commitments/commitments.service.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
-import {
-  checkSummaryApprovals,
-  checkDueAndOverdueTasks,
-  checkSlaBreaches,
-  checkServiceMeetingEligibility,
-} from "./domains/operations/operations.checker.js";
+import { checkServiceMeetingEligibility } from "./domains/calendar/service-meeting.service.js";
 import helmet from "helmet";
 import hpp from "hpp";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -167,7 +161,6 @@ const server = app.listen(env.PORT, () => {
   // All schedulers — public deployments only (guard prevents dev boots from sending
   // live WhatsApp messages, mutating prod data, or overwriting production webhooks)
   if (isPublicWebhook) {
-    startDailyDigestCron();
     startCommitmentCrons();
 
     // Calendar sync: initial run after 30s, then every 3 minutes
@@ -189,48 +182,14 @@ const server = app.listen(env.PORT, () => {
       );
     }, 10 * 60 * 1000);
 
-    // Operations: summary approval check — every 10 minutes
-    setInterval(() => {
-      checkSummaryApprovals().catch((err: unknown) =>
-        logger.error({ err }, "operations: checkSummaryApprovals failed"),
-      );
-    }, 10 * 60 * 1000);
-
-    // Operations: due/overdue task (milestone) check — daily (every 24h).
-    // Milestones are day/week-scale (+7/+14/+30/+60/+90d), so a daily check
-    // catches each within a day of its due date without re-scanning mailboxes
-    // (and re-spending LLM calls) every 30 minutes.
-    setInterval(() => {
-      checkDueAndOverdueTasks().catch((err: unknown) =>
-        logger.error({ err }, "operations: checkDueAndOverdueTasks failed"),
-      );
-    }, 24 * 60 * 60 * 1000);
-
-    // Operations: SLA breach check — every 30 minutes
-    setInterval(() => {
-      checkSlaBreaches().catch((err: unknown) =>
-        logger.error({ err }, "operations: checkSlaBreaches failed"),
-      );
-    }, 30 * 60 * 1000);
-
-    // Operations: service meeting eligibility — daily (every 24h)
+    // Service meeting eligibility — daily (every 24h)
     setInterval(() => {
       checkServiceMeetingEligibility().catch((err: unknown) =>
-        logger.error({ err }, "operations: checkServiceMeetingEligibility failed"),
+        logger.error({ err }, "service-meeting: eligibility check failed"),
       );
     }, 24 * 60 * 60 * 1000);
-
-    // WhatsApp monitoring scan — every 20 minutes (refreshes last_unanswered_count on instances)
-    setInterval(() => {
-      import("./domains/operations/operations.service.js")
-        .then(({ getWhatsappMonitoring }) => getWhatsappMonitoring())
-        .then((summary) => logger.info({ summary }, "whatsapp-monitor: scheduled scan complete"))
-        .catch((err: unknown) =>
-          logger.error({ err }, "whatsapp-monitor: scheduled scan failed"),
-        );
-    }, 20 * 60 * 1000);
   } else {
-    logger.info("Skipping operations/booking/reminder schedulers — BACKEND_URL not public");
+    logger.info("Skipping booking/reminder schedulers — BACKEND_URL not public");
   }
 });
 

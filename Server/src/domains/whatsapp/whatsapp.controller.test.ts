@@ -5,22 +5,16 @@ import type { Request, Response } from "express";
 // vi.hoisted — shared mock functions declared before any vi.mock() factory
 // ---------------------------------------------------------------------------
 const {
-  mockHandleIncomingMessage,
   mockHandleIntake,
   mockAssignStaffToMeeting,
-  mockFinalizeSummary,
-  mockHandleClientConfirm,
   mockSendMessageWithTyping,
   mockIsStaffChat,
   mockWantsHuman,
   mockHandleHumanEscalation,
   mockFromImpl,
 } = vi.hoisted(() => ({
-  mockHandleIncomingMessage: vi.fn().mockResolvedValue(undefined),
   mockHandleIntake: vi.fn().mockResolvedValue({ consumed: false }),
   mockAssignStaffToMeeting: vi.fn().mockResolvedValue(undefined),
-  mockFinalizeSummary: vi.fn().mockResolvedValue(undefined),
-  mockHandleClientConfirm: vi.fn().mockResolvedValue(undefined),
   mockSendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "out1" }),
   mockIsStaffChat: vi.fn().mockResolvedValue(null),
   mockWantsHuman: vi.fn().mockReturnValue(false),
@@ -55,18 +49,12 @@ vi.mock("../../config/supabase.js", () => ({
   supabaseAdmin: { from: mockFromImpl },
 }));
 
-vi.mock("../ai/ai.orchestrator.js", () => ({
-  handleIncomingMessage: mockHandleIncomingMessage,
-}));
-
 vi.mock("../ai/intake.orchestrator.js", () => ({
   handleIntake: mockHandleIntake,
 }));
 
-vi.mock("../operations/operations.service.js", () => ({
+vi.mock("../meetings/meeting-handoff.service.js", () => ({
   assignStaffToMeeting: mockAssignStaffToMeeting,
-  finalizeSummary: mockFinalizeSummary,
-  handleClientConfirm: mockHandleClientConfirm,
 }));
 
 vi.mock("./whatsapp.service.js", () => ({
@@ -104,10 +92,6 @@ import { whatsappController } from "./whatsapp.controller.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Generic chainable builder: every chain method returns itself; awaiting it
- * resolves to `result`. Used to stub supabaseAdmin.from(...).select(...).eq(...)...
- */
 function makeBuilder(result: unknown) {
   const b: Record<string, unknown> = {};
   const chainMethods = [
@@ -120,15 +104,11 @@ function makeBuilder(result: unknown) {
   const terminal = vi.fn().mockResolvedValue(result);
   b["maybeSingle"] = terminal;
   b["single"] = terminal;
-  // make the builder itself thenable so `await supabaseAdmin.from(...).insert(...)` works
   b["then"] = (resolve: (v: unknown) => void) =>
     Promise.resolve(result).then(resolve);
   return b;
 }
 
-/**
- * Configure mockFromImpl to return builders in sequence, cycling on the last one.
- */
 function setupFrom(builders: ReturnType<typeof makeBuilder>[]) {
   let i = 0;
   mockFromImpl.mockImplementation(() => {
@@ -138,7 +118,6 @@ function setupFrom(builders: ReturnType<typeof makeBuilder>[]) {
   });
 }
 
-/** Minimum valid GreenAPI incomingMessageReceived body for a text message */
 function makeTextBody(chatId: string, text: string): Record<string, unknown> {
   return {
     typeWebhook: "incomingMessageReceived",
@@ -155,7 +134,6 @@ function makeTextBody(chatId: string, text: string): Record<string, unknown> {
   };
 }
 
-/** Minimum valid GreenAPI incomingMessageReceived body with an interactive button reply */
 function makeButtonBody(chatId: string, buttonId: string): Record<string, unknown> {
   return {
     typeWebhook: "incomingMessageReceived",
@@ -167,13 +145,11 @@ function makeButtonBody(chatId: string, buttonId: string): Record<string, unknow
     },
     messageData: {
       typeMessage: "interactiveButtonsResponseMessage",
-      // extractButtonId reads messageData.interactiveButtonsResponse?.selectedId
       interactiveButtonsResponse: { selectedId: buttonId },
     },
   };
 }
 
-/** Express-like request */
 function makeReq(body: Record<string, unknown>): Request {
   return {
     headers: { authorization: "Bearer tok" },
@@ -182,7 +158,6 @@ function makeReq(body: Record<string, unknown>): Request {
   } as unknown as Request;
 }
 
-/** Chainable Express-like response */
 function makeRes(): Response {
   const res = {
     status: vi.fn(),
@@ -193,8 +168,6 @@ function makeRes(): Response {
   return res;
 }
 
-// The owner chatId as the controller will compute it:
-// toChatId("639219909210") → "639219909210@c.us"
 const OWNER_CHAT_ID = "639219909210@c.us";
 const LEAD_CHAT_ID = "972500000000@c.us";
 
@@ -208,63 +181,44 @@ describe("whatsappController.handleWebhook — owner operational-only routing", 
     mockIsStaffChat.mockResolvedValue(null);
     mockWantsHuman.mockReturnValue(false);
     mockHandleIntake.mockResolvedValue({ consumed: false });
-    mockHandleIncomingMessage.mockResolvedValue(undefined);
     mockAssignStaffToMeeting.mockResolvedValue(undefined);
   });
 
-  // -------------------------------------------------------------------------
-  // Case 1: Owner + assign_staff button
-  // -------------------------------------------------------------------------
-  it("owner + assign_staff button: calls assignStaffToMeeting, never handleIntake or handleIncomingMessage", async () => {
+  it("owner + assign_staff button: calls assignStaffToMeeting, never handleIntake", async () => {
     const body = makeButtonBody(OWNER_CHAT_ID, "assign_staff:m1:s1");
     const req = makeReq(body);
     const res = makeRes();
 
     await whatsappController.handleWebhook(req, res);
 
-    // Response must be 200 immediately
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
 
-    // assignStaffToMeeting runs inside setImmediate — flush the queue
     await new Promise<void>((r) => setImmediate(r));
 
     expect(mockAssignStaffToMeeting).toHaveBeenCalledOnce();
     expect(mockAssignStaffToMeeting).toHaveBeenCalledWith("m1", "s1", OWNER_CHAT_ID);
-
     expect(mockHandleIntake).not.toHaveBeenCalled();
-    expect(mockHandleIncomingMessage).not.toHaveBeenCalled();
   });
 
-  // -------------------------------------------------------------------------
-  // Case 2: Owner + plain text — silent, no lead flow
-  // -------------------------------------------------------------------------
-  it("owner + plain text: no assignStaffToMeeting, no handleIntake, no handleIncomingMessage; responds 200", async () => {
+  it("owner + plain text: no assignStaffToMeeting, no handleIntake; responds 200", async () => {
     const body = makeTextBody(OWNER_CHAT_ID, "שלום");
     const req = makeReq(body);
     const res = makeRes();
 
     await whatsappController.handleWebhook(req, res);
 
-    // Flush setImmediate in case anything was queued
     await new Promise<void>((r) => setImmediate(r));
 
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
     expect(mockAssignStaffToMeeting).not.toHaveBeenCalled();
     expect(mockHandleIntake).not.toHaveBeenCalled();
-    expect(mockHandleIncomingMessage).not.toHaveBeenCalled();
   });
 
-  // -------------------------------------------------------------------------
-  // Case 3: Normal lead + plain text — lead flow runs
-  // -------------------------------------------------------------------------
-  it("normal lead + plain text: at least one of handleIntake / handleIncomingMessage is called", async () => {
-    // The lead flow requires several supabase calls (upsert conversation, insert message,
-    // select conversation, select/insert client, link client). Provide generic builders
-    // that resolve successfully so the controller progresses to the async dispatch.
+  it("normal lead + plain text: handleIntake is called", async () => {
     const convUpsertBuilder = makeBuilder({ data: { id: "conv1" }, error: null });
     const msgInsertBuilder = makeBuilder({ data: { id: "msg1" }, error: null });
     const convSelectBuilder = makeBuilder({ data: { id: "conv1", client_id: null }, error: null });
-    const clientSelectBuilder = makeBuilder({ data: null, error: null }); // no existing client
+    const clientSelectBuilder = makeBuilder({ data: null, error: null });
     const staffSelectBuilder = makeBuilder({ data: { id: "staff1" }, error: null });
     const clientInsertBuilder = makeBuilder({ data: { id: "client1" }, error: null });
     const convLinkBuilder = makeBuilder({ data: null, error: null });
@@ -285,26 +239,13 @@ describe("whatsappController.handleWebhook — owner operational-only routing", 
 
     await whatsappController.handleWebhook(req, res);
 
-    // Flush setImmediate where AI dispatch happens
     await new Promise<void>((r) => setImmediate(r));
 
-    const leadFlowRan =
-      mockHandleIntake.mock.calls.length > 0 ||
-      mockHandleIncomingMessage.mock.calls.length > 0;
-
-    expect(leadFlowRan).toBe(true);
+    expect(mockHandleIntake).toHaveBeenCalled();
   });
 
-  // -------------------------------------------------------------------------
-  // Case 4: Staff number — no handleIntake / handleIncomingMessage
-  // -------------------------------------------------------------------------
-  it("staff number: isStaffChat returns a staff object, so handleIntake and handleIncomingMessage are NOT called", async () => {
-    // Override for this test: isStaffChat returns a staff object
+  it("staff number: handleIntake is NOT called", async () => {
     mockIsStaffChat.mockResolvedValueOnce({ staffId: "staff-99", fullName: "Alice" });
-
-    // Staff intercept also does a supabase query (meetings lookup for edit session)
-    const staffMeetingBuilder = makeBuilder({ data: null, error: null });
-    setupFrom([staffMeetingBuilder, staffMeetingBuilder, staffMeetingBuilder]);
 
     const STAFF_CHAT_ID = "972501111111@c.us";
     const body = makeTextBody(STAFF_CHAT_ID, "שלום");
@@ -313,10 +254,8 @@ describe("whatsappController.handleWebhook — owner operational-only routing", 
 
     await whatsappController.handleWebhook(req, res);
 
-    // Flush setImmediate where staff handler runs
     await new Promise<void>((r) => setImmediate(r));
 
     expect(mockHandleIntake).not.toHaveBeenCalled();
-    expect(mockHandleIncomingMessage).not.toHaveBeenCalled();
   });
 });

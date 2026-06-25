@@ -13,7 +13,6 @@ import {
   type IntakeSlot,
 } from "./intake.prompts.js";
 import { validateIdPhoto, classifyComplexity, classifyIntakeResponse } from "./ai.service.js";
-import { createNotification } from "../operations/operations.service.js";
 import { fetchRemoteFile } from "../../lib/storage.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
@@ -196,17 +195,7 @@ async function finalize(
   }
 
   if (complexity === "complex") {
-    const notified = await createNotification({
-      type: "complex_case",
-      title: "תיק מורכב",
-      message: `לקוח ${clientId} סווג כתיק מורכב (סוג פנייה: ${clientRow?.inquiry_type ?? "unknown"})`,
-      severity: "warning",
-      client_id: clientId,
-      reference_key: `complex_case:${clientId}`,
-    });
-    if (notified) {
-      logger.info({ clientId, complexity }, "intake: complex case notification created");
-    }
+    logger.info({ clientId, complexity }, "intake: complex case flagged");
   }
 
   // Insert pending meeting row so booking-sync can match it when the event arrives
