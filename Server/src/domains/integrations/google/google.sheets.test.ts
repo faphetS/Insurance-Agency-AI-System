@@ -32,6 +32,8 @@ vi.mock("../../../config/env.js", () => ({
     LEADS_MIRROR_ENABLED: true,
     LEADS_SPREADSHEET_ID: "sheet-id",
     LEADS_SHEET_TAB: "לידים חדשים",
+    LEADS_SHEET_TAB_NEW: "לידים חדשים",
+    LEADS_SHEET_TAB_OLD: "לקוח קיים",
     LEADS_DRIVE_FOLDER_ID: "folder-id",
     NODE_ENV: "test",
   },
@@ -49,6 +51,14 @@ vi.mock("googleapis", () => ({
   google: {
     sheets: vi.fn(() => ({
       spreadsheets: {
+        get: vi.fn().mockResolvedValue({
+          data: {
+            sheets: [
+              { properties: { title: "לידים חדשים" } },
+              { properties: { title: "לקוח קיים" } },
+            ],
+          },
+        }),
         values: {
           get: mockSheetsGet,
           append: mockSheetsAppend,
@@ -92,13 +102,12 @@ function makeBuilder(result: unknown): Builder {
 }
 
 function setupCachedTab(tabTitle: string): void {
-  // resolveLeadsTabTitle first checks system_settings for a cached value
   const cacheHit = makeBuilder({ data: { value: tabTitle }, error: null });
   mockFromImpl.mockReturnValue(cacheHit);
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests — existing behaviour preserved
 // ---------------------------------------------------------------------------
 
 describe("upsertLeadRow — phone found → values.update", () => {
@@ -109,12 +118,11 @@ describe("upsertLeadRow — phone found → values.update", () => {
   });
 
   it("calls values.update with A{N}:H{N} when phone matches existing row", async () => {
-    // Row 1 is a header ("טלפון" → normalises to ""), row 2 has the target phone
     mockSheetsGet.mockResolvedValue({
       data: {
         values: [
-          ["טלפון"],        // row 1 — header digits = "" → no match
-          ["972501234567"], // row 2 — exact match
+          ["טלפון"],
+          ["972501234567"],
         ],
       },
     });
@@ -151,7 +159,6 @@ describe("upsertLeadRow — phone found → values.update", () => {
   });
 
   it("does not match the header row (text header normalises to empty string)", async () => {
-    // If the header is "Phone" it must never match a numeric phone
     mockSheetsGet.mockResolvedValue({
       data: { values: [["Phone"], ["972501234567"]] },
     });
@@ -162,7 +169,6 @@ describe("upsertLeadRow — phone found → values.update", () => {
 
     expect(mockSheetsUpdate).toHaveBeenCalledOnce();
     const updateArg = mockSheetsUpdate.mock.calls[0]?.[0] as { range: string };
-    // Must match row 2, not row 1 (the header)
     expect(updateArg.range).toBe("לידים חדשים!A2:H2");
   });
 });
@@ -230,5 +236,63 @@ describe("upsertLeadRow — error paths", () => {
     expect(result).toBe(false);
     expect(mockSheetsUpdate).not.toHaveBeenCalled();
     expect(mockSheetsAppend).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: per-tab behaviour — explicit tabTitle param + per-tab cache key
+// ---------------------------------------------------------------------------
+
+describe("upsertLeadRow — explicit tabTitle param", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAuthenticatedClient.mockResolvedValue({});
+  });
+
+  it("targets the passed tab title when provided", async () => {
+    setupCachedTab("לקוח קיים");
+    mockSheetsGet.mockResolvedValue({ data: { values: null } });
+    mockSheetsAppend.mockResolvedValue({});
+
+    const row = ["972501111111", "Old Client", "", "", "", "", "", ""];
+    const result = await upsertLeadRow(row, "לקוח קיים");
+
+    expect(result).toBe(true);
+    expect(mockSheetsAppend).toHaveBeenCalledOnce();
+    const appendArg = mockSheetsAppend.mock.calls[0]?.[0] as { range: string };
+    expect(appendArg.range).toContain("לקוח קיים");
+  });
+
+  it("uses a different system_settings cache key per tab", async () => {
+    // First call: "לידים חדשים" tab — cache miss, writes key leads_sheet_tab_resolved:לידים חדשים
+    const cacheMissNew = makeBuilder({ data: null, error: null });
+    const cacheWriteNew = makeBuilder({ data: null, error: null });
+    // Second call: "לקוח קיים" tab — cache miss, writes key leads_sheet_tab_resolved:לקוח קיים
+    const cacheMissOld = makeBuilder({ data: null, error: null });
+    const cacheWriteOld = makeBuilder({ data: null, error: null });
+
+    mockFromImpl
+      .mockReturnValueOnce(cacheMissNew)  // select for "לידים חדשים" cache
+      .mockReturnValueOnce(cacheWriteNew) // upsert for "לידים חדשים" cache
+      .mockReturnValueOnce(cacheMissOld)  // select for "לקוח קיים" cache
+      .mockReturnValue(cacheWriteOld);    // upsert for "לקוח קיים" cache
+
+    mockSheetsGet.mockResolvedValue({ data: { values: null } });
+    mockSheetsAppend.mockResolvedValue({});
+
+    const rowNew = ["972501234567", "New", "", "", "", "", "", ""];
+    const rowOld = ["972509876543", "Old", "", "", "", "", "", ""];
+
+    await upsertLeadRow(rowNew, "לידים חדשים");
+    await upsertLeadRow(rowOld, "לקוח קיים");
+
+    const cacheWriteNewUpsert = cacheWriteNew["upsert"] as ReturnType<typeof vi.fn>;
+    const cacheWriteOldUpsert = cacheWriteOld["upsert"] as ReturnType<typeof vi.fn>;
+    const newKey = (cacheWriteNewUpsert.mock.calls[0] as [{ key: string }])[0]?.key;
+    const oldKey = (cacheWriteOldUpsert.mock.calls[0] as [{ key: string }])[0]?.key;
+
+    expect(newKey).toBe("leads_sheet_tab_resolved:לידים חדשים");
+    expect(oldKey).toBe("leads_sheet_tab_resolved:לקוח קיים");
+    expect(newKey).not.toBe(oldKey);
   });
 });

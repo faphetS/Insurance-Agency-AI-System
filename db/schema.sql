@@ -100,7 +100,11 @@ CREATE TABLE public.clients (
 
   -- Israeli national ID (תעודת זהות), auto-captured by OCR during intake.
   -- Enables definitive email-to-client matching without relying on name alone.
-  id_number            text
+  id_number            text,
+
+  -- New/Old client choice from the first intake button step; routes the lead
+  -- to the matching Google Sheets tab (new → לידים חדשים, old → לקוח קיים).
+  client_type          text        CHECK (client_type IN ('new', 'old'))
 );
 
 -- ============================================================

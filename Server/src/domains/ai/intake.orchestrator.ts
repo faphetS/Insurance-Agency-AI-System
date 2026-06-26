@@ -35,6 +35,7 @@ interface ClientIntakeUpdate {
   intake_completed_at?: string | null;
   pipeline_stage?: string | null;
   complexity?: string | null;
+  client_type?: string | null;
 }
 
 function updateClient(id: string, values: ClientIntakeUpdate) {
@@ -263,9 +264,14 @@ async function handleClientType(
   conversationId: string,
   chatId: string,
   clientId: string,
-  _payload: MessagePayload,
+  payload: MessagePayload,
 ): Promise<void> {
-  // TODO: future routing will branch on _payload.text (the tapped label)
+  // Map button tap to 'new' or 'old'. Labels ("New client"/"Old client") come from Clix;
+  // ids ("new_client"/"old_client") come from GreenAPI. Anything matching /old/i → 'old'.
+  const client_type: string =
+    payload.kind === "text" && /old/i.test(payload.text) ? "old" : "new";
+
+  await updateClient(clientId, { client_type });
   await advanceTo(conversationId, chatId, clientId, "team_routing");
 }
 

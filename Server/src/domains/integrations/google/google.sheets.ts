@@ -4,13 +4,14 @@ import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { getAuthenticatedClient } from "./google.auth.js";
 
-const CACHE_KEY = "leads_sheet_tab_resolved";
+export async function resolveLeadsTabTitle(tabTitle?: string): Promise<string | null> {
+  const requestedTab = (tabTitle ?? env.LEADS_SHEET_TAB).trim();
+  const cacheKey = `leads_sheet_tab_resolved:${requestedTab}`;
 
-export async function resolveLeadsTabTitle(): Promise<string | null> {
   const { data: cached } = await supabaseAdmin
     .from("system_settings")
     .select("value")
-    .eq("key", CACHE_KEY)
+    .eq("key", cacheKey)
     .maybeSingle();
 
   if (cached?.value) {
@@ -32,14 +33,13 @@ export async function resolveLeadsTabTitle(): Promise<string | null> {
       fields: "sheets.properties.title",
     });
 
-    const tabTitle = env.LEADS_SHEET_TAB.trim();
     const match = (res.data.sheets ?? []).find(
-      (s) => (s.properties?.title ?? "").trim() === tabTitle,
+      (s) => (s.properties?.title ?? "").trim() === requestedTab,
     );
 
     if (!match?.properties?.title) {
       logger.warn(
-        { tabTitle, available: (res.data.sheets ?? []).map((s) => s.properties?.title) },
+        { tabTitle: requestedTab, available: (res.data.sheets ?? []).map((s) => s.properties?.title) },
         "google.sheets: tab not found in spreadsheet",
       );
       return null;
@@ -49,7 +49,7 @@ export async function resolveLeadsTabTitle(): Promise<string | null> {
 
     await supabaseAdmin
       .from("system_settings")
-      .upsert({ key: CACHE_KEY, value: exact }, { onConflict: "key" });
+      .upsert({ key: cacheKey, value: exact }, { onConflict: "key" });
 
     return exact;
   } catch (err) {
@@ -58,8 +58,8 @@ export async function resolveLeadsTabTitle(): Promise<string | null> {
   }
 }
 
-export async function appendLeadRow(values: string[]): Promise<boolean> {
-  const title = await resolveLeadsTabTitle();
+export async function appendLeadRow(values: string[], tabTitle?: string): Promise<boolean> {
+  const title = await resolveLeadsTabTitle(tabTitle);
   if (!title) {
     logger.warn("google.sheets: appendLeadRow — no resolved tab title");
     return false;
@@ -89,10 +89,10 @@ export async function appendLeadRow(values: string[]): Promise<boolean> {
   }
 }
 
-export async function upsertLeadRow(values: string[]): Promise<boolean> {
+export async function upsertLeadRow(values: string[], tabTitle?: string): Promise<boolean> {
   const phone = String(values[0] ?? "").replace(/\D/g, "");
 
-  const title = await resolveLeadsTabTitle();
+  const title = await resolveLeadsTabTitle(tabTitle);
   if (!title) {
     logger.warn("google.sheets: upsertLeadRow — no resolved tab title");
     return false;

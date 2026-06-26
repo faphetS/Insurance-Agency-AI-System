@@ -1,6 +1,6 @@
 /**
  * Unit tests for the new front-of-flow slots:
- *  - handleClientType: advances client_type → team_routing on any payload
+ *  - handleClientType: captures client_type ('new'/'old'), persists it, then advances to team_routing
  *  - handleTeamRouting: advances team_routing → full_name on any payload
  *  - sendButtonPrompt: sends interactive buttons for new slots; falls back to plain text on failure
  *
@@ -102,10 +102,10 @@ const BOT_ENABLED = { data: { enabled: true }, error: null };
 const CONV_ACTIVE = { data: { bot_paused: false, bot_paused_until: null }, error: null };
 
 // ---------------------------------------------------------------------------
-// handleClientType — advances client_type → team_routing on any payload
+// handleClientType — captures client_type and advances to team_routing
 // ---------------------------------------------------------------------------
 
-describe("handleClientType — advances to team_routing regardless of payload", () => {
+describe("handleClientType — client_type mapping and DB persistence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-team" });
@@ -116,12 +116,65 @@ describe("handleClientType — advances to team_routing regardless of payload", 
     const botSettings = makeBuilder(BOT_ENABLED);
     const conv = makeBuilder(CONV_ACTIVE);
     const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "client_type" }, error: null });
+    // updateClient for client_type
+    const updateClientType = makeBuilder({ data: null, error: null });
+    // updateClient inside advanceTo for intake_current_slot
     const updateSlot = makeBuilder({ data: null, error: null });
+    // persistOutbound
     const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateSlot, persistMsg]);
+    setupFrom([botSettings, conv, client, updateClientType, updateSlot, persistMsg]);
+    return { updateClientType };
   }
 
-  it("text payload advances to team_routing", async () => {
+  it("label 'New client' → client_type 'new'", async () => {
+    const { updateClientType } = setupClientTypeSlot();
+    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("New client"));
+    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "new" });
+  });
+
+  it("label 'Old client' → client_type 'old'", async () => {
+    const { updateClientType } = setupClientTypeSlot();
+    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("Old client"));
+    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "old" });
+  });
+
+  it("id 'old_client' → client_type 'old'", async () => {
+    const { updateClientType } = setupClientTypeSlot();
+    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("old_client"));
+    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "old" });
+  });
+
+  it("id 'new_client' → client_type 'new'", async () => {
+    const { updateClientType } = setupClientTypeSlot();
+    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("new_client"));
+    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "new" });
+  });
+
+  it("unrecognised text → defaults to 'new'", async () => {
+    const { updateClientType } = setupClientTypeSlot();
+    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("something else"));
+    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "new" });
+  });
+
+  it("non-text payload (image) → defaults to 'new'", async () => {
+    const { updateClientType } = setupClientTypeSlot();
+    await handleIntake("conv1", "client1", "chat1@c.us", imagePayload());
+    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "new" });
+  });
+
+  it("advances to team_routing regardless of payload (text)", async () => {
     setupClientTypeSlot();
     const result = await handleIntake("conv1", "client1", "chat1@c.us", textPayload("New client"));
     expect(result.consumed).toBe(true);
@@ -130,7 +183,7 @@ describe("handleClientType — advances to team_routing regardless of payload", 
     expect(call?.[1]).toContain("צוות");
   });
 
-  it("image payload also advances to team_routing", async () => {
+  it("advances to team_routing regardless of payload (image)", async () => {
     setupClientTypeSlot();
     const result = await handleIntake("conv1", "client1", "chat1@c.us", imagePayload());
     expect(result.consumed).toBe(true);
@@ -208,18 +261,20 @@ describe("sendButtonPrompt — fallback to plain text on button send failure", (
   });
 
   it("team_routing: falls back to plain text list when interactive buttons throw", async () => {
-    // Start from client_type slot → advanceTo("team_routing") → sendButtonPrompt("team_routing") throws
+    // Start from client_type slot → updateClient(client_type) → advanceTo("team_routing") → sendButtonPrompt throws
     mockSendInteractiveButtons.mockRejectedValueOnce(new Error("buttons unsupported"));
 
     const botSettings = makeBuilder(BOT_ENABLED);
     const conv = makeBuilder(CONV_ACTIVE);
     // client_type slot
     const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "client_type" }, error: null });
-    // updateClient(clientId, { intake_current_slot: "team_routing" })
+    // updateClient for client_type
+    const updateClientType = makeBuilder({ data: null, error: null });
+    // updateClient inside advanceTo for intake_current_slot
     const updateSlot = makeBuilder({ data: null, error: null });
     // persistOutbound after fallback sendMessageWithTyping
     const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateSlot, persistMsg]);
+    setupFrom([botSettings, conv, client, updateClientType, updateSlot, persistMsg]);
 
     const result = await handleIntake("conv4", "client4", "chat4@c.us", textPayload("New client"));
     expect(result.consumed).toBe(true);

@@ -26,6 +26,8 @@ vi.mock("../../../config/env.js", () => ({
     LEADS_MIRROR_ENABLED: true,
     LEADS_SPREADSHEET_ID: "sheet-id",
     LEADS_SHEET_TAB: "לידים חדשים",
+    LEADS_SHEET_TAB_NEW: "לידים חדשים",
+    LEADS_SHEET_TAB_OLD: "לקוח קיים",
     LEADS_DRIVE_FOLDER_ID: "folder-id",
     NODE_ENV: "test",
   },
@@ -86,7 +88,106 @@ import { mirrorLeadToSheet } from "./leads-mirror.service.js";
 
 const CLIENT_ID = "client-abc-123";
 
-describe("mirrorLeadToSheet", () => {
+// ---------------------------------------------------------------------------
+// Tab routing by client_type
+// ---------------------------------------------------------------------------
+
+describe("mirrorLeadToSheet — tab routing by client_type", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpsertLeadRow.mockResolvedValue(true);
+  });
+
+  it("routes client_type:'new' to LEADS_SHEET_TAB_NEW", async () => {
+    const clientData = {
+      full_name: "יעל כהן",
+      phone: "972501234567",
+      email: "yael@example.com",
+      inquiry_type: "life",
+      id_number: "123456789",
+      id_photo_url: "https://drive.google.com/file/d/abc/view",
+      poa_doc_url: null,
+      client_type: "new",
+    };
+
+    const clientBuilder = makeBuilder({ data: clientData, error: null });
+    setupFromSequence([clientBuilder]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
+    const [, tabTitle] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
+    expect(tabTitle).toBe("לידים חדשים");
+  });
+
+  it("routes client_type:'old' to LEADS_SHEET_TAB_OLD", async () => {
+    const clientData = {
+      full_name: "דוד לוי",
+      phone: "972509876543",
+      email: null,
+      inquiry_type: "health",
+      id_number: null,
+      id_photo_url: null,
+      poa_doc_url: null,
+      client_type: "old",
+    };
+
+    const clientBuilder = makeBuilder({ data: clientData, error: null });
+    setupFromSequence([clientBuilder]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
+    const [, tabTitle] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
+    expect(tabTitle).toBe("לקוח קיים");
+  });
+
+  it("does NOT call upsertLeadRow when client_type is null", async () => {
+    const clientData = {
+      full_name: "Unknown",
+      phone: "972500000001",
+      email: null,
+      inquiry_type: null,
+      id_number: null,
+      id_photo_url: null,
+      poa_doc_url: null,
+      client_type: null,
+    };
+
+    const clientBuilder = makeBuilder({ data: clientData, error: null });
+    setupFromSequence([clientBuilder]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call upsertLeadRow when client_type is undefined", async () => {
+    const clientData = {
+      full_name: "Unknown",
+      phone: "972500000002",
+      email: null,
+      inquiry_type: null,
+      id_number: null,
+      id_photo_url: null,
+      poa_doc_url: null,
+      client_type: undefined,
+    };
+
+    const clientBuilder = makeBuilder({ data: clientData, error: null });
+    setupFromSequence([clientBuilder]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Existing row-building tests (updated: client_type required for write to proceed)
+// ---------------------------------------------------------------------------
+
+describe("mirrorLeadToSheet — row building", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -100,6 +201,7 @@ describe("mirrorLeadToSheet", () => {
       id_number: "123456789",
       id_photo_url: "https://drive.google.com/file/d/abc/view",
       poa_doc_url: null,
+      client_type: "new",
     };
 
     const clientBuilder = makeBuilder({ data: clientData, error: null });
@@ -123,30 +225,6 @@ describe("mirrorLeadToSheet", () => {
     expect(row[7]).toBe("");                     // relevance (always empty)
   });
 
-  it("calls upsertLeadRow even when some fields are null (early-stage sync)", async () => {
-    const clientData = {
-      full_name: null,
-      phone: "972509876543",
-      email: null,
-      inquiry_type: null,
-      id_number: null,
-      id_photo_url: null,
-      poa_doc_url: null,
-    };
-
-    const clientBuilder = makeBuilder({ data: clientData, error: null });
-    setupFromSequence([clientBuilder]);
-    mockUpsertLeadRow.mockResolvedValue(true);
-
-    await mirrorLeadToSheet(CLIENT_ID);
-
-    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
-    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
-    expect(row[0]).toBe("972509876543");
-    expect(row[1]).toBe("");
-    expect(row[3]).toBe("");
-  });
-
   it("never throws even if upsertLeadRow throws", async () => {
     const clientData = {
       full_name: "אבי",
@@ -156,6 +234,7 @@ describe("mirrorLeadToSheet", () => {
       id_number: null,
       id_photo_url: null,
       poa_doc_url: null,
+      client_type: "new",
     };
 
     const clientBuilder = makeBuilder({ data: clientData, error: null });
@@ -212,6 +291,7 @@ describe("mirrorLeadToSheet", () => {
         id_number: null,
         id_photo_url: null,
         poa_doc_url: null,
+        client_type: "new",
       };
 
       const clientBuilder = makeBuilder({ data: clientData, error: null });

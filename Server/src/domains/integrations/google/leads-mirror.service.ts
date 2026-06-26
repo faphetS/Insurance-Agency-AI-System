@@ -11,7 +11,7 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
   try {
     const { data: client } = await supabaseAdmin
       .from("clients")
-      .select("full_name, phone, email, inquiry_type, id_number, id_photo_url, poa_doc_url")
+      .select("full_name, phone, email, inquiry_type, id_number, id_photo_url, poa_doc_url, client_type")
       .eq("id", clientId)
       .maybeSingle();
 
@@ -28,7 +28,15 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
       id_number?: string | null;
       id_photo_url?: string | null;
       poa_doc_url?: string | null;
+      client_type?: string | null;
     };
+
+    if (c.client_type !== "new" && c.client_type !== "old") {
+      logger.debug({ clientId, client_type: c.client_type }, "leads-mirror: client_type not yet set — skipping");
+      return;
+    }
+
+    const targetTab = c.client_type === "old" ? env.LEADS_SHEET_TAB_OLD : env.LEADS_SHEET_TAB_NEW;
 
     const inquiryHe =
       INQUIRY_TYPE_HE[c.inquiry_type as InquiryType] ?? c.inquiry_type ?? "";
@@ -44,7 +52,7 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
       "",
     ];
 
-    await upsertLeadRow(row);
+    await upsertLeadRow(row, targetTab);
   } catch (err) {
     logger.error({ err, clientId }, "leads-mirror: unexpected error");
   }
