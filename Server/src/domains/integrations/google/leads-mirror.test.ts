@@ -4,16 +4,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vi.hoisted shared mock functions
 // ---------------------------------------------------------------------------
 const {
-  mockPoolQuery,
   mockFromImpl,
-  mockAppendLeadRow,
+  mockUpsertLeadRow,
   mockResolveLeadsTabTitle,
 } = vi.hoisted(() => {
-  const mockPoolQuery = vi.fn();
   const mockFromImpl = vi.fn();
-  const mockAppendLeadRow = vi.fn();
+  const mockUpsertLeadRow = vi.fn();
   const mockResolveLeadsTabTitle = vi.fn();
-  return { mockPoolQuery, mockFromImpl, mockAppendLeadRow, mockResolveLeadsTabTitle };
+  return {
+    mockFromImpl,
+    mockUpsertLeadRow,
+    mockResolveLeadsTabTitle,
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -38,11 +40,12 @@ vi.mock("../../../config/supabase.js", () => ({
 }));
 
 vi.mock("../../../lib/db.js", () => ({
-  pool: { query: mockPoolQuery },
+  pool: { query: vi.fn() },
 }));
 
 vi.mock("./google.sheets.js", () => ({
-  appendLeadRow: mockAppendLeadRow,
+  upsertLeadRow: mockUpsertLeadRow,
+  appendLeadRow: vi.fn(),
   resolveLeadsTabTitle: mockResolveLeadsTabTitle,
 }));
 
@@ -88,19 +91,7 @@ describe("mirrorLeadToSheet", () => {
     vi.clearAllMocks();
   });
 
-  it("skips when claim returns 0 rows (already mirrored)", async () => {
-    mockPoolQuery.mockResolvedValue({ rowCount: 0, rows: [] });
-
-    await mirrorLeadToSheet(CLIENT_ID);
-
-    expect(mockPoolQuery).toHaveBeenCalledOnce();
-    expect(mockFromImpl).not.toHaveBeenCalled();
-    expect(mockAppendLeadRow).not.toHaveBeenCalled();
-  });
-
   it("builds the A→H row correctly including Hebrew inquiry label and empty POA", async () => {
-    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [{ id: CLIENT_ID }] });
-
     const clientData = {
       full_name: "יעל כהן",
       phone: "972501234567",
@@ -114,12 +105,12 @@ describe("mirrorLeadToSheet", () => {
     const clientBuilder = makeBuilder({ data: clientData, error: null });
     setupFromSequence([clientBuilder]);
 
-    mockAppendLeadRow.mockResolvedValue(true);
+    mockUpsertLeadRow.mockResolvedValue(true);
 
     await mirrorLeadToSheet(CLIENT_ID);
 
-    expect(mockAppendLeadRow).toHaveBeenCalledOnce();
-    const [row] = mockAppendLeadRow.mock.calls[0] as [string[]];
+    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
+    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
 
     expect(row).toHaveLength(8);
     expect(row[0]).toBe("972501234567");         // phone
@@ -132,37 +123,31 @@ describe("mirrorLeadToSheet", () => {
     expect(row[7]).toBe("");                     // relevance (always empty)
   });
 
-  it("reverts the claim when appendLeadRow returns false", async () => {
-    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [{ id: CLIENT_ID }] });
-
+  it("calls upsertLeadRow even when some fields are null (early-stage sync)", async () => {
     const clientData = {
-      full_name: "דני לוי",
+      full_name: null,
       phone: "972509876543",
       email: null,
-      inquiry_type: "health",
+      inquiry_type: null,
       id_number: null,
-      id_photo_url: "https://drive.google.com/file/d/xyz/view",
+      id_photo_url: null,
       poa_doc_url: null,
     };
 
     const clientBuilder = makeBuilder({ data: clientData, error: null });
     setupFromSequence([clientBuilder]);
-
-    mockAppendLeadRow.mockResolvedValue(false);
+    mockUpsertLeadRow.mockResolvedValue(true);
 
     await mirrorLeadToSheet(CLIENT_ID);
 
-    expect(mockAppendLeadRow).toHaveBeenCalledOnce();
-    // Second pool.query call is the revert
-    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
-    const revertCall = mockPoolQuery.mock.calls[1] as [string, unknown[]];
-    expect(revertCall[0]).toMatch(/mirrored_to_sheet_at = NULL/);
-    expect(revertCall[1]).toEqual([CLIENT_ID]);
+    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
+    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
+    expect(row[0]).toBe("972509876543");
+    expect(row[1]).toBe("");
+    expect(row[3]).toBe("");
   });
 
-  it("never throws even if appendLeadRow throws", async () => {
-    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [{ id: CLIENT_ID }] });
-
+  it("never throws even if upsertLeadRow throws", async () => {
     const clientData = {
       full_name: "אבי",
       phone: "972500000001",
@@ -176,19 +161,30 @@ describe("mirrorLeadToSheet", () => {
     const clientBuilder = makeBuilder({ data: clientData, error: null });
     setupFromSequence([clientBuilder]);
 
-    mockAppendLeadRow.mockRejectedValue(new Error("sheets API down"));
+    mockUpsertLeadRow.mockRejectedValue(new Error("sheets API down"));
 
     await expect(mirrorLeadToSheet(CLIENT_ID)).resolves.toBeUndefined();
-
-    // Revert must have been attempted
-    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
   });
 
-  it("never throws even if pool.query (claim) throws", async () => {
-    mockPoolQuery.mockRejectedValue(new Error("DB connection lost"));
+  it("skips upsert when client is not found", async () => {
+    const clientBuilder = makeBuilder({ data: null, error: null });
+    setupFromSequence([clientBuilder]);
 
-    await expect(mirrorLeadToSheet(CLIENT_ID)).resolves.toBeUndefined();
-    expect(mockAppendLeadRow).not.toHaveBeenCalled();
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when LEADS_MIRROR_ENABLED is false", async () => {
+    const { env } = await import("../../../config/env.js");
+    (env as Record<string, unknown>)["LEADS_MIRROR_ENABLED"] = false;
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+    expect(mockFromImpl).not.toHaveBeenCalled();
+
+    (env as Record<string, unknown>)["LEADS_MIRROR_ENABLED"] = true;
   });
 
   it("uses all 10 INQUIRY_TYPE_HE values without fallback for known types", async () => {
@@ -207,7 +203,6 @@ describe("mirrorLeadToSheet", () => {
 
     for (const [type, expected] of types) {
       vi.clearAllMocks();
-      mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [{ id: CLIENT_ID }] });
 
       const clientData = {
         full_name: "Test",
@@ -221,44 +216,25 @@ describe("mirrorLeadToSheet", () => {
 
       const clientBuilder = makeBuilder({ data: clientData, error: null });
       setupFromSequence([clientBuilder]);
-      mockAppendLeadRow.mockResolvedValue(true);
+      mockUpsertLeadRow.mockResolvedValue(true);
 
       await mirrorLeadToSheet(CLIENT_ID);
 
-      const [row] = mockAppendLeadRow.mock.calls[0] as [string[]];
+      const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
       expect(row[3]).toBe(expected);
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// resolveLeadsTabTitle / appendLeadRow tab resolution
+// google.sheets — tab resolution (contract kept from original test suite)
 // ---------------------------------------------------------------------------
-describe("google.sheets — tab resolution and append", () => {
+describe("google.sheets — tab resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("appendLeadRow uses RAW valueInputOption (verified via mock call args)", async () => {
-    // We verify the contract: resolveLeadsTabTitle is called before the sheets API.
-    // Since google.sheets is not mocked at the module level here (we mock appendLeadRow
-    // itself in leads-mirror tests), we test the shape that appendLeadRow would pass
-    // through a thin integration by importing it directly and checking the mock.
-    mockResolveLeadsTabTitle.mockResolvedValue("לידים חדשים ");
-    mockAppendLeadRow.mockResolvedValue(true);
-
-    // Confirming appendLeadRow is called — the actual Sheets API call uses RAW,
-    // which is enforced in google.sheets.ts (tested by the module-level call
-    // to appendLeadRow below, using a direct import of the real module in a
-    // separate describe to avoid circular mock confusion).
-    const result = await mockAppendLeadRow(["a", "b", "c", "d", "e", "f", "g", ""]);
-    expect(result).toBe(true);
-  });
-
   it("resolveLeadsTabTitle trims the env tab name when matching", async () => {
-    // Verify: the real implementation uses .trim() on both sides.
-    // We do a duck-type verification via the mock — it's called with the exact
-    // title (trailing space) that was returned from the spreadsheet.
     mockResolveLeadsTabTitle.mockResolvedValue("לידים חדשים ");
     const title = await mockResolveLeadsTabTitle();
     expect(title).toBe("לידים חדשים ");

@@ -144,6 +144,12 @@ async function advanceTo(
     return;
   }
 
+  try {
+    await mirrorLeadToSheet(clientId);
+  } catch (err) {
+    logger.warn({ err, clientId }, "intake: advanceTo lead sheet sync failed");
+  }
+
   if (next === "done") {
     await finalize(conversationId, chatId, clientId);
     return;
