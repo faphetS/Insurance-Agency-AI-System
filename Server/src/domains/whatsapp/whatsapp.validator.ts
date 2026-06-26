@@ -230,27 +230,35 @@ export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 // CLIX gateway — inbound webhook schema + normalisation adapter
 // ---------------------------------------------------------------------------
 
-const clixMediaObjectSchema = z.object({
-  base64: z.string(),
-  mimetype: z.string().optional(),
-  caption: z.string().optional(),
-  fileName: z.string().optional(),
-});
+const clixMediaObjectSchema = z
+  .object({
+    base64: z.string().optional(),
+    mimetype: z.string().nullish(),
+    caption: z.string().nullish(),
+    fileName: z.string().nullish(),
+  })
+  .passthrough();
 
-export const clixWebhookSchema = z.object({
-  customerId: z.string(),
-  type: z.string(),
-  chatType: z.string(),
-  from: z.string(),
-  participant: z.string().optional(),
-  pushName: z.string().optional(),
-  message: z.string().optional(),
-  messageType: z.string(),
-  timestamp: z.number(),
-  // Media arrives under either "image" or "media" key
-  image: clixMediaObjectSchema.optional(),
-  media: clixMediaObjectSchema.optional(),
-});
+// Lenient by design: real Clix payloads vary (null fields on media messages,
+// string timestamps, extra keys). We hard-require only the routing/identity
+// fields; everything else tolerates null/missing so a photo is never dropped
+// as "malformed".
+export const clixWebhookSchema = z
+  .object({
+    customerId: z.string(),
+    type: z.string(),
+    chatType: z.string().default("private"),
+    from: z.string(),
+    participant: z.string().nullish(),
+    pushName: z.string().nullish(),
+    message: z.string().nullish(),
+    messageType: z.string().default("text"),
+    timestamp: z.coerce.number().default(0),
+    // Media arrives under either "image" or "media" key (shape varies — stay lenient)
+    image: clixMediaObjectSchema.nullish(),
+    media: clixMediaObjectSchema.nullish(),
+  })
+  .passthrough();
 
 export type ClixWebhookPayload = z.infer<typeof clixWebhookSchema>;
 
@@ -319,11 +327,12 @@ export function clixToInternal(body: unknown): ClixToInternalResult | null {
   let mediaAttachment: ClixMediaAttachment | null = null;
 
   if (MEDIA_TYPES.has(messageType)) {
-    const mediaObj = image ?? media ?? null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mediaObj = (image ?? media ?? null) as any;
     const resolvedKind = (messageType === "image" || messageType === "video" || messageType === "document")
       ? messageType
       : "document";
-    const fileName = mediaObj?.fileName;
+    const fileName: string | undefined = mediaObj?.fileName ?? mediaObj?.filename ?? undefined;
     const placeholder =
       messageType === "image"
         ? `[image: ${fileName ?? "photo"}]`
@@ -336,13 +345,15 @@ export function clixToInternal(body: unknown): ClixToInternalResult | null {
       textMessageData: { textMessage: placeholder },
     };
 
-    if (mediaObj) {
+    // base64 field name varies across gateways — try the common ones.
+    const b64: unknown = mediaObj ? (mediaObj.base64 ?? mediaObj.data ?? mediaObj.body) : null;
+    if (typeof b64 === "string" && b64.length > 0) {
       mediaAttachment = {
         kind: resolvedKind as ClixMediaAttachment["kind"],
-        base64: mediaObj.base64,
-        mimetype: mediaObj.mimetype,
-        fileName: mediaObj.fileName,
-        caption: mediaObj.caption,
+        base64: b64,
+        mimetype: (mediaObj.mimetype ?? mediaObj.mimeType ?? undefined) as string | undefined,
+        fileName,
+        caption: (mediaObj.caption ?? undefined) as string | undefined,
       };
     }
   } else {

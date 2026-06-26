@@ -62,6 +62,8 @@ export const whatsappController = {
 
     if (isClixShaped) {
       // CLIX gateway path
+      // TEMP DEBUG: capture the real raw Clix payload shape (esp. media) — remove after testing.
+      logger.info({ clixRaw: JSON.stringify(rawBody).slice(0, 1200) }, "Clix raw body (debug)");
       const clixResult = clixToInternal(rawBody);
       if (!clixResult) {
         // null means outgoing echo or malformed — silently ack
