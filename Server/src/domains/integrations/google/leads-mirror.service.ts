@@ -37,8 +37,10 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
 
     const targetTab = env.LEADS_SHEET_TAB_NEW;
 
-    const inquiryHe =
-      INQUIRY_TYPE_HE[c.inquiry_type ?? ""] ?? c.inquiry_type ?? "";
+    // Only show a real, chosen inquiry type (one of the button ids). The client row
+    // is created with a placeholder inquiry_type='general' before the user picks one,
+    // so anything not in the Hebrew map renders blank until they actually choose.
+    const inquiryHe = INQUIRY_TYPE_HE[c.inquiry_type ?? ""] ?? "";
 
     const row = [
       String(c.phone ?? ""),

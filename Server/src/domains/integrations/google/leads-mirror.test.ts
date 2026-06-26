@@ -222,6 +222,28 @@ describe("mirrorLeadToSheet — row building", () => {
     expect(row[7]).toBe("");                     // relevance (always empty)
   });
 
+  it("renders inquiry blank for the placeholder 'general' (not yet chosen)", async () => {
+    const clientData = {
+      full_name: "",
+      phone: "972501112222",
+      email: null,
+      inquiry_type: "general", // placeholder default before the user picks a button
+      id_number: null,
+      id_photo_url: null,
+      poa_doc_url: null,
+      client_type: "new",
+    };
+
+    const clientBuilder = makeBuilder({ data: clientData, error: null });
+    setupFromSequence([clientBuilder]);
+    mockUpsertLeadRow.mockResolvedValue(true);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
+    expect(row[3]).toBe(""); // inquiry column blank, not "general"
+  });
+
   it("never throws even if upsertLeadRow throws", async () => {
     const clientData = {
       full_name: "אבי",
