@@ -216,12 +216,21 @@ Respond ONLY with JSON: {"complexity": "simple"} or {"complexity": "complex"}`;
   }
 }
 
-const ID_NUMBER_RE = /^\d{8,9}$/;
+const ID_PLAUSIBLE_RE = /^[A-Z0-9-]{5,30}$/;
+
+function normalizeIdNumber(raw: string): string | null {
+  const normalized = raw.trim().toUpperCase().replace(/\s+/g, "");
+  if (!ID_PLAUSIBLE_RE.test(normalized)) return null;
+  const digitCount = (normalized.match(/\d/g) ?? []).length;
+  if (digitCount < 2) return null;
+  return normalized;
+}
 
 /**
  * Single vision pass that both validates the ID photo AND extracts the
- * Israeli national ID number (תעודת זהות). Returns validity + idNumber so
- * the caller does not need a second LLM call.
+ * document's primary ID number. Supports Israeli ת"ז (8–9 digits) and
+ * foreign IDs/passports that may be alphanumeric with dashes.
+ * Returns validity + idNumber so the caller does not need a second LLM call.
  */
 export async function validateIdPhoto(imageUrl: string): Promise<{
   valid: boolean;
@@ -232,19 +241,20 @@ export async function validateIdPhoto(imageUrl: string): Promise<{
     'Is this a government-issued ID document (passport, driver\'s license, national ID card, etc.)? ' +
     'Only check that the image shows an ID document and is readable. ' +
     'Do NOT judge authenticity or check expiration dates. ' +
-    'Also extract the 9-digit Israeli national ID number (תעודת זהות / ת"ז) if visible — it is a sequence of exactly 8 or 9 digits. ' +
+    'Also extract the document\'s primary ID/document number exactly as printed — ' +
+    'for an Israeli ID that is the 8–9 digit ת"ז number; for a foreign ID it may include letters and dashes. ' +
+    'Omit surrounding spaces. Return null only if no ID number is readable. ' +
     'Respond ONLY with JSON: ' +
-    '{"valid": true, "reason": "<short explanation IN HEBREW>", "idNumber": "<9-digit number or null>"} ' +
+    '{"valid": true, "reason": "<short explanation IN HEBREW>", "idNumber": "<document number or null>"} ' +
     'or {"valid": false, "reason": "<short explanation IN HEBREW>", "idNumber": null}. ' +
     'The "reason" value MUST be in Hebrew with gender-neutral phrasing (use infinitives like לשלוח, impersonal forms like נדרש, avoid אתה/את). ' +
-    '"idNumber" must be the raw digit string only, no spaces or dashes, or null if not found/readable.';
+    '"idNumber" must be the exact character sequence of the ID number (letters, digits, dashes — no surrounding spaces), or null if not found/readable.';
 
   const raw = await analyzeImage(imageUrl, prompt);
   try {
     const cleaned = raw.replace(/```json\n?|\n?```/g, "").trim();
     const parsed = JSON.parse(cleaned) as { valid?: boolean; reason?: string; idNumber?: string | null };
-    const rawId = typeof parsed.idNumber === "string" ? parsed.idNumber.replace(/\D/g, "") : null;
-    const idNumber = rawId && ID_NUMBER_RE.test(rawId) ? rawId : null;
+    const idNumber = typeof parsed.idNumber === "string" ? normalizeIdNumber(parsed.idNumber) : null;
     return {
       valid: parsed.valid === true,
       reason: typeof parsed.reason === "string" ? parsed.reason : "",
