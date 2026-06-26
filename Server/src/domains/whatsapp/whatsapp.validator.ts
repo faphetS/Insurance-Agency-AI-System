@@ -253,7 +253,8 @@ export const clixWebhookSchema = z
     pushName: z.string().nullish(),
     message: z.string().nullish(),
     messageType: z.string().default("text"),
-    timestamp: z.coerce.number().default(0),
+    // may be a number, a numeric string, or a Long object {low,high,unsigned}
+    timestamp: z.unknown().optional(),
     // Media arrives under either "image" or "media" key (shape varies — stay lenient)
     image: clixMediaObjectSchema.nullish(),
     media: clixMediaObjectSchema.nullish(),
@@ -314,7 +315,13 @@ export function clixToInternal(body: unknown): ClixToInternalResult | null {
   // Synthesise a stable dedupe id: clix:<customerId>:<from>:<timestamp>:<hash>
   const hashInput = messageType === "text" ? (message ?? "") : (image?.fileName ?? media?.fileName ?? messageType);
   const msgHash = createHash("sha1").update(hashInput).digest("hex").slice(0, 12);
-  const idMessage = `clix:${customerId}:${from}:${timestamp}:${msgHash}`;
+  const tsPart =
+    typeof timestamp === "number" || typeof timestamp === "string"
+      ? String(timestamp)
+      : timestamp && typeof timestamp === "object"
+        ? String((timestamp as Record<string, unknown>).low ?? JSON.stringify(timestamp))
+        : "0";
+  const idMessage = `clix:${customerId}:${from}:${tsPart}:${msgHash}`;
 
   // Non-private chats (groups) get @g.us suffix so the existing group filter drops them
   const chatIdSuffix = chatType === "private" ? "@c.us" : "@g.us";
