@@ -6,27 +6,27 @@ describe("INQUIRY_TYPE_HE", () => {
     for (const type of INQUIRY_TYPES) {
       expect(INQUIRY_TYPE_HE).toHaveProperty(type);
       expect(typeof INQUIRY_TYPE_HE[type]).toBe("string");
-      expect(INQUIRY_TYPE_HE[type].length).toBeGreaterThan(0);
+      expect(INQUIRY_TYPE_HE[type]!.length).toBeGreaterThan(0);
     }
   });
 
-  it("covers all 10 inquiry types with non-empty Hebrew strings", () => {
+  it("covers exactly the 7 new button ids", () => {
     expect(Object.keys(INQUIRY_TYPE_HE)).toHaveLength(INQUIRY_TYPES.length);
-  });
-
-  it("maps life → ביטוח חיים", () => {
-    expect(INQUIRY_TYPE_HE.life).toBe("ביטוח חיים");
   });
 
   it("maps vehicle → ביטוח רכב", () => {
     expect(INQUIRY_TYPE_HE.vehicle).toBe("ביטוח רכב");
   });
 
-  it("maps general → כללי", () => {
-    expect(INQUIRY_TYPE_HE.general).toBe("כללי");
+  it("maps home → ביטוח דירה", () => {
+    expect(INQUIRY_TYPE_HE.home).toBe("ביטוח דירה");
   });
 
-  it("maps pension → ביטוח פנסיוני", () => {
-    expect(INQUIRY_TYPE_HE.pension).toBe("ביטוח פנסיוני");
+  it("maps life_health_pension → ביטוח חיים/בריאות/פנסיה", () => {
+    expect(INQUIRY_TYPE_HE.life_health_pension).toBe("ביטוח חיים/בריאות/פנסיה");
+  });
+
+  it("maps other → אחר", () => {
+    expect(INQUIRY_TYPE_HE.other).toBe("אחר");
   });
 });

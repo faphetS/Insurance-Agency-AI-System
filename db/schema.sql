@@ -53,9 +53,12 @@ CREATE TABLE public.clients (
   poa_doc_url          text,
   inquiry_type         text        NOT NULL
                        CHECK (inquiry_type IN (
+                         -- legacy free-text classification keys (kept for old rows)
                          'life', 'health', 'property', 'vehicle',
                          'liability', 'business', 'pension', 'travel',
-                         'mortgage', 'general'
+                         'mortgage', 'general',
+                         -- new fixed button set (2026-06-26)
+                         'home', 'life_health_pension', 'finance', 'other'
                        )),
   status               text        NOT NULL DEFAULT 'new'
                        CHECK (status IN ('new', 'active', 'completed')),

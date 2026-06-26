@@ -8,8 +8,6 @@ import {
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
 import {
   INTAKE_PROMPTS,
-  INQUIRY_TYPES,
-  type InquiryType,
   type IntakeSlot,
 } from "./intake.prompts.js";
 import { validateIdPhoto, classifyComplexity, classifyIntakeResponse } from "./ai.service.js";
@@ -92,7 +90,7 @@ async function sendButtonPrompt(
   slot: "client_type" | "team_routing" | "inquiry_type",
 ): Promise<void> {
   const prompt = INTAKE_PROMPTS[slot];
-  const footer = "footer" in prompt ? prompt.footer : undefined;
+  const footer = "footer" in prompt ? (prompt as { footer: string }).footer : undefined;
   const fullText = footer ? `${prompt.text}\n${footer}` : prompt.text;
 
   try {
@@ -359,29 +357,17 @@ async function handleInquiryType(
     return;
   }
 
-  // Fast path: exact match against known types
-  const value = payload.text.trim().toLowerCase();
-  if ((INQUIRY_TYPES as readonly string[]).includes(value)) {
-    await updateClient(clientId, { inquiry_type: value as InquiryType });
-    await advanceTo(conversationId, chatId, clientId, "id_photo");
+  const val = payload.text.trim();
+  const buttons = INTAKE_PROMPTS.inquiry_type.buttons;
+  const matched = buttons.find((b) => b.buttonId === val || b.buttonText === val);
+
+  if (!matched) {
+    await sendButtonPrompt(conversationId, chatId, "inquiry_type");
     return;
   }
 
-  // LLM: "I need car insurance" → "vehicle", "life insurance please" → "life"
-  const result = await classifyIntakeResponse(
-    payload.text.trim(),
-    "inquiry_type",
-    INTAKE_PROMPTS.inquiry_type.text,
-    `One of these insurance types: ${INQUIRY_TYPES.join(", ")}. Extract the matching type keyword.`,
-  );
-
-  if (result.valid && (INQUIRY_TYPES as readonly string[]).includes(result.extracted.toLowerCase())) {
-    await updateClient(clientId, { inquiry_type: result.extracted.toLowerCase() as InquiryType });
-    await advanceTo(conversationId, chatId, clientId, "id_photo");
-    return;
-  }
-
-  await sendButtonPrompt(conversationId, chatId, "inquiry_type");
+  await updateClient(clientId, { inquiry_type: matched.buttonId });
+  await advanceTo(conversationId, chatId, clientId, "id_photo");
 }
 
 async function handleIdPhoto(

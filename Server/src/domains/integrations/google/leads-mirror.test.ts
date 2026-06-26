@@ -103,7 +103,7 @@ describe("mirrorLeadToSheet — tab routing by client_type", () => {
       full_name: "יעל כהן",
       phone: "972501234567",
       email: "yael@example.com",
-      inquiry_type: "life",
+      inquiry_type: "vehicle",
       id_number: "123456789",
       id_photo_url: "https://drive.google.com/file/d/abc/view",
       poa_doc_url: null,
@@ -125,7 +125,7 @@ describe("mirrorLeadToSheet — tab routing by client_type", () => {
       full_name: "דוד לוי",
       phone: "972509876543",
       email: null,
-      inquiry_type: "health",
+      inquiry_type: "home",
       id_number: null,
       id_photo_url: null,
       poa_doc_url: null,
@@ -197,7 +197,7 @@ describe("mirrorLeadToSheet — row building", () => {
       full_name: "יעל כהן",
       phone: "972501234567",
       email: "yael@example.com",
-      inquiry_type: "life",
+      inquiry_type: "life_health_pension",
       id_number: "123456789",
       id_photo_url: "https://drive.google.com/file/d/abc/view",
       poa_doc_url: null,
@@ -218,7 +218,7 @@ describe("mirrorLeadToSheet — row building", () => {
     expect(row[0]).toBe("972501234567");         // phone
     expect(row[1]).toBe("יעל כהן");              // full_name
     expect(row[2]).toBe("yael@example.com");     // email
-    expect(row[3]).toBe("ביטוח חיים");           // Hebrew inquiry label
+    expect(row[3]).toBe("ביטוח חיים/בריאות/פנסיה"); // Hebrew inquiry label
     expect(row[4]).toBe("https://drive.google.com/file/d/abc/view"); // id_photo_url
     expect(row[5]).toBe("");                     // poa_doc_url (null → "")
     expect(row[6]).toBe("123456789");            // id_number
@@ -266,18 +266,15 @@ describe("mirrorLeadToSheet — row building", () => {
     (env as Record<string, unknown>)["LEADS_MIRROR_ENABLED"] = true;
   });
 
-  it("uses all 10 INQUIRY_TYPE_HE values without fallback for known types", async () => {
+  it("uses all 7 INQUIRY_TYPE_HE values without fallback for known types", async () => {
     const types = [
-      ["life", "ביטוח חיים"],
-      ["health", "ביטוח בריאות"],
-      ["property", "ביטוח רכוש"],
       ["vehicle", "ביטוח רכב"],
-      ["liability", "ביטוח חבות"],
-      ["business", "ביטוח עסקי"],
-      ["pension", "ביטוח פנסיוני"],
-      ["travel", "ביטוח נסיעות"],
-      ["mortgage", "ביטוח משכנתא"],
-      ["general", "כללי"],
+      ["home", "ביטוח דירה"],
+      ["business", "ביטוח עסקים"],
+      ["life_health_pension", "ביטוח חיים/בריאות/פנסיה"],
+      ["travel", 'ביטוח נסיעות לחו"ל'],
+      ["finance", "פיננסים"],
+      ["other", "אחר"],
     ];
 
     for (const [type, expected] of types) {

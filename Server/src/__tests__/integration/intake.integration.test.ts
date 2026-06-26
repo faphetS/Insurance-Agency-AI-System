@@ -292,15 +292,14 @@ describe("intake.orchestrator — full slot flow", () => {
     expect(rows[0]?.intake_current_slot).toBe("inquiry_type");
   });
 
-  it("inquiry_type slot: exact match ('health') advances to id_photo", async () => {
-    // 'health' is in INQUIRY_TYPES so no LLM call needed
+  it("inquiry_type slot: button id ('vehicle') advances to id_photo without LLM", async () => {
     mockClassify.mockClear();
 
     const result = await handleIntake(
       seeds.conversationId,
       seeds.clientId,
       "97250test@c.us",
-      textPayload("health"),
+      textPayload("vehicle"),
     );
 
     expect(result.consumed).toBe(true);
@@ -310,7 +309,7 @@ describe("intake.orchestrator — full slot flow", () => {
       `SELECT inquiry_type, intake_current_slot FROM clients WHERE id = $1`,
       [seeds.clientId],
     );
-    expect(rows[0]?.inquiry_type).toBe("health");
+    expect(rows[0]?.inquiry_type).toBe("vehicle");
     expect(rows[0]?.intake_current_slot).toBe("id_photo");
   });
 

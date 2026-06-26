@@ -24,12 +24,14 @@ export const INTAKE_PROMPTS = {
   inquiry_type: {
     text: "באיזה סוג ביטוח יש עניין?",
     buttons: [
-      { buttonId: "life", buttonText: "ביטוח חיים" },
-      { buttonId: "health", buttonText: "ביטוח בריאות" },
       { buttonId: "vehicle", buttonText: "ביטוח רכב" },
+      { buttonId: "home", buttonText: "ביטוח דירה" },
+      { buttonId: "business", buttonText: "ביטוח עסקים" },
+      { buttonId: "life_health_pension", buttonText: 'ביטוח חיים/בריאות/פנסיה' },
+      { buttonId: "travel", buttonText: 'ביטוח נסיעות לחו"ל' },
+      { buttonId: "finance", buttonText: "פיננסים" },
+      { buttonId: "other", buttonText: "אחר" },
     ],
-    footer:
-      "לא ברשימה? יש להשיב: רכוש, חבות, עסקי, פנסיה, נסיעות, משכנתא, או כללי.",
   },
   id_photo: {
     text: "נא לשלוח תמונה ברורה של תעודת הזהות (הצד הקדמי). חשוב שהטקסט יהיה קריא.",
@@ -46,31 +48,25 @@ export const INTAKE_PROMPTS = {
 } as const;
 
 export const INQUIRY_TYPES = [
-  "life",
-  "health",
-  "property",
   "vehicle",
-  "liability",
+  "home",
   "business",
-  "pension",
+  "life_health_pension",
   "travel",
-  "mortgage",
-  "general",
+  "finance",
+  "other",
 ] as const;
 
 export type InquiryType = (typeof INQUIRY_TYPES)[number];
 
-export const INQUIRY_TYPE_HE: Record<InquiryType, string> = {
-  life: "ביטוח חיים",
-  health: "ביטוח בריאות",
-  property: "ביטוח רכוש",
+export const INQUIRY_TYPE_HE: Record<string, string> = {
   vehicle: "ביטוח רכב",
-  liability: "ביטוח חבות",
-  business: "ביטוח עסקי",
-  pension: "ביטוח פנסיוני",
-  travel: "ביטוח נסיעות",
-  mortgage: "ביטוח משכנתא",
-  general: "כללי",
+  home: "ביטוח דירה",
+  business: "ביטוח עסקים",
+  life_health_pension: "ביטוח חיים/בריאות/פנסיה",
+  travel: 'ביטוח נסיעות לחו"ל',
+  finance: "פיננסים",
+  other: "אחר",
 };
 
 export const SLOT_ORDER = [

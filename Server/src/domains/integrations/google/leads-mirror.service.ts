@@ -2,7 +2,6 @@ import { supabaseAdmin } from "../../../config/supabase.js";
 import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { INQUIRY_TYPE_HE } from "../../ai/intake.prompts.js";
-import type { InquiryType } from "../../ai/intake.prompts.js";
 import { upsertLeadRow } from "./google.sheets.js";
 
 export async function mirrorLeadToSheet(clientId: string): Promise<void> {
@@ -39,7 +38,7 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
     const targetTab = c.client_type === "old" ? env.LEADS_SHEET_TAB_OLD : env.LEADS_SHEET_TAB_NEW;
 
     const inquiryHe =
-      INQUIRY_TYPE_HE[c.inquiry_type as InquiryType] ?? c.inquiry_type ?? "";
+      INQUIRY_TYPE_HE[c.inquiry_type ?? ""] ?? c.inquiry_type ?? "";
 
     const row = [
       String(c.phone ?? ""),

@@ -228,6 +228,99 @@ describe("handleTeamRouting — advances to full_name regardless of payload", ()
 });
 
 // ---------------------------------------------------------------------------
+// handleInquiryType — 7-button strict match; unmatched always re-prompts
+// ---------------------------------------------------------------------------
+
+describe("handleInquiryType — strict button match, re-prompt on no match", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-inquiry" });
+    mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt-inquiry" });
+  });
+
+  function setupInquirySlot() {
+    const botSettings = makeBuilder(BOT_ENABLED);
+    const conv = makeBuilder(CONV_ACTIVE);
+    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "inquiry_type" }, error: null });
+    // updateClient for inquiry_type
+    const updateInquiry = makeBuilder({ data: null, error: null });
+    // updateClient inside advanceTo for intake_current_slot
+    const updateSlot = makeBuilder({ data: null, error: null });
+    // persistOutbound
+    const persistMsg = makeBuilder({ data: null, error: null });
+    setupFrom([botSettings, conv, client, updateInquiry, updateSlot, persistMsg]);
+    return { updateInquiry };
+  }
+
+  function setupInquirySlotReprompt() {
+    const botSettings = makeBuilder(BOT_ENABLED);
+    const conv = makeBuilder(CONV_ACTIVE);
+    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "inquiry_type" }, error: null });
+    // persistOutbound after re-sent buttons
+    const persistMsg = makeBuilder({ data: null, error: null });
+    setupFrom([botSettings, conv, client, persistMsg]);
+  }
+
+  it("tap by label 'ביטוח רכב' → stored as 'vehicle'", async () => {
+    const { updateInquiry } = setupInquirySlot();
+    await handleIntake("conv5", "client5", "chat5@c.us", textPayload("ביטוח רכב"));
+    const updateFn = updateInquiry["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "vehicle" });
+  });
+
+  it("tap by id 'finance' → stored as 'finance'", async () => {
+    const { updateInquiry } = setupInquirySlot();
+    await handleIntake("conv5", "client5", "chat5@c.us", textPayload("finance"));
+    const updateFn = updateInquiry["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "finance" });
+  });
+
+  it("tap combined button label → stored as 'life_health_pension'", async () => {
+    const { updateInquiry } = setupInquirySlot();
+    await handleIntake("conv5", "client5", "chat5@c.us", textPayload('ביטוח חיים/בריאות/פנסיה'));
+    const updateFn = updateInquiry["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "life_health_pension" });
+  });
+
+  it("tap 'אחר' (button label) → stored as 'other' and advances", async () => {
+    const { updateInquiry } = setupInquirySlot();
+    await handleIntake("conv5", "client5", "chat5@c.us", textPayload("אחר"));
+    const updateFn = updateInquiry["update"] as ReturnType<typeof vi.fn>;
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "other" });
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+  });
+
+  it("unmatched free text → re-sends buttons, updateClient NOT called, no advance", async () => {
+    setupInquirySlotReprompt();
+    const result = await handleIntake("conv5", "client5", "chat5@c.us", textPayload("random words"));
+    expect(result.consumed).toBe(true);
+    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
+    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
+  });
+
+  it("matched button advances to id_photo (consumed=true, id_photo prompt sent)", async () => {
+    setupInquirySlot();
+    const result = await handleIntake("conv5", "client5", "chat5@c.us", textPayload("other"));
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
+    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sentText).toContain("תעודת הזהות");
+  });
+
+  it("non-text payload re-sends buttons once, updateClient NOT called", async () => {
+    setupInquirySlotReprompt();
+    const result = await handleIntake("conv5", "client5", "chat5@c.us", imagePayload());
+    expect(result.consumed).toBe(true);
+    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
+    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // sendButtonPrompt (exercised via handleIntake at client_type / team_routing)
 // Falls back to plain-text when sendInteractiveButtonsWithTyping throws
 // ---------------------------------------------------------------------------
