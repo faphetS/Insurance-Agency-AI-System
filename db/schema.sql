@@ -355,6 +355,27 @@ CREATE TABLE public.commitments (
 );
 
 -- ============================================================
+-- call_events — WhatsApp call webhooks for the operational bot.
+--   One row per call, keyed by id_message (offer + outcome upsert).
+--   status: ringing → accepted | declined (we rejected) | missed (caller cancelled).
+--   Read for the daily 08:00 missed/declined reminder; pruned on a rolling window.
+-- ============================================================
+CREATE TABLE public.call_events (
+  id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  id_instance       text,
+  id_message        text        UNIQUE,
+  direction         text        NOT NULL CHECK (direction IN ('incoming', 'outgoing')),
+  counterpart_phone text,
+  status            text        NOT NULL CHECK (status IN ('ringing', 'accepted', 'declined', 'missed')),
+  is_video          boolean     NOT NULL DEFAULT false,
+  called_at         timestamptz,
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX call_events_called_at_idx   ON public.call_events (called_at);
+CREATE INDEX call_events_dir_status_idx  ON public.call_events (direction, status, called_at);
+
+-- ============================================================
 -- DEFERRED FOREIGN KEY: meetings.conversation_id → conversations
 -- Added after both tables exist (meetings refs conversations
 -- which was created in the same migration batch, but meetings

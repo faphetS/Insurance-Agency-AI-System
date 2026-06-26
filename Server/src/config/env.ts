@@ -104,6 +104,11 @@ const envSchema = z.object({
   // Disabled only when explicitly set to "false" (z.coerce.boolean treats any non-empty string as true).
   LEADS_MIRROR_ENABLED: z.string().default("true").transform((v) => v.trim().toLowerCase() !== "false"),
 
+  // GreenAPI operational line — call events + daily missed/declined reminder
+  GREENAPI_OP_BASE_URL: z.string().optional(),
+  GREENAPI_OP_ID_INSTANCE: z.string().optional(),
+  GREENAPI_OP_API_TOKEN: z.string().optional(),
+
   // Clix (WClixAPI) gateway — inbound webhook token (Milestone 1: receive & store)
   CLIX_WEBHOOK_TOKEN: z.string().min(16),
 

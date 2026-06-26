@@ -84,6 +84,10 @@ vi.mock("./whatsapp.escalation.js", () => ({
   handleHumanEscalation: mockHandleHumanEscalation,
 }));
 
+vi.mock("../operations/call-events.service.js", () => ({
+  recordCallEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Use REAL whatsapp.validator — do NOT mock
 
 // ---------------------------------------------------------------------------

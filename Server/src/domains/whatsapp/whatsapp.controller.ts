@@ -4,6 +4,7 @@ import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
 import { assignStaffToMeeting } from "../meetings/meeting-handoff.service.js";
+import { recordCallEvent } from "../operations/call-events.service.js";
 import * as whatsappService from "./whatsapp.service.js";
 import {
   incomingMessageSchema,
@@ -29,15 +30,16 @@ export const whatsappController = {
     const rawBody = req.body as Record<string, any>;
     const isClixShaped = !rawBody.typeWebhook && rawBody.customerId && rawBody.type;
 
-    // TEMP (operational-bot bring-up): capture the operational GreenAPI line's raw
-    // payload shape and keep it OUT of the conversational flow (no intake, no reply)
-    // until operational routing is built. Remove once the operational handler exists.
     const opIdInstance = rawBody.instanceData?.idInstance;
-    if (opIdInstance !== undefined && String(opIdInstance) === "7103519997") {
-      logger.info(
-        { greenapiRaw: JSON.stringify(rawBody).slice(0, 2000) },
-        "Operational GreenAPI raw body (debug) — captured, not processed",
-      );
+    if (opIdInstance !== undefined && env.GREENAPI_OP_ID_INSTANCE && String(opIdInstance) === env.GREENAPI_OP_ID_INSTANCE) {
+      const tw = rawBody.typeWebhook;
+      if (tw === "incomingCall" || tw === "outgoingCall") {
+        await recordCallEvent(rawBody);
+        const wid = rawBody.instanceData?.wid;
+        if (typeof wid === "string" && wid) {
+          await supabaseAdmin.from("system_settings").upsert({ key: "op_self_chat_id", value: wid }, { onConflict: "key" });
+        }
+      }
       res.status(200).json({ ok: true });
       return;
     }

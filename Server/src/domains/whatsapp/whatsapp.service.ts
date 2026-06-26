@@ -337,6 +337,16 @@ export function opsCreds(): GreenApiCreds | null {
   return scanCreds();
 }
 
+// Dedicated operational GreenAPI line (GREENAPI_OP_*) — used by the call-reminder feature.
+// Returns null when any of the three env vars is missing (feature stays dormant).
+export function opCreds(): GreenApiCreds | null {
+  const id = env.GREENAPI_OP_ID_INSTANCE;
+  const tok = env.GREENAPI_OP_API_TOKEN;
+  const url = env.GREENAPI_OP_BASE_URL;
+  if (!id || !tok || !url) return null;
+  return { idInstance: id, token: tok, baseUrl: url };
+}
+
 export async function sendMessageWith(
   creds: GreenApiCreds,
   chatId: string,

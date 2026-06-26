@@ -1,11 +1,13 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
+import cron from "node-cron";
 import express, { type Request, type Response } from "express";
 import { setWebhookSettings } from "./domains/whatsapp/whatsapp.service.js";
 import { ensureClientDocumentsBucket } from "./lib/storage.js";
 import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeless.service.js";
 import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
 import { startCommitmentCrons } from "./domains/commitments/commitments.service.js";
+import { sendDailyCallReminder } from "./domains/operations/call-reminder.service.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import { checkServiceMeetingEligibility } from "./domains/calendar/service-meeting.service.js";
@@ -169,6 +171,16 @@ const server = app.listen(env.PORT, () => {
   // live WhatsApp messages, mutating prod data, or overwriting production webhooks)
   if (isPublicWebhook) {
     startCommitmentCrons();
+
+    cron.schedule(
+      "0 8 * * *",
+      () => {
+        sendDailyCallReminder().catch((err: unknown) =>
+          logger.error({ err }, "call-reminder: daily run failed"),
+        );
+      },
+      { timezone: "Asia/Jerusalem" },
+    );
 
     // Calendar sync: initial run after 30s, then every 3 minutes
     setTimeout(() => {
