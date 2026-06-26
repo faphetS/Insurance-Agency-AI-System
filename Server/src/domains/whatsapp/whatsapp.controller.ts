@@ -64,6 +64,23 @@ export const whatsappController = {
       // CLIX gateway path
       // TEMP DEBUG: capture the real raw Clix payload shape (esp. media) — remove after testing.
       logger.info({ clixRaw: JSON.stringify(rawBody).slice(0, 1200) }, "Clix raw body (debug)");
+
+      // Manual takeover: a Clix "outgoing" event is a human replying from the bot
+      // account (Clix does NOT echo the bot's own API sends). Pause the bot for that chat.
+      if (rawBody.type === "outgoing") {
+        const fromOut = typeof rawBody.from === "string" ? rawBody.from : "";
+        if (fromOut && rawBody.chatType === "private") {
+          const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+          await supabaseAdmin
+            .from("conversations")
+            .update({ bot_paused: true, bot_paused_until: pausedUntil })
+            .eq("whatsapp_chat_id", `${fromOut}@c.us`);
+          logger.info({ chatId: `${fromOut}@c.us`, pausedUntil }, "Clix manual reply — bot paused for 1h (human takeover)");
+        }
+        res.status(200).json({ ok: true });
+        return;
+      }
+
       const clixResult = clixToInternal(rawBody);
       if (!clixResult) {
         // null means outgoing echo or malformed — silently ack
