@@ -81,7 +81,7 @@ CREATE TABLE public.clients (
                        CHECK (intake_state IN ('collecting', 'completed', 'skipped')),
   intake_current_slot  text        DEFAULT 'welcome'
                        CHECK (intake_current_slot IN (
-                         'welcome', 'full_name', 'email', 'inquiry_type',
+                         'welcome', 'client_type', 'team_routing', 'full_name', 'email', 'inquiry_type',
                          'id_photo', 'poa', 'done'
                        )),
   intake_completed_at  timestamptz,
