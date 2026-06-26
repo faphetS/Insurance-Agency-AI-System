@@ -192,26 +192,55 @@ describe("handleClientType — client_type mapping and DB persistence", () => {
 });
 
 // ---------------------------------------------------------------------------
-// handleTeamRouting — advances team_routing → full_name on any payload
+// handleTeamRouting — forks on client_type: 'old' → done, else → full_name
 // ---------------------------------------------------------------------------
 
-describe("handleTeamRouting — advances to full_name regardless of payload", () => {
+describe("handleTeamRouting — old client skips to done, new client goes to full_name", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt-name" });
   });
 
-  function setupTeamRoutingSlot() {
+  function setupTeamRoutingSlot(client_type: "new" | "old" | null) {
     const botSettings = makeBuilder(BOT_ENABLED);
     const conv = makeBuilder(CONV_ACTIVE);
     const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "team_routing" }, error: null });
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateSlot, persistMsg]);
+    // handleTeamRouting DB lookup for client_type
+    const clientTypeLookup = makeBuilder({ data: { client_type }, error: null });
+    if (client_type === "old") {
+      // advanceTo("done") → updateClient(intake_current_slot=done) → finalize
+      const updateSlot = makeBuilder({ data: null, error: null });
+      // finalize: select inquiry_type, poa_doc_url, email, client_type
+      const clientForFinalize = makeBuilder({ data: { inquiry_type: null, poa_doc_url: null, email: null, client_type: "old" }, error: null });
+      // finalize: updateClient (mark completed)
+      const finalizeUpdate = makeBuilder({ data: null, error: null });
+      // finalize: meetings insert
+      const meetingsInsert = makeBuilder({ data: null, error: null });
+      // persistOutbound (done message)
+      const persistMsg = makeBuilder({ data: null, error: null });
+      // finalize: conversations update bot_paused
+      const convUpdate = makeBuilder({ data: null, error: null });
+      setupFrom([botSettings, conv, client, clientTypeLookup, updateSlot, clientForFinalize, finalizeUpdate, meetingsInsert, persistMsg, convUpdate]);
+    } else {
+      // advanceTo("full_name") → updateClient(intake_current_slot=full_name) → sendTextPrompt
+      const updateSlot = makeBuilder({ data: null, error: null });
+      const persistMsg = makeBuilder({ data: null, error: null });
+      setupFrom([botSettings, conv, client, clientTypeLookup, updateSlot, persistMsg]);
+    }
   }
 
-  it("text payload advances to full_name and sends name question", async () => {
-    setupTeamRoutingSlot();
+  it("client_type:'new' → advances to full_name and sends name question", async () => {
+    setupTeamRoutingSlot("new");
+    const result = await handleIntake("conv2", "client2", "chat2@c.us", textPayload("Team Y"));
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
+    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sentText).toContain("שם");
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+  });
+
+  it("client_type:null → advances to full_name (treats as new)", async () => {
+    setupTeamRoutingSlot(null);
     const result = await handleIntake("conv2", "client2", "chat2@c.us", textPayload("Team Y"));
     expect(result.consumed).toBe(true);
     expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
@@ -219,11 +248,29 @@ describe("handleTeamRouting — advances to full_name regardless of payload", ()
     expect(sentText).toContain("שם");
   });
 
-  it("image payload also advances to full_name", async () => {
-    setupTeamRoutingSlot();
-    const result = await handleIntake("conv2", "client2", "chat2@c.us", imagePayload());
+  it("client_type:'old' → goes straight to done (finalize path, no full_name prompt)", async () => {
+    setupTeamRoutingSlot("old");
+    const result = await handleIntake("conv2", "client2", "chat2@c.us", textPayload("Team Y"));
     expect(result.consumed).toBe(true);
+    // done_existing message sent (contains the booking URL, not the name question)
     expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
+    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sentText).toContain("https://example.com/book");
+    expect(sentText).not.toContain("שם");
+  });
+
+  it("client_type:'old' → done message uses done_existing text (לקביעת פגישה)", async () => {
+    setupTeamRoutingSlot("old");
+    await handleIntake("conv2", "client2", "chat2@c.us", textPayload("Stay"));
+    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sentText).toContain("לקביעת פגישה");
+  });
+
+  it("client_type:'old' → done message does NOT use new-client done text", async () => {
+    setupTeamRoutingSlot("old");
+    await handleIntake("conv2", "client2", "chat2@c.us", textPayload("Stay"));
+    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sentText).not.toContain("התקבלו כל הפרטים הנדרשים");
   });
 });
 

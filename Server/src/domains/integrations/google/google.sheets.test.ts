@@ -33,7 +33,6 @@ vi.mock("../../../config/env.js", () => ({
     LEADS_SPREADSHEET_ID: "sheet-id",
     LEADS_SHEET_TAB: "לידים חדשים",
     LEADS_SHEET_TAB_NEW: "לידים חדשים",
-    LEADS_SHEET_TAB_OLD: "לקוח קיים",
     LEADS_DRIVE_FOLDER_ID: "folder-id",
     NODE_ENV: "test",
   },

@@ -168,11 +168,11 @@ async function finalize(
   chatId: string,
   clientId: string,
 ): Promise<void> {
-  // Classify case complexity before marking complete — default to 'simple' on any error.
+  // Load client data needed for complexity classification and message branching.
   const { data: clientForComplexity } = await supabaseAdmin
     .from("clients")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select("inquiry_type, poa_doc_url, email" as any)
+    .select("inquiry_type, poa_doc_url, email, client_type" as any)
     .eq("id", clientId)
     .maybeSingle();
 
@@ -181,12 +181,18 @@ async function finalize(
     inquiry_type?: string | null;
     poa_doc_url?: string | null;
     email?: string | null;
+    client_type?: string | null;
   } | null;
 
-  const complexity = await classifyComplexity(
-    clientRow?.inquiry_type ?? "unknown",
-    { poa_doc_url: clientRow?.poa_doc_url, email: clientRow?.email },
-  );
+  const isOld = clientRow?.client_type === "old";
+
+  // Old clients have no inquiry/poa to classify — skip the LLM call.
+  const complexity = isOld
+    ? "simple"
+    : await classifyComplexity(
+        clientRow?.inquiry_type ?? "unknown",
+        { poa_doc_url: clientRow?.poa_doc_url, email: clientRow?.email },
+      );
 
   const { error } = await updateClient(clientId, {
     intake_state: "completed",
@@ -223,7 +229,9 @@ async function finalize(
       updated_at: now,
     });
 
-  const doneText = `${INTAKE_PROMPTS.done.text}\n\nלקביעת הפגישה: ${env.GOOGLE_CALENDAR_BOOKING_URL}`;
+  const doneText = isOld
+    ? `${INTAKE_PROMPTS.done_existing.text}\n\n${env.GOOGLE_CALENDAR_BOOKING_URL}`
+    : `${INTAKE_PROMPTS.done.text}\n\nלקביעת הפגישה: ${env.GOOGLE_CALENDAR_BOOKING_URL}`;
   try {
     const { idMessage } = await sendMessageWithTyping(chatId, doneText);
     await persistOutbound(conversationId, doneText, idMessage);
@@ -279,8 +287,21 @@ async function handleTeamRouting(
   clientId: string,
   _payload: MessagePayload,
 ): Promise<void> {
-  // TODO: future routing will branch on _payload.text (the tapped label)
-  await advanceTo(conversationId, chatId, clientId, "full_name");
+  // Old/existing clients skip data collection and go straight to the booking link.
+  const { data: clientRow } = await supabaseAdmin
+    .from("clients")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select("client_type" as any)
+    .eq("id", clientId)
+    .maybeSingle();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ct = (clientRow as any as { client_type?: string | null } | null)?.client_type;
+
+  if (ct === "old") {
+    await advanceTo(conversationId, chatId, clientId, "done");
+  } else {
+    await advanceTo(conversationId, chatId, clientId, "full_name");
+  }
 }
 
 async function handleFullName(

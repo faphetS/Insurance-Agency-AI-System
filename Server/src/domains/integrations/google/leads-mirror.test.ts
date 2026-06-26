@@ -27,7 +27,6 @@ vi.mock("../../../config/env.js", () => ({
     LEADS_SPREADSHEET_ID: "sheet-id",
     LEADS_SHEET_TAB: "לידים חדשים",
     LEADS_SHEET_TAB_NEW: "לידים חדשים",
-    LEADS_SHEET_TAB_OLD: "לקוח קיים",
     LEADS_DRIVE_FOLDER_ID: "folder-id",
     NODE_ENV: "test",
   },
@@ -120,7 +119,7 @@ describe("mirrorLeadToSheet — tab routing by client_type", () => {
     expect(tabTitle).toBe("לידים חדשים");
   });
 
-  it("routes client_type:'old' to LEADS_SHEET_TAB_OLD", async () => {
+  it("does NOT call upsertLeadRow when client_type is 'old'", async () => {
     const clientData = {
       full_name: "דוד לוי",
       phone: "972509876543",
@@ -137,9 +136,7 @@ describe("mirrorLeadToSheet — tab routing by client_type", () => {
 
     await mirrorLeadToSheet(CLIENT_ID);
 
-    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
-    const [, tabTitle] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
-    expect(tabTitle).toBe("לקוח קיים");
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
   });
 
   it("does NOT call upsertLeadRow when client_type is null", async () => {

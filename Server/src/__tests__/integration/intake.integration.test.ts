@@ -511,7 +511,7 @@ describe("intake.orchestrator — poa skip", () => {
     const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
     (sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>).mockResolvedValue({ idMessage: "btn-skip-setup" });
     await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("hi"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("Old client"));
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("New client"));
     await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("Stay"));
     await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("Test Lead"));
     await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("valid@email.com"));

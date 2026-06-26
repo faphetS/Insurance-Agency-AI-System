@@ -98,7 +98,6 @@ const envSchema = z.object({
     .default("11TwqEQzqh3Yul9dWQfX2s8__yfH0hbcI71f_TF1pAjw"),
   LEADS_SHEET_TAB: z.string().default("לידים חדשים"),
   LEADS_SHEET_TAB_NEW: z.string().default("לידים חדשים"),
-  LEADS_SHEET_TAB_OLD: z.string().default("לקוח קיים"),
   LEADS_DRIVE_FOLDER_ID: z
     .string()
     .default("1iwvNhMS2982JhzEemEJdq0-XQdqwGOXv"),

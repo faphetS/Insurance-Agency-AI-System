@@ -45,6 +45,9 @@ export const INTAKE_PROMPTS = {
   done: {
     text: "תודה! התקבלו כל הפרטים הנדרשים. ייווצר קשר בהקדם לקביעת הפגישה.",
   },
+  done_existing: {
+    text: "לקביעת פגישה, ניתן לבחור מועד נוח בקישור הבא:",
+  },
 } as const;
 
 export const INQUIRY_TYPES = [

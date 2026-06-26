@@ -30,12 +30,12 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
       client_type?: string | null;
     };
 
-    if (c.client_type !== "new" && c.client_type !== "old") {
-      logger.debug({ clientId, client_type: c.client_type }, "leads-mirror: client_type not yet set — skipping");
+    if (c.client_type !== "new") {
+      logger.debug({ clientId, client_type: c.client_type }, "leads-mirror: not a new client — skipping");
       return;
     }
 
-    const targetTab = c.client_type === "old" ? env.LEADS_SHEET_TAB_OLD : env.LEADS_SHEET_TAB_NEW;
+    const targetTab = env.LEADS_SHEET_TAB_NEW;
 
     const inquiryHe =
       INQUIRY_TYPE_HE[c.inquiry_type ?? ""] ?? c.inquiry_type ?? "";
