@@ -84,38 +84,42 @@ async function sendTextPrompt(
   }
 }
 
-/** Send the interactive-buttons prompt for inquiry_type and persist it. */
-async function sendInquiryPrompt(
+/** Send an interactive-buttons prompt for any button-bearing slot and persist it. */
+async function sendButtonPrompt(
   conversationId: string,
   chatId: string,
+  slot: "client_type" | "team_routing" | "inquiry_type",
 ): Promise<void> {
-  const prompt = INTAKE_PROMPTS.inquiry_type;
-  const fullText = `${prompt.text}\n${prompt.footer}`;
+  const prompt = INTAKE_PROMPTS[slot];
+  const footer = "footer" in prompt ? prompt.footer : undefined;
+  const fullText = footer ? `${prompt.text}\n${footer}` : prompt.text;
 
   try {
     const { idMessage } = await sendInteractiveButtonsWithTyping(
       chatId,
       prompt.text,
       [...prompt.buttons],
-      prompt.footer,
+      footer,
     );
     await persistOutbound(conversationId, fullText, idMessage);
   } catch (err) {
     logger.warn(
-      { conversationId, err },
+      { conversationId, slot, err },
       "intake: interactive buttons failed — falling back to plain text",
     );
     try {
       const buttonList = prompt.buttons
         .map((b) => `• ${b.buttonText}`)
         .join("\n");
-      const fallback = `${prompt.text}\n\n${buttonList}\n\n${prompt.footer}`;
+      const fallback = footer
+        ? `${prompt.text}\n\n${buttonList}\n\n${footer}`
+        : `${prompt.text}\n\n${buttonList}`;
       const { idMessage } = await sendMessageWithTyping(chatId, fallback);
       await persistOutbound(conversationId, fallback, idMessage);
     } catch (fallbackErr) {
       logger.error(
-        { conversationId, fallbackErr },
-        "intake: sendInquiryPrompt fallback also failed",
+        { conversationId, slot, fallbackErr },
+        "intake: sendButtonPrompt fallback also failed",
       );
     }
   }
@@ -145,8 +149,9 @@ async function advanceTo(
     return;
   }
 
-  if (next === "inquiry_type") {
-    await sendInquiryPrompt(conversationId, chatId);
+  const prompt = INTAKE_PROMPTS[next as keyof typeof INTAKE_PROMPTS];
+  if ("buttons" in prompt) {
+    await sendButtonPrompt(conversationId, chatId, next as "client_type" | "team_routing" | "inquiry_type");
   } else {
     await sendTextPrompt(conversationId, chatId, next as Exclude<IntakeSlot, "welcome">);
   }
@@ -245,22 +250,27 @@ async function handleWelcome(
   chatId: string,
   clientId: string,
 ): Promise<void> {
-  const { text1, text2 } = INTAKE_PROMPTS.welcome;
-  try {
-    const { idMessage: id1 } = await sendMessageWithTyping(chatId, text1);
-    await persistOutbound(conversationId, text1, id1);
-    const { idMessage: id2 } = await sendMessageWithTyping(chatId, text2);
-    await persistOutbound(conversationId, text2, id2);
-  } catch (err) {
-    logger.error({ conversationId, err }, "intake: handleWelcome send failed");
-  }
-  const { error } = await updateClient(clientId, { intake_current_slot: "full_name" });
-  if (error) {
-    logger.error(
-      { conversationId, clientId, error },
-      "intake: handleWelcome failed to advance slot to full_name",
-    );
-  }
+  await advanceTo(conversationId, chatId, clientId, "client_type");
+}
+
+async function handleClientType(
+  conversationId: string,
+  chatId: string,
+  clientId: string,
+  _payload: MessagePayload,
+): Promise<void> {
+  // TODO: future routing will branch on _payload.text (the tapped label)
+  await advanceTo(conversationId, chatId, clientId, "team_routing");
+}
+
+async function handleTeamRouting(
+  conversationId: string,
+  chatId: string,
+  clientId: string,
+  _payload: MessagePayload,
+): Promise<void> {
+  // TODO: future routing will branch on _payload.text (the tapped label)
+  await advanceTo(conversationId, chatId, clientId, "full_name");
 }
 
 async function handleFullName(
@@ -333,7 +343,7 @@ async function handleInquiryType(
   payload: MessagePayload,
 ): Promise<void> {
   if (payload.kind !== "text") {
-    await sendInquiryPrompt(conversationId, chatId);
+    await sendButtonPrompt(conversationId, chatId, "inquiry_type");
     return;
   }
 
@@ -359,7 +369,7 @@ async function handleInquiryType(
     return;
   }
 
-  await sendInquiryPrompt(conversationId, chatId);
+  await sendButtonPrompt(conversationId, chatId, "inquiry_type");
 }
 
 async function handleIdPhoto(
@@ -632,6 +642,12 @@ export async function handleIntake(
   switch (slot as IntakeSlot) {
     case "welcome":
       await handleWelcome(conversationId, chatId, clientId);
+      break;
+    case "client_type":
+      await handleClientType(conversationId, chatId, clientId, payload);
+      break;
+    case "team_routing":
+      await handleTeamRouting(conversationId, chatId, clientId, payload);
       break;
     case "full_name":
       await handleFullName(conversationId, chatId, clientId, payload);

@@ -39,6 +39,13 @@ const envSchema = z.object({
     .default("http://localhost:5173")
     .transform((val) => val.split(",").map((s) => s.trim())),
 
+  // Conversational bot allowlist — comma-separated bare phone numbers.
+  // Empty (default) means no restriction; only allowlisted senders trigger intake.
+  REPLY_ALLOWLIST: z
+    .string()
+    .default("")
+    .transform((v) => (v.trim() === "" ? [] : v.split(",").map((s) => s.trim()))),
+
   // GreenAPI (WhatsApp gateway) — instance #1: conversational bot
   GREENAPI_ID_INSTANCE: z.string().min(1),
   GREENAPI_API_TOKEN: z.string().min(1),

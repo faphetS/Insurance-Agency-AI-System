@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Request, Response } from "express";
 
 // ---------------------------------------------------------------------------
@@ -26,16 +26,18 @@ const {
 // Module mocks — must be declared before importing the subject
 // ---------------------------------------------------------------------------
 
-vi.mock("../../config/env.js", () => ({
-  env: {
-    GREENAPI_WEBHOOK_TOKEN: "tok",
-    CLIX_WEBHOOK_TOKEN: "clix-secret-token-x1",
-    SUMMARY_RECIPIENT_PHONE: "639219909210",
-    NODE_ENV: "test",
-    FRONTEND_URL: "http://localhost:5173",
-    BACKEND_URL: "http://localhost:3000",
-  },
-}));
+// env is re-assigned per test suite via vi.stubGlobal; default = no allowlist
+const envMock = {
+  GREENAPI_WEBHOOK_TOKEN: "tok",
+  CLIX_WEBHOOK_TOKEN: "clix-secret-token-x1",
+  SUMMARY_RECIPIENT_PHONE: "639219909210",
+  NODE_ENV: "test",
+  FRONTEND_URL: "http://localhost:5173",
+  BACKEND_URL: "http://localhost:3000",
+  REPLY_ALLOWLIST: [] as string[],
+};
+
+vi.mock("../../config/env.js", () => ({ get env() { return envMock; } }));
 
 vi.mock("../../config/logger.js", () => ({
   logger: {
@@ -316,5 +318,102 @@ describe("whatsappController.handleWebhook — Clix token guard", () => {
     await whatsappController.handleWebhook(req, res);
 
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reply allowlist gate
+// ---------------------------------------------------------------------------
+
+describe("whatsappController.handleWebhook — reply allowlist", () => {
+  const ALLOWED_PHONE = "972501111111";
+  const BLOCKED_PHONE = "972502222222";
+  const ALLOWED_CHAT_ID = `${ALLOWED_PHONE}@c.us`;
+  const BLOCKED_CHAT_ID = `${BLOCKED_PHONE}@c.us`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsStaffChat.mockResolvedValue(null);
+    mockWantsHuman.mockReturnValue(false);
+    mockHandleIntake.mockResolvedValue({ consumed: true });
+    envMock.REPLY_ALLOWLIST = [ALLOWED_PHONE];
+  });
+
+  afterEach(() => {
+    envMock.REPLY_ALLOWLIST = [];
+  });
+
+  it("allowlisted sender dispatches intake", async () => {
+    const convUpsertBuilder = makeBuilder({ data: { id: "conv-allow" }, error: null });
+    const msgInsertBuilder = makeBuilder({ data: { id: "msg-allow" }, error: null });
+    const convSelectBuilder = makeBuilder({ data: { id: "conv-allow", client_id: "client-allow" }, error: null });
+
+    setupFrom([convUpsertBuilder, msgInsertBuilder, convSelectBuilder]);
+
+    const body = makeTextBody(ALLOWED_CHAT_ID, "hello");
+    const req = makeReq(body);
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+    expect(mockHandleIntake).toHaveBeenCalled();
+  });
+
+  it("non-allowlisted sender returns 200 but does NOT dispatch intake", async () => {
+    const convUpsertBuilder = makeBuilder({ data: { id: "conv-block" }, error: null });
+    const msgInsertBuilder = makeBuilder({ data: { id: "msg-block" }, error: null });
+
+    setupFrom([convUpsertBuilder, msgInsertBuilder]);
+
+    const body = makeTextBody(BLOCKED_CHAT_ID, "hello");
+    const req = makeReq(body);
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+    expect(mockHandleIntake).not.toHaveBeenCalled();
+  });
+
+  it("empty allowlist (default) does not block any sender", async () => {
+    envMock.REPLY_ALLOWLIST = [];
+
+    const convUpsertBuilder = makeBuilder({ data: { id: "conv-open" }, error: null });
+    const msgInsertBuilder = makeBuilder({ data: { id: "msg-open" }, error: null });
+    const convSelectBuilder = makeBuilder({ data: { id: "conv-open", client_id: "client-open" }, error: null });
+
+    setupFrom([convUpsertBuilder, msgInsertBuilder, convSelectBuilder]);
+
+    const body = makeTextBody(BLOCKED_CHAT_ID, "hello");
+    const req = makeReq(body);
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(mockHandleIntake).toHaveBeenCalled();
+  });
+
+  it("allowlist matching strips non-digit chars from both sides", async () => {
+    // Entry has dashes/spaces; phone from chatId is digits only
+    envMock.REPLY_ALLOWLIST = ["+972-50-1111111"];
+
+    const convUpsertBuilder = makeBuilder({ data: { id: "conv-fmt" }, error: null });
+    const msgInsertBuilder = makeBuilder({ data: { id: "msg-fmt" }, error: null });
+    const convSelectBuilder = makeBuilder({ data: { id: "conv-fmt", client_id: "client-fmt" }, error: null });
+
+    setupFrom([convUpsertBuilder, msgInsertBuilder, convSelectBuilder]);
+
+    const body = makeTextBody(ALLOWED_CHAT_ID, "hello");
+    const req = makeReq(body);
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(mockHandleIntake).toHaveBeenCalled();
   });
 });

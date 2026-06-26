@@ -155,8 +155,10 @@ describe("intake.orchestrator — full slot flow", () => {
     // pool is a shared module singleton across test files — do not end it here
   });
 
-  it("welcome slot: sends prompts and advances to full_name", async () => {
-    mockSendMsg.mockResolvedValue({ idMessage: "welcome-out" });
+  it("welcome slot: advances to client_type and sends button prompt", async () => {
+    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
+    const mockSendButtons = sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>;
+    mockSendButtons.mockResolvedValue({ idMessage: "btn-client-type" });
 
     const result = await handleIntake(
       seeds.conversationId,
@@ -166,7 +168,73 @@ describe("intake.orchestrator — full slot flow", () => {
     );
 
     expect(result.consumed).toBe(true);
-    expect(mockSendMsg).toHaveBeenCalled();
+    expect(mockSendButtons).toHaveBeenCalled();
+
+    const { rows } = await pool.query<{ intake_current_slot: string }>(
+      `SELECT intake_current_slot FROM clients WHERE id = $1`,
+      [seeds.clientId],
+    );
+    expect(rows[0]?.intake_current_slot).toBe("client_type");
+  });
+
+  it("client_type slot: any reply advances to team_routing", async () => {
+    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
+    const mockSendButtons = sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>;
+    mockSendButtons.mockResolvedValue({ idMessage: "btn-team-routing" });
+
+    const result = await handleIntake(
+      seeds.conversationId,
+      seeds.clientId,
+      "97250test@c.us",
+      textPayload("New client"),
+    );
+
+    expect(result.consumed).toBe(true);
+
+    const { rows } = await pool.query<{ intake_current_slot: string }>(
+      `SELECT intake_current_slot FROM clients WHERE id = $1`,
+      [seeds.clientId],
+    );
+    expect(rows[0]?.intake_current_slot).toBe("team_routing");
+  });
+
+  it("client_type slot: image reply also advances to team_routing", async () => {
+    // Reset back to client_type
+    await pool.query(
+      `UPDATE clients SET intake_current_slot = 'client_type' WHERE id = $1`,
+      [seeds.clientId],
+    );
+    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
+    const mockSendButtons = sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>;
+    mockSendButtons.mockResolvedValue({ idMessage: "btn-team-routing-img" });
+
+    const result = await handleIntake(
+      seeds.conversationId,
+      seeds.clientId,
+      "97250test@c.us",
+      imagePayload(),
+    );
+
+    expect(result.consumed).toBe(true);
+
+    const { rows } = await pool.query<{ intake_current_slot: string }>(
+      `SELECT intake_current_slot FROM clients WHERE id = $1`,
+      [seeds.clientId],
+    );
+    expect(rows[0]?.intake_current_slot).toBe("team_routing");
+  });
+
+  it("team_routing slot: any reply advances to full_name", async () => {
+    mockSendMsg.mockResolvedValue({ idMessage: "full-name-prompt" });
+
+    const result = await handleIntake(
+      seeds.conversationId,
+      seeds.clientId,
+      "97250test@c.us",
+      textPayload("Team Y"),
+    );
+
+    expect(result.consumed).toBe(true);
 
     const { rows } = await pool.query<{ intake_current_slot: string }>(
       `SELECT intake_current_slot FROM clients WHERE id = $1`,
@@ -393,9 +461,13 @@ describe("intake.orchestrator — invalid responses re-prompt", () => {
 
   beforeAll(async () => {
     seeds = await seed();
-    // Advance to full_name slot by running welcome first
+    // Advance to full_name slot: welcome → client_type → team_routing → full_name
     mockSendMsg.mockResolvedValue({ idMessage: "setup-id" });
+    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
+    (sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>).mockResolvedValue({ idMessage: "btn-setup" });
     await handleIntake(seeds.conversationId, seeds.clientId, "97250x@c.us", textPayload("hi"));
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250x@c.us", textPayload("New client"));
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250x@c.us", textPayload("Team Y"));
   });
 
   afterAll(async () => {
@@ -436,8 +508,12 @@ describe("intake.orchestrator — poa skip", () => {
     });
     mockClassifyComplexity.mockResolvedValue("simple");
 
-    // Drive through welcome → full_name → email → inquiry_type → id_photo
+    // Drive through welcome → client_type → team_routing → full_name → email → inquiry_type → id_photo
+    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
+    (sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>).mockResolvedValue({ idMessage: "btn-skip-setup" });
     await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("hi"));
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("Old client"));
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("Stay"));
     await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("Test Lead"));
     await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("valid@email.com"));
     await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("vehicle"));

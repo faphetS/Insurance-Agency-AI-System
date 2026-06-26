@@ -331,6 +331,19 @@ export const whatsappController = {
       return;
     }
 
+    // Reply allowlist gate: when set, non-allowlisted senders are stored but get no reply.
+    if (env.REPLY_ALLOWLIST.length > 0) {
+      const senderDigits = contactPhone.replace(/\D/g, "");
+      const allowed = env.REPLY_ALLOWLIST.some(
+        (entry) => entry.replace(/\D/g, "") === senderDigits,
+      );
+      if (!allowed) {
+        logger.info({ conversationId, chatId }, "sender not in reply allowlist — skipping conversational bot");
+        res.status(200).json({ ok: true });
+        return;
+      }
+    }
+
     // 3b. Link client if conversation has no client_id yet
     let linkedClientId: string | null = null;
 

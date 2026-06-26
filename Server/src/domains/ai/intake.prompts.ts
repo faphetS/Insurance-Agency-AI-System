@@ -3,6 +3,22 @@ export const INTAKE_PROMPTS = {
     text1: "שלום! לפני קביעת הפגישה, נדרשים מספר פרטים ומסמכים. בואו נתחיל",
     text2: "מהו השם המלא?",
   },
+  client_type: {
+    text: "שלום, תודה שפנית אלינו 🙏",
+    buttons: [
+      { buttonId: "new_client", buttonText: "New client" },
+      { buttonId: "old_client", buttonText: "Old client" },
+    ],
+  },
+  team_routing: {
+    text: "פנית לצוות שלנו — כיצד נוכל לעזור לך?",
+    buttons: [
+      { buttonId: "team_y", buttonText: "Team Y" },
+      { buttonId: "team_z", buttonText: "Team Z" },
+      { buttonId: "contact_didi", buttonText: "Contact Didi" },
+      { buttonId: "stay", buttonText: "Stay" },
+    ],
+  },
   full_name: { text: "מהו השם המלא?" },
   email: { text: "מהי כתובת האימייל?" },
   inquiry_type: {
@@ -59,6 +75,8 @@ export const INQUIRY_TYPE_HE: Record<InquiryType, string> = {
 
 export const SLOT_ORDER = [
   "welcome",
+  "client_type",
+  "team_routing",
   "full_name",
   "email",
   "inquiry_type",
