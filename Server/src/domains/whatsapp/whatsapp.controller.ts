@@ -29,6 +29,19 @@ export const whatsappController = {
     const rawBody = req.body as Record<string, any>;
     const isClixShaped = !rawBody.typeWebhook && rawBody.customerId && rawBody.type;
 
+    // TEMP (operational-bot bring-up): capture the operational GreenAPI line's raw
+    // payload shape and keep it OUT of the conversational flow (no intake, no reply)
+    // until operational routing is built. Remove once the operational handler exists.
+    const opIdInstance = rawBody.instanceData?.idInstance;
+    if (opIdInstance !== undefined && String(opIdInstance) === "7103519997") {
+      logger.info(
+        { greenapiRaw: JSON.stringify(rawBody).slice(0, 2000) },
+        "Operational GreenAPI raw body (debug) — captured, not processed",
+      );
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     const authHeader = req.headers.authorization;
     const tokenParam = typeof req.query["token"] === "string" ? req.query["token"] : null;
     const headerOk = authHeader === `Bearer ${env.GREENAPI_WEBHOOK_TOKEN}`;
