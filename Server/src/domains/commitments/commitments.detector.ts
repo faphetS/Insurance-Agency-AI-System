@@ -140,11 +140,4 @@ export async function detectCommitments(transcripts: ChatTranscript[]): Promise<
       logger.warn({ err, chatId: transcript.chatId }, "commitments: error processing chat — continuing");
     }
   }
-
-  await supabaseAdmin
-    .from("system_settings")
-    .upsert(
-      { key: "last_commitment_scan_at", value: new Date().toISOString(), updated_at: new Date().toISOString() },
-      { onConflict: "key" },
-    );
 }

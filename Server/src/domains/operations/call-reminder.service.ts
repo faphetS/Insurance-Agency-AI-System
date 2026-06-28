@@ -18,11 +18,21 @@ function stripCus(phone: string): string {
   return phone.endsWith("@c.us") ? phone.slice(0, -5) : phone;
 }
 
-export async function sendDailyCallReminder(): Promise<void> {
+export async function buildCallReminderSection(): Promise<string | null> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
   const rows = await getUnresolvedMissedSince(since);
-  if (rows.length === 0) {
+  if (rows.length === 0) return null;
+
+  const lines = rows
+    .map((r) => `- ${stripCus(r.counterpart_phone)} בשעה ${formatTime(r.called_at)}`)
+    .join("\n");
+
+  return `היי, תזכורת על שיחות שלא נענו אתמול:\n\n${lines}`;
+}
+
+export async function sendDailyCallReminder(): Promise<void> {
+  const text = await buildCallReminderSection();
+  if (!text) {
     logger.info("call-reminder: no missed/declined calls in the last 24h — skipping");
     return;
   }
@@ -45,14 +55,8 @@ export async function sendDailyCallReminder(): Promise<void> {
     return;
   }
 
-  const lines = rows
-    .map((r) => `- ${stripCus(r.counterpart_phone)} בשעה ${formatTime(r.called_at)}`)
-    .join("\n");
-
-  const text = `היי, תזכורת על שיחות שלא נענו אתמול:\n\n${lines}`;
-
   await sendMessageWith(creds, selfChatId, text);
-  logger.info({ count: rows.length, selfChatId }, "call-reminder: daily reminder sent");
+  logger.info({ count: text.split("\n").length - 2, selfChatId }, "call-reminder: daily reminder sent");
 
   await pruneCallsOlderThan(new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
 }

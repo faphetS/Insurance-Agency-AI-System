@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { logger } from "../../config/logger.js";
 import { sendDailyCallReminder } from "./call-reminder.service.js";
 import { runMorningCommitments } from "../commitments/commitments.service.js";
+import { sendMorningDigest } from "./morning-digest.service.js";
 
 export const operationsController = {
   async runCallReminder(_req: Request, res: Response): Promise<void> {
@@ -13,6 +14,12 @@ export const operationsController = {
   async runCommitments(_req: Request, res: Response): Promise<void> {
     logger.info("operations: manual commitments trigger");
     await runMorningCommitments();
+    res.json({ status: "success" });
+  },
+
+  async runMorningDigest(_req: Request, res: Response): Promise<void> {
+    logger.info("operations: manual morning-digest trigger");
+    await sendMorningDigest();
     res.json({ status: "success" });
   },
 };

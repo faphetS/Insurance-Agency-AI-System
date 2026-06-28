@@ -18,4 +18,11 @@ router.post(
   operationsController.runCommitments,
 );
 
+router.post(
+  "/morning-digest/run",
+  authenticate,
+  authorize("admin"),
+  operationsController.runMorningDigest,
+);
+
 export default router;

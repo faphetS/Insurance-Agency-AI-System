@@ -7,19 +7,6 @@ import {
 } from "../whatsapp/whatsapp.service.js";
 import type { ChatTranscript, TranscriptLine } from "./commitments.types.js";
 
-async function getLastScanAt(): Promise<number> {
-  const { data } = await supabaseAdmin
-    .from("system_settings")
-    .select("value")
-    .eq("key", "last_commitment_scan_at")
-    .maybeSingle();
-  if (data?.value) {
-    const ts = new Date(data.value as string).getTime();
-    if (!isNaN(ts)) return ts;
-  }
-  return Date.now() - 24 * 60 * 60 * 1000;
-}
-
 async function getExcludedChatIds(): Promise<Set<string>> {
   const excluded = new Set<string>();
   const { data: selfRow } = await supabaseAdmin
@@ -46,8 +33,8 @@ export async function scanRecentChats(): Promise<ChatTranscript[]> {
     return [];
   }
 
-  const [lastScanTs, excluded] = await Promise.all([getLastScanAt(), getExcludedChatIds()]);
-  const cutoffTs = lastScanTs;
+  const cutoffTs = Date.now() - 24 * 60 * 60 * 1000;
+  const excluded = await getExcludedChatIds();
 
   const [incoming, outgoing] = await Promise.all([
     lastIncomingMessagesWith(creds, 1440).catch((err: unknown) => {

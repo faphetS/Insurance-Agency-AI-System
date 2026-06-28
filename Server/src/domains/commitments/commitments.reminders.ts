@@ -49,7 +49,7 @@ function buildFallbackMorningMessage(commitments: Commitment[]): string {
   return lines.join("\n");
 }
 
-async function composeMorningMessage(commitments: Commitment[]): Promise<string> {
+export async function composeMorningMessage(commitments: Commitment[]): Promise<string> {
   const model = env.COMMITMENT_AI_MODEL ?? FALLBACK_MODEL;
 
   const listText = commitments
@@ -89,7 +89,7 @@ async function composeMorningMessage(commitments: Commitment[]): Promise<string>
   }
 }
 
-async function markCommitmentsSent(ids: string[]): Promise<void> {
+export async function markCommitmentsSent(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   await supabaseAdmin
     .from("commitments")
@@ -105,7 +105,7 @@ async function markCommitmentsCancelled(ids: string[]): Promise<void> {
     .in("id", ids);
 }
 
-export async function fireMorningBatch(): Promise<void> {
+export async function buildMorningCommitmentSection(): Promise<{ text: string | null; ids: string[] }> {
   const now = new Date();
   const { data, error } = await supabaseAdmin
     .from("commitments")
@@ -115,17 +115,23 @@ export async function fireMorningBatch(): Promise<void> {
     .lte("fire_at", now.toISOString());
 
   if (error) {
-    logger.warn({ error }, "commitments: fireMorningBatch query failed");
-    return;
+    logger.warn({ error }, "commitments: buildMorningCommitmentSection query failed");
+    return { text: null, ids: [] };
   }
 
   const pending = (data ?? []) as Commitment[];
-  if (pending.length === 0) return;
+  if (pending.length === 0) return { text: null, ids: [] };
 
   const text = await composeMorningMessage(pending);
+  return { text, ids: pending.map((c) => c.id) };
+}
+
+export async function fireMorningBatch(): Promise<void> {
+  const { text, ids } = await buildMorningCommitmentSection();
+  if (!text) return;
   await sendSelfMessage(text);
-  await markCommitmentsSent(pending.map((c) => c.id));
-  logger.info({ count: pending.length }, "commitments: morning batch sent");
+  await markCommitmentsSent(ids);
+  logger.info({ count: ids.length }, "commitments: morning batch sent");
 }
 
 export async function fireTimedReminders(): Promise<void> {

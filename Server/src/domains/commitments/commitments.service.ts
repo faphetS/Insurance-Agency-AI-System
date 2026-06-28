@@ -1,4 +1,3 @@
-import cron from "node-cron";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { opCreds, type GreenApiCreds } from "../whatsapp/whatsapp.service.js";
@@ -53,9 +52,9 @@ export async function ensureChatIds(): Promise<void> {
   }
 }
 
-export async function runMorningCommitments(): Promise<void> {
+export async function refreshCommitments(): Promise<void> {
   if (!opCreds()) {
-    logger.info("commitments: scan creds unset — skipping morning run");
+    logger.info("commitments: scan creds unset — skipping refresh");
     return;
   }
 
@@ -72,6 +71,10 @@ export async function runMorningCommitments(): Promise<void> {
   } catch (err) {
     logger.error({ err }, "commitments: scan/detect phase failed");
   }
+}
+
+export async function runMorningCommitments(): Promise<void> {
+  await refreshCommitments();
 
   try {
     await fireMorningBatch();
@@ -81,16 +84,6 @@ export async function runMorningCommitments(): Promise<void> {
 }
 
 export function startCommitmentCrons(): void {
-  cron.schedule(
-    "0 8 * * *",
-    () => {
-      runMorningCommitments().catch((err: unknown) =>
-        logger.error({ err }, "commitments: morning run failed"),
-      );
-    },
-    { timezone: "Asia/Jerusalem" },
-  );
-
   setInterval(() => {
     fireTimedReminders().catch((err: unknown) =>
       logger.error({ err }, "commitments: fireTimedReminders failed"),
