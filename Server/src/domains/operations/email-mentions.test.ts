@@ -46,7 +46,7 @@ const AGENT_STAFF = [
 describe("matchStaffInEmail", () => {
   it("detects staff email in To header (to_cc)", () => {
     const headers = { to: "moshe@shaked-ins.com", cc: "", subject: "Follow up" };
-    const matches = matchStaffInEmail(headers, "Hi Moshe, please see attached.", AGENT_STAFF);
+    const matches = matchStaffInEmail(headers, AGENT_STAFF);
     expect(matches).toHaveLength(1);
     expect(matches[0].staff.id).toBe("uuid-1");
     expect(matches[0].detected_via).toBe("to_cc");
@@ -54,7 +54,7 @@ describe("matchStaffInEmail", () => {
 
   it("detects staff email in CC header (to_cc)", () => {
     const headers = { to: "client@example.com", cc: "sara@shaked-ins.com", subject: "Policy details" };
-    const matches = matchStaffInEmail(headers, "Please see details below.", AGENT_STAFF);
+    const matches = matchStaffInEmail(headers, AGENT_STAFF);
     expect(matches).toHaveLength(1);
     expect(matches[0].staff.id).toBe("uuid-2");
     expect(matches[0].detected_via).toBe("to_cc");
@@ -63,55 +63,36 @@ describe("matchStaffInEmail", () => {
   it("detects staff email via localpart match against a different domain (to_cc)", () => {
     // localpart "moshe" + "@" is a substring of "moshe@ddins.net"
     const headers = { to: "moshe@ddins.net", cc: "", subject: "Forwarded" };
-    const matches = matchStaffInEmail(headers, "See you tomorrow.", AGENT_STAFF);
+    const matches = matchStaffInEmail(headers, AGENT_STAFF);
     expect(matches).toHaveLength(1);
     expect(matches[0].staff.id).toBe("uuid-1");
     expect(matches[0].detected_via).toBe("to_cc");
   });
 
-  it("detects staff email in body text (body)", () => {
+  it("does NOT match a staff email that appears only in the body (quoted-thread noise)", () => {
+    // A staff address buried in the body (e.g. a quoted "From: sara@..." line) must NOT match —
+    // only actual To/CC recipients count. matchStaffInEmail no longer takes the body at all.
     const headers = { to: "client@gmail.com", cc: "", subject: "Intro" };
-    const bodyText = "Please contact sara@shaked-ins.com for more info.";
-    const matches = matchStaffInEmail(headers, bodyText, AGENT_STAFF);
-    expect(matches).toHaveLength(1);
-    expect(matches[0].staff.id).toBe("uuid-2");
-    expect(matches[0].detected_via).toBe("body");
-  });
-
-  it("reports to_cc when staff is in BOTH header and body (header wins)", () => {
-    const headers = { to: "moshe@shaked-ins.com", cc: "", subject: "Test" };
-    const bodyText = "Please contact moshe@shaked-ins.com for details.";
-    const matches = matchStaffInEmail(headers, bodyText, AGENT_STAFF);
-    expect(matches).toHaveLength(1);
-    expect(matches[0].detected_via).toBe("to_cc");
-  });
-
-  it("returns empty when no staff email appears in headers or body", () => {
-    const headers = { to: "client@gmail.com", cc: "", subject: "General" };
-    const bodyText = "Let me know if you need anything.";
-    const matches = matchStaffInEmail(headers, bodyText, AGENT_STAFF);
+    const matches = matchStaffInEmail(headers, AGENT_STAFF);
     expect(matches).toHaveLength(0);
   });
 
-  it("does NOT match bare Hebrew name in body — only email addresses trigger detection", () => {
-    const headers = { to: "client@gmail.com", cc: "", subject: "Update" };
-    // Body contains staff names but NO email address with localpart@
-    const bodyText = "מוש יוצא לפגישה היום. שרה תטפל.";
-    const matches = matchStaffInEmail(headers, bodyText, AGENT_STAFF);
+  it("returns empty when no staff email appears in To/CC", () => {
+    const headers = { to: "client@gmail.com", cc: "", subject: "General" };
+    const matches = matchStaffInEmail(headers, AGENT_STAFF);
     expect(matches).toHaveLength(0);
   });
 
   it("returns no matches for an empty staff list (owner excluded)", () => {
     const headers = { to: "didi@ddins.net", cc: "", subject: "Owner mail" };
-    const bodyText = "Hi Didi.";
     // Empty list simulates loadStaffMatchers() excluding the owner (role != agent)
-    const matches = matchStaffInEmail(headers, bodyText, []);
+    const matches = matchStaffInEmail(headers, []);
     expect(matches).toHaveLength(0);
   });
 
   it("matches multiple staff in the same email", () => {
     const headers = { to: "moshe@shaked-ins.com", cc: "sara@shaked-ins.com", subject: "Both" };
-    const matches = matchStaffInEmail(headers, "See attached.", AGENT_STAFF);
+    const matches = matchStaffInEmail(headers, AGENT_STAFF);
     const ids = matches.map((m: StaffMatch) => m.staff.id).sort();
     expect(ids).toEqual(["uuid-1", "uuid-2"]);
     expect(matches.every((m: StaffMatch) => m.detected_via === "to_cc")).toBe(true);
@@ -119,7 +100,7 @@ describe("matchStaffInEmail", () => {
 
   it("is case-insensitive for email detection", () => {
     const headers = { to: "MOSHE@SHAKED-INS.COM", cc: "", subject: "Caps" };
-    const matches = matchStaffInEmail(headers, "Body.", AGENT_STAFF);
+    const matches = matchStaffInEmail(headers, AGENT_STAFF);
     expect(matches).toHaveLength(1);
     expect(matches[0].staff.id).toBe("uuid-1");
   });

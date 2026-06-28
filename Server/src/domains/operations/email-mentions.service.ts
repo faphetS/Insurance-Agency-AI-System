@@ -38,23 +38,20 @@ export interface StaffMatch {
   detected_via: "to_cc" | "body";
 }
 
+// Match staff ONLY against the To/CC recipients (by email local-part, so both
+// @shaked-ins.com and @ddins.net count). Body matching was removed: replied/forwarded
+// emails carry quoted "From: <staff>@…" headers, so matching an address anywhere in the
+// body just re-tags past thread participants who aren't the actual target (pure noise).
 export function matchStaffInEmail(
   headers: Record<string, string>,
-  bodyText: string,
   staff: StaffMatcher[],
 ): StaffMatch[] {
   const hdr = ((headers["to"] ?? "") + " " + (headers["cc"] ?? "")).toLowerCase();
-  const body = bodyText.toLowerCase();
 
   const matches: StaffMatch[] = [];
   for (const s of staff) {
-    const searchTerm = s.localpart + "@";
-    const inHdr = hdr.includes(searchTerm);
-    const inBody = !inHdr && body.includes(searchTerm);
-    if (inHdr) {
+    if (hdr.includes(s.localpart + "@")) {
       matches.push({ staff: s, detected_via: "to_cc" });
-    } else if (inBody) {
-      matches.push({ staff: s, detected_via: "body" });
     }
   }
   return matches;
@@ -78,7 +75,7 @@ export async function scanAndStoreSentMentions(): Promise<{ scanned: number; sto
 
       if (TEMPLATE.test(headers["subject"] ?? "")) continue;
 
-      const matches = matchStaffInEmail(headers, bodyText, staff);
+      const matches = matchStaffInEmail(headers, staff);
 
       const to = headers["to"] ?? "";
       const cc = headers["cc"] ?? "";
