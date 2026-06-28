@@ -3,6 +3,10 @@ import { logger } from "../../config/logger.js";
 import { clixSendText } from "../whatsapp/whatsapp.clix-send.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 
+// Gap between the two post-assignment sends (staff handoff, then the owner ack) so the
+// gateway doesn't flag back-to-back sends as spam.
+const HANDOFF_ACK_GAP_MS = 5000;
+
 export async function notifyStaffHandoff(meetingId: string): Promise<void> {
   try {
     const { data: meeting } = await supabaseAdmin
@@ -124,6 +128,7 @@ export async function assignStaffToMeeting(
     .is("last_service_date", null);
 
   await notifyStaffHandoff(meetingId);
+  await new Promise((resolve) => setTimeout(resolve, HANDOFF_ACK_GAP_MS));
   await clixSendText(ownerChatId, `✅ הוקצה ל${fullName}`);
 }
 
