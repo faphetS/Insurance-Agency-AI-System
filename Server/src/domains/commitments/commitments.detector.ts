@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
-import { supabaseAdmin } from "../../config/supabase.js";
+import { pool } from "../../lib/db.js";
 import { COMMITMENT_EXTRACTION_SYSTEM_PROMPT } from "./commitments.prompts.js";
 import { deriveKind, computeFireAt } from "./commitments.fireat.js";
 import type { ChatTranscript, DetectedCommitment } from "./commitments.types.js";
@@ -112,28 +112,33 @@ export async function detectCommitments(transcripts: ChatTranscript[]): Promise<
         // Stable synthetic key when no real message ID available
         const sourceKey = `${transcript.chatId}:${djb2(d.what)}`;
 
-        const row = {
-          chat_id: transcript.chatId,
-          contact_name: transcript.contactName,
-          direction: d.direction,
-          source_message_id: sourceKey,
-          source_text: transcriptText.slice(0, 500),
-          commitment_text: d.what,
-          counterparty: d.who,
-          due_date: d.date,
-          due_time: d.time,
-          kind,
-          fire_at: fireAt.toISOString(),
-          status: "pending",
-          updated_at: new Date().toISOString(),
-        };
-
-        const { error } = await supabaseAdmin
-          .from("commitments")
-          .upsert(row, { onConflict: "source_message_id", ignoreDuplicates: true });
-
-        if (error) {
-          logger.warn({ error, chatId: transcript.chatId }, "commitments: upsert failed");
+        // Raw insert with ON CONFLICT matching the PARTIAL unique index on
+        // source_message_id (WHERE source_message_id IS NOT NULL) — the shim's
+        // upsert emits a bare ON CONFLICT (col) which Postgres can't infer to a
+        // partial index (error 42P10). Dedup is per chat+commitment via sourceKey.
+        try {
+          await pool.query(
+            `INSERT INTO public.commitments
+               (chat_id, contact_name, direction, source_message_id, source_text,
+                commitment_text, counterparty, due_date, due_time, kind, fire_at, status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending')
+             ON CONFLICT (source_message_id) WHERE source_message_id IS NOT NULL DO NOTHING`,
+            [
+              transcript.chatId,
+              transcript.contactName,
+              d.direction,
+              sourceKey,
+              transcriptText.slice(0, 500),
+              d.what,
+              d.who,
+              d.date,
+              d.time,
+              kind,
+              fireAt.toISOString(),
+            ],
+          );
+        } catch (err) {
+          logger.warn({ err, chatId: transcript.chatId }, "commitments: insert failed");
         }
       }
     } catch (err) {
