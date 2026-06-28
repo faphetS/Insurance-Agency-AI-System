@@ -256,27 +256,6 @@ CREATE TABLE public.system_settings (
 );
 
 -- ============================================================
--- 10. GMAIL_INTEGRATIONS
---     Added by 20260520110000_gmail_integrations.
--- ============================================================
-CREATE TABLE public.gmail_integrations (
-  id                      uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  staff_id                uuid        NOT NULL UNIQUE REFERENCES public.staff(id) ON DELETE CASCADE,
-  email                   text        NOT NULL,
-  refresh_token           text        NOT NULL,
-  access_token            text,
-  access_token_expires_at timestamptz,
-  scope                   text        NOT NULL,
-  connected_at            timestamptz NOT NULL DEFAULT now(),
-  last_synced_at          timestamptz,
-  last_unread_count       integer     DEFAULT 0,
-  last_error              text,
-  is_active               boolean     NOT NULL DEFAULT true,
-  created_at              timestamptz NOT NULL DEFAULT now(),
-  updated_at              timestamptz NOT NULL DEFAULT now()
-);
-
--- ============================================================
 -- 11. WHATSAPP_INSTANCES
 --     Added by 20260520110100_whatsapp_instances.
 --     is_connected is a GENERATED ALWAYS AS ... STORED column —
@@ -439,10 +418,6 @@ CREATE INDEX idx_meetings_conversation_id
 -- (bafi_file_number column is excluded, so its index is omitted)
 CREATE INDEX idx_clients_assigned_handler
   ON public.clients (assigned_handler_id);
-
--- From 20260520110000_gmail_integrations
-CREATE INDEX idx_gmail_integrations_active_synced
-  ON public.gmail_integrations (is_active, last_synced_at);
 
 -- From 20260520110100_whatsapp_instances
 CREATE INDEX idx_whatsapp_instances_active_role

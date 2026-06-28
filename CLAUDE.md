@@ -53,7 +53,7 @@ There is **no root `package.json`** (the old npm-workspaces monorepo is gone). W
   - `whatsapp/` — inbound webhook, message/conversation handling, sending (GreenAPI), escalation, unanswered-scan.
   - `calendar/` — Google Calendar OAuth, booking sync (event→client matching, meeting creation), 24h/1h reminders.
   - `operations/` — the operational assistant: task-chain checkers, daily digest, alerts, BAFI provider (stubbed), service-meeting + email + whatsapp monitors.
-  - `integrations/gmail`, `integrations/timeless` — per-staff Gmail OAuth; Timeless.day meeting recordings.
+  - `integrations/timeless` — Timeless.day meeting recordings. (Gmail access is via the single Google Workspace token in `integrations/google`.)
 - **Routes:** `src/routes/index.ts` — aggregates domain routes, mounted at `/api`. A signed `/files/*splat` route (outside `/api`) serves stored documents.
 - **Lib:** `src/lib/db.ts` (pg pool + query-builder shim), `src/lib/storage.ts` (filesystem document storage), `src/lib/errors.ts` (AppError hierarchy + global error handler).
 
@@ -73,7 +73,7 @@ There is **no root `package.json`** (the old npm-workspaces monorepo is gone). W
 ### Environment Variables (`Server/.env`)
 - Core: `NODE_ENV`, `PORT`, `BACKEND_URL`, `FRONTEND_URL`, `ALLOWED_ORIGINS`, `RATE_LIMIT_*`, `LOG_LEVEL`.
 - DB / auth / storage: `DATABASE_URL`, `DATABASE_POOL_MAX`, `ADMIN_API_TOKEN`, `STORAGE_DIR`, `JWT_SECRET` (HMAC key for signed `/files` URLs).
-- Integrations: `GREENAPI_*`, `OPENROUTER_API_KEY` + `AI_MODEL`, `GOOGLE_*` (Calendar) + `GOOGLE_OAUTH_*` (Gmail), `TIMELESS_API_KEY`, `BAFI_*`.
+- Integrations: `GREENAPI_*`, `OPENROUTER_API_KEY` + `AI_MODEL`, `GOOGLE_*` (Calendar) + `GOOGLE_WS_*` (Workspace), `TIMELESS_API_KEY`.
 - Provider toggles: `BAFI_PROVIDER` (default `stub`), `EMAIL_PROVIDER`, `WHATSAPP_PROVIDER`.
 - `.env.sample` lists all keys; `.env` is gitignored.
 

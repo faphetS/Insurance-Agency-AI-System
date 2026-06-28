@@ -73,16 +73,6 @@ const envSchema = z.object({
   GOOGLE_CALENDAR_ID: z.string().min(1),
   GOOGLE_CALENDAR_BOOKING_URL: z.string().url(),
 
-  // Gmail OAuth 2.0 (for per-staff inbox monitoring)
-  // Get credentials at: https://console.cloud.google.com/apis/credentials
-  // Add Gmail API scopes: gmail.readonly + gmail.metadata
-  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
-  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_OAUTH_REDIRECT_URI: z
-    .string()
-    .url()
-    .default("http://localhost:3000/api/integrations/gmail/callback"),
-
   // Google Workspace OAuth 2.0 (Sheets + Drive + Gmail — agency account)
   GOOGLE_WS_CLIENT_ID: z.string().optional(),
   GOOGLE_WS_CLIENT_SECRET: z.string().optional(),

@@ -72,11 +72,6 @@ vi.mock("../../whatsapp/whatsapp.util.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../gmail/gmail.service.js", () => ({
-  getOwnerGmailIntegration: vi.fn(),
-  sendGmailEmail: vi.fn(),
-}));
-
 vi.mock("../google/google.gmail.js", () => ({
   sendOwnerEmail: mockSendOwnerEmail,
 }));
