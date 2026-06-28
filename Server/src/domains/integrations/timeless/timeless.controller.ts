@@ -24,6 +24,19 @@ export const timelessController = {
     res.status(200).json({ status: "ok" });
 
     await recordEvent();
+
+    // Defensive: the docs put the meeting id at the top-level `id`, but if a delivery ever
+    // arrives without it (different envelope), do NOT ingest — getMeeting(undefined) would
+    // fall through to "list all → first meeting" and ingest the wrong one. The hourly poll
+    // backstops by re-ingesting any completed meeting regardless of webhook shape.
+    if (!payload.id) {
+      logger.warn(
+        { payloadKeys: Object.keys(payload ?? {}), event: payload.event },
+        "timeless: webhook missing top-level meeting id — skipping ingest (poll will backstop)",
+      );
+      return;
+    }
+
     ingestTimelessMeeting(payload.id, payload.event).catch((err: unknown) =>
       logger.error({ err, meetingId: payload.id }, "timeless: ingest failed"),
     );

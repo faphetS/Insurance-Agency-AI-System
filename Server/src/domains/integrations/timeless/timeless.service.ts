@@ -129,10 +129,21 @@ interface MeetingCandidate {
   client_email: string | null;
 }
 
+export function isSameIsraelDay(isoA: string, isoB: string): boolean {
+  const fmt = (iso: string) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(iso));
+  return fmt(isoA) === fmt(isoB);
+}
+
 async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
   const t = new Date(startTime);
-  const low = new Date(t.getTime() - 30 * 60 * 1000).toISOString();
-  const high = new Date(t.getTime() + 30 * 60 * 1000).toISOString();
+  const low = new Date(t.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const high = new Date(t.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   const { data: meetings, error } = await supabaseAdmin
     .from("meetings")
@@ -149,7 +160,13 @@ async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
 
   if (!meetings || meetings.length === 0) return [];
 
-  const clientIds = [...new Set(meetings.map((m: any) => m.client_id as string))];
+  const sameDayMeetings = (meetings as Array<{ scheduled_at: string; client_id: string; id: string; type: string }>).filter((m) =>
+    isSameIsraelDay(m.scheduled_at, startTime),
+  );
+
+  if (sameDayMeetings.length === 0) return [];
+
+  const clientIds = [...new Set(sameDayMeetings.map((m: any) => m.client_id as string))];
 
   const { data: clients } = await supabaseAdmin
     .from("clients")
@@ -160,7 +177,7 @@ async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
     (clients ?? []).map((c: any) => [c.id as string, (c.email as string | null) ?? null]),
   );
 
-  return meetings.map((m: any) => ({
+  return sameDayMeetings.map((m: any) => ({
     id: m.id as string,
     scheduled_at: m.scheduled_at as string,
     type: m.type as string,
@@ -531,6 +548,7 @@ export async function ingestTimelessMeeting(meetingId: string, event?: string): 
     const src = (timelessMeeting.source ?? "").toLowerCase();
     if (src === "google_meet" && c.type === "google_meet") score += 3;
     if (src === "phone" && c.type === "phone") score += 3;
+    if (src === "zoom" && c.type === "zoom") score += 3;
     return { ...c, score };
   });
 
