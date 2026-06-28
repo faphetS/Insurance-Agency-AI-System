@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
 import { opCreds, sendMessageWith } from "../whatsapp/whatsapp.service.js";
-import { getMissedDeclinedSince, pruneCallsOlderThan } from "./call-events.service.js";
+import { getUnresolvedMissedSince, pruneCallsOlderThan } from "./call-events.service.js";
 
 const TZ = "Asia/Jerusalem";
 
@@ -21,7 +21,7 @@ function stripCus(phone: string): string {
 export async function sendDailyCallReminder(): Promise<void> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  const rows = await getMissedDeclinedSince(since);
+  const rows = await getUnresolvedMissedSince(since);
   if (rows.length === 0) {
     logger.info("call-reminder: no missed/declined calls in the last 24h — skipping");
     return;
@@ -46,10 +46,10 @@ export async function sendDailyCallReminder(): Promise<void> {
   }
 
   const lines = rows
-    .map((r) => `- ${stripCus(r.counterpart_phone)} at ${formatTime(r.called_at)}`)
+    .map((r) => `- ${stripCus(r.counterpart_phone)} בשעה ${formatTime(r.called_at)}`)
     .join("\n");
 
-  const text = `Hey, just a reminder that you missed these calls yesterday:\n\n${lines}`;
+  const text = `היי, תזכורת על שיחות שלא נענו אתמול:\n\n${lines}`;
 
   await sendMessageWith(creds, selfChatId, text);
   logger.info({ count: rows.length, selfChatId }, "call-reminder: daily reminder sent");

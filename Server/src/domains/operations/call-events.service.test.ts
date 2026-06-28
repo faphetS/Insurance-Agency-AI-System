@@ -35,29 +35,7 @@ vi.mock("../../lib/db.js", () => ({
 // ---------------------------------------------------------------------------
 // Subject imports (after mocks)
 // ---------------------------------------------------------------------------
-import { recordCallEvent, getMissedDeclinedSince } from "./call-events.service.js";
-
-// ---------------------------------------------------------------------------
-// Builder shim
-// ---------------------------------------------------------------------------
-type Builder = Record<string, unknown>;
-
-function makeBuilder(result: unknown): Builder {
-  const terminal = vi.fn().mockResolvedValue(result);
-  const builder: Builder = {};
-  const chainMethods = [
-    "select", "eq", "neq", "is", "in", "gte", "lte",
-    "order", "insert", "upsert", "update", "limit",
-  ];
-  for (const m of chainMethods) {
-    builder[m] = vi.fn().mockReturnValue(builder);
-  }
-  builder["maybeSingle"] = terminal;
-  builder["single"] = terminal;
-  builder["then"] = (onFulfilled: (v: unknown) => unknown) =>
-    Promise.resolve(result).then(onFulfilled);
-  return builder;
-}
+import { recordCallEvent, getUnresolvedMissedSince } from "./call-events.service.js";
 
 // ---------------------------------------------------------------------------
 // Tests: recordCallEvent
@@ -137,48 +115,34 @@ describe("recordCallEvent — status mapping", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: getMissedDeclinedSince
+// Tests: getUnresolvedMissedSince
 // ---------------------------------------------------------------------------
 
-describe("getMissedDeclinedSince", () => {
+describe("getUnresolvedMissedSince", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("queries with direction=incoming, status IN missed/declined, gte called_at, ordered ASC", async () => {
-    const rows = [
-      { counterpart_phone: "97250111@c.us", called_at: "2026-06-25T09:00:00Z" },
-      { counterpart_phone: "97250222@c.us", called_at: "2026-06-25T10:00:00Z" },
-    ];
-
-    const builder = makeBuilder({ data: rows, error: null });
-    mockFromImpl.mockReturnValue(builder);
+  it("returns rows from pool.query", async () => {
+    mockPoolQuery.mockResolvedValue({
+      rows: [{ counterpart_phone: "97250111@c.us", called_at: "2026-06-25T09:00:00Z" }],
+    });
 
     const iso = "2026-06-25T08:00:00Z";
-    const result = await getMissedDeclinedSince(iso);
+    const result = await getUnresolvedMissedSince(iso);
 
-    expect(mockFromImpl).toHaveBeenCalledWith("call_events");
-    expect(builder["select"]).toHaveBeenCalledWith("counterpart_phone, called_at");
-    expect(builder["eq"]).toHaveBeenCalledWith("direction", "incoming");
-    expect(builder["in"]).toHaveBeenCalledWith("status", ["missed", "declined"]);
-    expect(builder["gte"]).toHaveBeenCalledWith("called_at", iso);
-    expect(builder["order"]).toHaveBeenCalledWith("called_at", { ascending: true });
-    expect(result).toEqual(rows);
+    expect(result).toEqual([{ counterpart_phone: "97250111@c.us", called_at: "2026-06-25T09:00:00Z" }]);
+    expect(mockPoolQuery).toHaveBeenCalledOnce();
+    const [sql, params] = mockPoolQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("call_events");
+    expect(sql).toContain("last_accept");
+    expect(params).toEqual([iso]);
   });
 
-  it("returns [] when query errors", async () => {
-    const builder = makeBuilder({ data: null, error: { message: "fail" } });
-    mockFromImpl.mockReturnValue(builder);
+  it("returns [] when pool.query rejects", async () => {
+    mockPoolQuery.mockRejectedValueOnce(new Error("DB down"));
 
-    const result = await getMissedDeclinedSince("2026-06-25T08:00:00Z");
-    expect(result).toEqual([]);
-  });
-
-  it("returns [] when data is null without error", async () => {
-    const builder = makeBuilder({ data: null, error: null });
-    mockFromImpl.mockReturnValue(builder);
-
-    const result = await getMissedDeclinedSince("2026-06-25T08:00:00Z");
+    const result = await getUnresolvedMissedSince("2026-06-25T08:00:00Z");
     expect(result).toEqual([]);
   });
 });

@@ -1,5 +1,4 @@
 import { pool } from "../../lib/db.js";
-import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
 
 type CallStatus = "ringing" | "accepted" | "declined" | "missed";
@@ -75,21 +74,34 @@ export interface CallEventRow {
   called_at: string;
 }
 
-export async function getMissedDeclinedSince(iso: string): Promise<CallEventRow[]> {
-  const { data, error } = await supabaseAdmin
-    .from("call_events")
-    .select("counterpart_phone, called_at")
-    .eq("direction", "incoming")
-    .in("status", ["missed", "declined"])
-    .gte("called_at", iso)
-    .order("called_at", { ascending: true });
-
-  if (error) {
-    logger.error({ error }, "getMissedDeclinedSince: query failed");
+export async function getUnresolvedMissedSince(iso: string): Promise<CallEventRow[]> {
+  try {
+    const result = await pool.query<{ counterpart_phone: string; called_at: unknown }>(
+      `SELECT m.counterpart_phone, m.last_miss AS called_at
+FROM (
+  SELECT counterpart_phone, MAX(called_at) AS last_miss
+  FROM public.call_events
+  WHERE called_at >= $1 AND direction = 'incoming' AND status IN ('missed','declined')
+  GROUP BY counterpart_phone
+) m
+LEFT JOIN (
+  SELECT regexp_replace(counterpart_phone,'\\D','','g') AS norm, MAX(called_at) AS last_accept
+  FROM public.call_events
+  WHERE called_at >= $1 AND status = 'accepted'
+  GROUP BY 1
+) a ON a.norm = regexp_replace(m.counterpart_phone,'\\D','','g')
+WHERE a.last_accept IS NULL OR a.last_accept < m.last_miss
+ORDER BY m.last_miss ASC`,
+      [iso],
+    );
+    return result.rows.map((r) => ({
+      counterpart_phone: r.counterpart_phone,
+      called_at: r.called_at instanceof Date ? r.called_at.toISOString() : String(r.called_at),
+    }));
+  } catch (err) {
+    logger.error({ err }, "getUnresolvedMissedSince: query failed");
     return [];
   }
-
-  return (data ?? []) as CallEventRow[];
 }
 
 export async function pruneCallsOlderThan(iso: string): Promise<void> {

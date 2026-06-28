@@ -5,13 +5,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 const {
   mockFromImpl,
-  mockGetMissedDeclinedSince,
+  mockGetUnresolvedMissedSince,
   mockPruneCallsOlderThan,
   mockOpCreds,
   mockSendMessageWith,
 } = vi.hoisted(() => ({
   mockFromImpl: vi.fn(),
-  mockGetMissedDeclinedSince: vi.fn(),
+  mockGetUnresolvedMissedSince: vi.fn(),
   mockPruneCallsOlderThan: vi.fn(),
   mockOpCreds: vi.fn(),
   mockSendMessageWith: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock("../../config/supabase.js", () => ({
 }));
 
 vi.mock("./call-events.service.js", () => ({
-  getMissedDeclinedSince: mockGetMissedDeclinedSince,
+  getUnresolvedMissedSince: mockGetUnresolvedMissedSince,
   pruneCallsOlderThan: mockPruneCallsOlderThan,
 }));
 
@@ -88,7 +88,7 @@ describe("sendDailyCallReminder", () => {
   });
 
   it("does NOT call sendMessageWith when there are no missed/declined rows", async () => {
-    mockGetMissedDeclinedSince.mockResolvedValue([]);
+    mockGetUnresolvedMissedSince.mockResolvedValue([]);
 
     await sendDailyCallReminder();
 
@@ -97,7 +97,7 @@ describe("sendDailyCallReminder", () => {
   });
 
   it("sends a message to selfChatId when rows exist", async () => {
-    mockGetMissedDeclinedSince.mockResolvedValue([
+    mockGetUnresolvedMissedSince.mockResolvedValue([
       { counterpart_phone: "972501234567@c.us", called_at: "2026-06-25T09:30:00Z" },
       { counterpart_phone: "972509876543@c.us", called_at: "2026-06-25T14:00:00Z" },
     ]);
@@ -119,7 +119,7 @@ describe("sendDailyCallReminder", () => {
   });
 
   it("strips @c.us from phone numbers in the message body", async () => {
-    mockGetMissedDeclinedSince.mockResolvedValue([
+    mockGetUnresolvedMissedSince.mockResolvedValue([
       { counterpart_phone: "972501111111@c.us", called_at: "2026-06-25T10:00:00Z" },
     ]);
     mockOpCreds.mockReturnValue(CREDS);
@@ -135,7 +135,7 @@ describe("sendDailyCallReminder", () => {
   });
 
   it("returns early (no send) when op_self_chat_id is missing", async () => {
-    mockGetMissedDeclinedSince.mockResolvedValue([
+    mockGetUnresolvedMissedSince.mockResolvedValue([
       { counterpart_phone: "972501234567@c.us", called_at: "2026-06-25T09:30:00Z" },
     ]);
 
@@ -148,7 +148,7 @@ describe("sendDailyCallReminder", () => {
   });
 
   it("returns early (no send) when opCreds returns null", async () => {
-    mockGetMissedDeclinedSince.mockResolvedValue([
+    mockGetUnresolvedMissedSince.mockResolvedValue([
       { counterpart_phone: "972501234567@c.us", called_at: "2026-06-25T09:30:00Z" },
     ]);
     mockOpCreds.mockReturnValue(null);
@@ -162,7 +162,7 @@ describe("sendDailyCallReminder", () => {
   });
 
   it("prunes after sending", async () => {
-    mockGetMissedDeclinedSince.mockResolvedValue([
+    mockGetUnresolvedMissedSince.mockResolvedValue([
       { counterpart_phone: "972501234567@c.us", called_at: "2026-06-25T09:30:00Z" },
     ]);
     mockOpCreds.mockReturnValue(CREDS);
