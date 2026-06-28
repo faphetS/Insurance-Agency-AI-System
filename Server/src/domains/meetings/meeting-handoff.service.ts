@@ -126,3 +126,32 @@ export async function assignStaffToMeeting(
   await notifyStaffHandoff(meetingId);
   await clixSendText(ownerChatId, `✅ הוקצה ל${fullName}`);
 }
+
+// Owner staff-pick from a SELF-CHAT tap (testing setup where the owner number is the bot
+// line). Such taps arrive as plain text carrying the button LABEL (staff name), not the
+// `assign_staff:<meetingId>:<staffId>` id — so resolve the staff by name and target the
+// most-recent meeting whose picker was sent. Returns true if it drove an assignment.
+export async function tryAssignByStaffName(staffName: string, ownerChatId: string): Promise<boolean> {
+  const name = staffName.trim();
+  if (!name) return false;
+
+  const { data: staff } = await supabaseAdmin
+    .from("staff")
+    .select("id")
+    .eq("is_active", true)
+    .eq("full_name", name)
+    .maybeSingle();
+  if (!staff) return false;
+
+  const { data: meeting } = await supabaseAdmin
+    .from("meetings")
+    .select("id")
+    .not("staff_picker_sent_at", "is", null)
+    .order("staff_picker_sent_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!meeting) return false;
+
+  await assignStaffToMeeting(meeting.id as string, staff.id as string, ownerChatId);
+  return true;
+}

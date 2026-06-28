@@ -3,7 +3,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
-import { assignStaffToMeeting } from "../meetings/meeting-handoff.service.js";
+import { assignStaffToMeeting, tryAssignByStaffName } from "../meetings/meeting-handoff.service.js";
 import { recordCallEvent } from "../operations/call-events.service.js";
 import * as whatsappService from "./whatsapp.service.js";
 import {
@@ -84,6 +84,25 @@ export const whatsappController = {
       // account (Clix does NOT echo the bot's own API sends). Pause the bot for that chat.
       if (rawBody.type === "outgoing") {
         const fromOut = typeof rawBody.from === "string" ? rawBody.from : "";
+
+        // Self-chat owner staff-pick — ONLY when the bot's own line IS the owner number
+        // (the testing setup where SUMMARY_RECIPIENT_PHONE == the bot line). In production
+        // the bot number != owner number, so `fromOut` never equals the owner and this is
+        // inert. Self-chat taps arrive as `outgoing` text carrying the button LABEL (staff
+        // name), not the button id — so match by staff name.
+        const outOwnerChatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
+        const outMsg = typeof rawBody.message === "string" ? rawBody.message : "";
+        if (outOwnerChatId && `${fromOut}@c.us` === outOwnerChatId && outMsg) {
+          const handled = await tryAssignByStaffName(outMsg, outOwnerChatId).catch((err: unknown) => {
+            logger.error({ err }, "Clix self-chat owner assign failed");
+            return false;
+          });
+          if (handled) {
+            res.status(200).json({ ok: true });
+            return;
+          }
+        }
+
         if (fromOut && rawBody.chatType === "private") {
           const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
           await supabaseAdmin
