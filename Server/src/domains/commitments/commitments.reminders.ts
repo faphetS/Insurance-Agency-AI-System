@@ -44,7 +44,7 @@ function buildFallbackMorningMessage(commitments: Commitment[]): string {
   for (const c of commitments) {
     const timeLabel = c.due_time ? ` (${c.due_time})` : "";
     const dateLabel = c.due_date ? ` ב-${c.due_date}` : "";
-    lines.push(`• ${c.commitment_text}${dateLabel}${timeLabel} — ${c.counterparty}`);
+    lines.push(`• ${c.commitment_text}${dateLabel}${timeLabel} — ${c.contact_name}`);
   }
   return lines.join("\n");
 }
@@ -56,7 +56,7 @@ export async function composeMorningMessage(commitments: Commitment[]): Promise<
     .map((c) => {
       const dateLabel = c.due_date ? ` ב-${c.due_date}` : "";
       const timeLabel = c.due_time ? ` בשעה ${c.due_time}` : "";
-      return `- ${c.commitment_text}${dateLabel}${timeLabel} (עם ${c.counterparty})`;
+      return `- ${c.commitment_text}${dateLabel}${timeLabel} (מהשיחה עם ${c.contact_name})`;
     })
     .join("\n");
 
@@ -172,7 +172,8 @@ export async function fireTimedReminders(): Promise<void> {
   // Group by fire_at minute (round to minute)
   const byMinute = new Map<string, Commitment[]>();
   for (const c of due) {
-    const minuteKey = c.fire_at.slice(0, 16); // "YYYY-MM-DDTHH:MM"
+    // fire_at comes back from the shim as a Date (pg timestamptz) — normalise before slicing
+    const minuteKey = new Date(c.fire_at).toISOString().slice(0, 16); // "YYYY-MM-DDTHH:MM"
     const group = byMinute.get(minuteKey) ?? [];
     group.push(c);
     byMinute.set(minuteKey, group);
@@ -181,7 +182,7 @@ export async function fireTimedReminders(): Promise<void> {
   for (const [minuteKey, group] of byMinute) {
     const lines = group.map((c) => {
       const timeLabel = c.due_time ? ` בשעה ${c.due_time}` : "";
-      return `• ${c.commitment_text}${timeLabel} — ${c.counterparty}`;
+      return `• ${c.commitment_text}${timeLabel} — ${c.contact_name}`;
     });
 
     // Timed reminders fire ~1h before by design; each line shows the meeting time,
