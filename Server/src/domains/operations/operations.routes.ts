@@ -25,4 +25,11 @@ router.post(
   operationsController.runMorningDigest,
 );
 
+router.post(
+  "/email-mentions/run",
+  authenticate,
+  authorize("admin"),
+  operationsController.runEmailMentions,
+);
+
 export default router;

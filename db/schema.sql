@@ -355,6 +355,36 @@ CREATE INDEX call_events_called_at_idx   ON public.call_events (called_at);
 CREATE INDEX call_events_dir_status_idx  ON public.call_events (direction, status, called_at);
 
 -- ============================================================
+-- email_staff_mentions — a staff member named/recipient in Didi's
+--   SENT email. One row per (sent email × staff). Scanned daily from
+--   Gmail (e-signature templates excluded); status drives the 08:00
+--   per-staff email notification. Dedup via (gmail_message_id, staff_id).
+--   staff_email is the canonical @shaked-ins.com delivery target,
+--   regardless of which domain Didi actually addressed.
+-- ============================================================
+CREATE TABLE public.email_staff_mentions (
+  id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  gmail_message_id  text,
+  sent_at           timestamptz,
+  subject           text,
+  recipients        text,
+  staff_id          uuid        REFERENCES public.staff(id) ON DELETE CASCADE,
+  staff_email       text        NOT NULL,
+  staff_name        text,
+  detected_via      text        NOT NULL CHECK (detected_via IN ('to_cc', 'body')),
+  snippet           text,
+  status            text        NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'sent', 'cancelled')),
+  sent_notify_at    timestamptz,
+  created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX email_staff_mentions_msg_staff_uidx
+  ON public.email_staff_mentions (gmail_message_id, staff_id)
+  WHERE gmail_message_id IS NOT NULL;
+CREATE INDEX email_staff_mentions_status_idx
+  ON public.email_staff_mentions (status, sent_at);
+
+-- ============================================================
 -- DEFERRED FOREIGN KEY: meetings.conversation_id → conversations
 -- Added after both tables exist (meetings refs conversations
 -- which was created in the same migration batch, but meetings

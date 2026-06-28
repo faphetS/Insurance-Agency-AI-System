@@ -110,6 +110,10 @@ const envSchema = z.object({
   // Provider toggles — set to "stub" to disable live API calls
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
   WHATSAPP_PROVIDER: z.enum(["stub", "live"]).default("live"),
+
+  // Staff email notification mode for the daily sent-Gmail mention scan.
+  // "log" = dry-run (compose to pm2 logs, no send); "send" = actually email staff.
+  STAFF_EMAIL_NOTIFY_MODE: z.enum(["log", "send"]).default("log"),
 });
 
 const parsed = envSchema.safeParse(process.env);

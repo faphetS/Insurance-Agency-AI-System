@@ -8,6 +8,7 @@ import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeles
 import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
 import { startCommitmentCrons } from "./domains/commitments/commitments.service.js";
 import { sendMorningDigest } from "./domains/operations/morning-digest.service.js";
+import { runStaffEmailNotify } from "./domains/operations/email-mentions.service.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import { checkServiceMeetingEligibility } from "./domains/calendar/service-meeting.service.js";
@@ -177,6 +178,9 @@ const server = app.listen(env.PORT, () => {
       () => {
         sendMorningDigest().catch((err: unknown) =>
           logger.error({ err }, "morning-digest: daily run failed"),
+        );
+        runStaffEmailNotify().catch((err: unknown) =>
+          logger.error({ err }, "email-mentions: daily run failed"),
         );
       },
       { timezone: "Asia/Jerusalem" },
