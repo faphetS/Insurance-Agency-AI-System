@@ -11,4 +11,11 @@ router.post(
   operationsController.runCallReminder,
 );
 
+router.post(
+  "/commitments/run",
+  authenticate,
+  authorize("admin"),
+  operationsController.runCommitments,
+);
+
 export default router;

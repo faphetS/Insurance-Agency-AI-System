@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
-import { scanCreds, sendMessageWith } from "../whatsapp/whatsapp.service.js";
+import { opCreds, sendMessageWith } from "../whatsapp/whatsapp.service.js";
 import { COMMITMENT_COMPOSITION_SYSTEM_PROMPT } from "./commitments.prompts.js";
 import type { Commitment } from "./commitments.types.js";
 
@@ -24,7 +24,7 @@ async function getSelfChatId(): Promise<string | null> {
 }
 
 export async function sendSelfMessage(text: string): Promise<void> {
-  const creds = scanCreds();
+  const creds = opCreds();
   if (!creds) return;
 
   try {

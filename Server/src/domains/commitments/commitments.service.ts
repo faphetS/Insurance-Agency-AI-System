@@ -1,8 +1,7 @@
 import cron from "node-cron";
-import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
-import { scanCreds, type GreenApiCreds } from "../whatsapp/whatsapp.service.js";
+import { opCreds, type GreenApiCreds } from "../whatsapp/whatsapp.service.js";
 import { scanRecentChats } from "./commitments.scan.js";
 import { detectCommitments } from "./commitments.detector.js";
 import { fireMorningBatch, fireTimedReminders } from "./commitments.reminders.js";
@@ -10,14 +9,6 @@ import { fireMorningBatch, fireTimedReminders } from "./commitments.reminders.js
 interface WaSettingsResponse {
   wid?: string;
   phone?: string;
-}
-
-function instance1Creds(): GreenApiCreds {
-  return {
-    idInstance: env.GREENAPI_ID_INSTANCE,
-    token: env.GREENAPI_API_TOKEN,
-    baseUrl: env.GREENAPI_BASE_URL,
-  };
 }
 
 async function fetchInstancePhone(creds: GreenApiCreds): Promise<string | null> {
@@ -37,58 +28,33 @@ async function fetchInstancePhone(creds: GreenApiCreds): Promise<string | null> 
 }
 
 export async function ensureChatIds(): Promise<void> {
-  const creds = scanCreds();
+  const creds = opCreds();
+  if (!creds) return;
 
-  if (creds) {
-    const { data: selfRow } = await supabaseAdmin
-      .from("system_settings")
-      .select("value")
-      .eq("key", "commitment_self_chat_id")
-      .maybeSingle();
-
-    if (!selfRow?.value) {
-      const phone = await fetchInstancePhone(creds);
-      if (phone) {
-        await supabaseAdmin
-          .from("system_settings")
-          .upsert(
-            { key: "commitment_self_chat_id", value: phone, updated_at: new Date().toISOString() },
-            { onConflict: "key" },
-          );
-        logger.info({ chatId: phone }, "commitments: resolved self-chat ID from instance #2 getWaSettings");
-      } else {
-        logger.warn("commitments: could not resolve self-chat ID — getWaSettings returned no wid");
-      }
-    }
-  }
-
-  const { data: botRow } = await supabaseAdmin
+  const { data: selfRow } = await supabaseAdmin
     .from("system_settings")
     .select("value")
-    .eq("key", "commitment_bot_chat_id")
+    .eq("key", "commitment_self_chat_id")
     .maybeSingle();
 
-  if (!botRow?.value) {
-    try {
-      const mainCreds = instance1Creds();
-      const phone = await fetchInstancePhone(mainCreds);
-      if (phone) {
-        await supabaseAdmin
-          .from("system_settings")
-          .upsert(
-            { key: "commitment_bot_chat_id", value: phone, updated_at: new Date().toISOString() },
-            { onConflict: "key" },
-          );
-        logger.info({ chatId: phone }, "commitments: resolved bot-chat ID from instance #1 getWaSettings");
-      }
-    } catch (err) {
-      logger.warn({ err }, "commitments: could not resolve bot-chat ID from instance #1");
+  if (!selfRow?.value) {
+    const phone = await fetchInstancePhone(creds);
+    if (phone) {
+      await supabaseAdmin
+        .from("system_settings")
+        .upsert(
+          { key: "commitment_self_chat_id", value: phone, updated_at: new Date().toISOString() },
+          { onConflict: "key" },
+        );
+      logger.info({ chatId: phone }, "commitments: resolved self-chat ID from op instance getWaSettings");
+    } else {
+      logger.warn("commitments: could not resolve self-chat ID — getWaSettings returned no wid");
     }
   }
 }
 
 export async function runMorningCommitments(): Promise<void> {
-  if (!scanCreds()) {
+  if (!opCreds()) {
     logger.info("commitments: scan creds unset — skipping morning run");
     return;
   }

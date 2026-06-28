@@ -15,6 +15,9 @@ vi.mock("../../config/env.js", () => ({
     GREENAPI_BASE_URL: "https://test.api.greenapi.com",
     GREENAPI_WEBHOOK_TOKEN: "test-webhook-token-16chars",
     GREENAPI_SCAN_UNANSWERED_HOURS: 4,
+    GREENAPI_OP_BASE_URL: "https://test.api.greenapi.com",
+    GREENAPI_OP_ID_INSTANCE: "test-op",
+    GREENAPI_OP_API_TOKEN: "test-op-token",
   },
 }));
 
@@ -28,6 +31,10 @@ vi.mock("../../config/supabase.js", () => ({
 
 vi.mock("../whatsapp/whatsapp.service.js", () => ({
   sendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "x" }),
+  opCreds: vi.fn().mockReturnValue({ idInstance: "test-op", token: "test-op-token", baseUrl: "https://test.api.greenapi.com" }),
+  sendMessageWith: vi.fn().mockResolvedValue({ idMessage: "x" }),
+  lastIncomingMessagesWith: vi.fn().mockResolvedValue([]),
+  lastOutgoingMessagesWith: vi.fn().mockResolvedValue([]),
 }));
 
 // ---------------------------------------------------------------------------

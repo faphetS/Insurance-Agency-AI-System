@@ -1,7 +1,7 @@
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import {
-  scanCreds,
+  opCreds,
   lastIncomingMessagesWith,
   lastOutgoingMessagesWith,
 } from "../whatsapp/whatsapp.service.js";
@@ -40,7 +40,7 @@ async function getExcludedChatIds(): Promise<Set<string>> {
 }
 
 export async function scanRecentChats(): Promise<ChatTranscript[]> {
-  const creds = scanCreds();
+  const creds = opCreds();
   if (!creds) {
     logger.info("commitments: scan creds unset — skipping");
     return [];
