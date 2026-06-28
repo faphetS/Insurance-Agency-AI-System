@@ -134,8 +134,8 @@ export async function notifyStaffMentions(): Promise<{ notified: number }> {
       .map((r) => `• "${r.subject ?? "(ללא נושא)"}"`)
       .join("\n");
 
-    const subject = "סיכום מיילים מדידי";
-    const body = `שלום ${staffName},\n\nדידי פנה/העביר אליך אתמול בנושאים הבאים:\n${bullets}`;
+    const subject = "תזכורת ממשרד שקד";
+    const body = `שלום ${staffName},\n\nתזכורת: אתמול דידי שלח/העביר אליך מייל בנושא:\n${bullets}\n\nנא לטפל בהתאם.`;
 
     if (env.STAFF_EMAIL_NOTIFY_MODE === "send") {
       await sendOwnerEmail(staffEmail, subject, body);
