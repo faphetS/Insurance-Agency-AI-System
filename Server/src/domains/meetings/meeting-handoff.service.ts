@@ -1,24 +1,9 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { sendStaffMessage, sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
+import { clixSendText } from "../whatsapp/whatsapp.clix-send.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
-import { getSignedDocUrl } from "../../lib/storage.js";
 
-const SIGNED_TTL = 604_800; // 7 days in seconds
-
-async function resolveDocLink(stored: string | null | undefined): Promise<string | null> {
-  if (!stored) return null;
-  if (/^https?:\/\//i.test(stored)) {
-    if (/drive\.google\.com|googleusercontent/i.test(stored)) return stored;
-    return null; // legacy expired GreenAPI URL — treat as unavailable
-  }
-  return getSignedDocUrl(stored, SIGNED_TTL);
-}
-
-export async function notifyStaffHandoff(
-  meetingId: string,
-  opts: { viaConversationalBot?: boolean } = {},
-): Promise<void> {
+export async function notifyStaffHandoff(meetingId: string): Promise<void> {
   try {
     const { data: meeting } = await supabaseAdmin
       .from("meetings")
@@ -30,9 +15,7 @@ export async function notifyStaffHandoff(
 
     const { data: client } = await supabaseAdmin
       .from("clients")
-      .select(
-        "full_name, phone, id_number, inquiry_type, id_photo_url, poa_doc_url, assigned_to, assigned_handler_id, complexity",
-      )
+      .select("full_name, assigned_to, assigned_handler_id")
       .eq("id", meeting.client_id)
       .maybeSingle();
 
@@ -59,40 +42,14 @@ export async function notifyStaffHandoff(
       return;
     }
 
-    const idUrl = await resolveDocLink(client.id_photo_url);
-    const poaUrl = await resolveDocLink(client.poa_doc_url);
-
-    const complexityLine =
-      (client as unknown as { complexity?: string | null }).complexity === "complex"
-        ? ["⚠️ מקרה מורכב", ""]
-        : [];
-
-    const summaryText = (meeting.summary_final ?? meeting.summary_draft ?? "").trim();
-    const summarySection = summaryText ? ["📝 סיכום הפגישה", summaryText, ""] : [];
-
-    const body = [
-      "📥 תיק לקוח חדש – נדרש טיפול",
-      ...complexityLine,
-      "",
-      "👤 פרטי הלקוח",
-      `שם: ${client.full_name}`,
-      `טלפון: ${client.phone}`,
-      `ת"ז: ${client.id_number ?? "—"}`,
-      `סוג הפנייה: ${client.inquiry_type}`,
-      "",
-      ...summarySection,
-      "📎 מסמכים",
-      `צילום ת"ז: ${idUrl ?? "לא זמין במערכת"}`,
-      `ייפוי כוח: ${poaUrl ?? "לא זמין במערכת"}`,
-      "",
-      "📋 הלקוח הוקצה לטיפולך — נא לבדוק את הפרטים ולהמשיך בהתאם.",
-    ].join("\n");
-
-    if (opts.viaConversationalBot) {
-      await sendMessageWithTyping(chatId, body);
-    } else {
-      await sendStaffMessage(chatId, body);
+    const summaryText = ((meeting.summary_final ?? meeting.summary_draft ?? "") as string).trim();
+    const lines = [`👤 דידי הקצה אותך לטיפול בלקוח ${client.full_name as string}`];
+    if (summaryText) {
+      lines.push("", "📝 סיכום הפגישה", summaryText);
     }
+    const body = lines.join("\n");
+
+    await clixSendText(chatId, body);
     logger.info({ meetingId, staffId }, "notifyStaffHandoff: sent");
   } catch (err) {
     logger.error({ err, meetingId }, "notifyStaffHandoff: unexpected error");
@@ -111,7 +68,7 @@ export async function assignStaffToMeeting(
     .maybeSingle();
 
   if (!meeting) {
-    await sendMessageWithTyping(ownerChatId, "❌ הפגישה לא נמצאה.");
+    await clixSendText(ownerChatId, "❌ הפגישה לא נמצאה.");
     return;
   }
 
@@ -122,7 +79,7 @@ export async function assignStaffToMeeting(
     .maybeSingle();
 
   if (!staff) {
-    await sendMessageWithTyping(ownerChatId, "❌ העובד לא נמצא.");
+    await clixSendText(ownerChatId, "❌ העובד לא נמצא.");
     return;
   }
 
@@ -154,10 +111,7 @@ export async function assignStaffToMeeting(
         .maybeSingle();
       currentName = (curStaff?.full_name as string | null) ?? "";
     }
-    await sendMessageWithTyping(
-      ownerChatId,
-      currentName ? `✅ כבר הוקצה ל${currentName}` : "✅ כבר הוקצה",
-    );
+    await clixSendText(ownerChatId, currentName ? `✅ כבר הוקצה ל${currentName}` : "✅ כבר הוקצה");
     return;
   }
 
@@ -169,6 +123,6 @@ export async function assignStaffToMeeting(
     .eq("id", clientId)
     .is("last_service_date", null);
 
-  await notifyStaffHandoff(meetingId, { viaConversationalBot: true });
-  await sendMessageWithTyping(ownerChatId, `✅ הוקצה ל${fullName}`);
+  await notifyStaffHandoff(meetingId);
+  await clixSendText(ownerChatId, `✅ הוקצה ל${fullName}`);
 }

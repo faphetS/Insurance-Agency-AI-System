@@ -4,7 +4,7 @@ import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { AppError } from "../../../lib/errors.js";
 import { ensureHebrew } from "../../ai/ai.service.js";
-import { sendMessage, sendButtons } from "../../whatsapp/whatsapp.service.js";
+import { clixSendText, clixSendButtons } from "../../whatsapp/whatsapp.clix-send.js";
 import { toChatId } from "../../whatsapp/whatsapp.util.js";
 import { sendOwnerEmail } from "../google/google.gmail.js";
 import {
@@ -21,6 +21,10 @@ import type { TimelessMeeting, TimelessTranscript } from "./timeless.types.js";
 const WEBHOOK_EVENTS = ["meeting.transcript_ready", "meeting.initial_summary_ready"];
 
 const TZ = "Asia/Jerusalem";
+
+// Gap between the two owner WhatsApp bubbles (summary, then staff picker) so the
+// gateway doesn't flag back-to-back sends as spam.
+const OWNER_BUBBLE_GAP_MS = 5000;
 
 function webhookUrl(): string {
   return `${env.BACKEND_URL}/api/integrations/timeless/webhook`;
@@ -313,8 +317,7 @@ export async function sendSummaryToOwner(meetingId: string, clientId: string): P
   }
 
   try {
-    // Send via the conversational bot (GreenAPI instance #1) — the owner's required wiring.
-    await sendMessage(chatId, body);
+    await clixSendText(chatId, body);
     logger.info({ meetingId, clientId }, "timeless: owner summary sent");
   } catch (err) {
     logger.error({ err, meetingId }, "timeless.sendSummaryToOwner: send failed — reverting claim");
@@ -364,7 +367,7 @@ export async function sendStaffPickerToOwner(meetingId: string): Promise<void> {
     buttonText: String(s.full_name).slice(0, 25),
   }));
 
-  await sendButtons(chatId, "👤 בחר/י את הגורם המטפל בלקוח:", buttons);
+  await clixSendButtons(chatId, "👤 בחר/י את הגורם המטפל בלקוח:", buttons);
 }
 
 export async function sendClientSummaryEmail(meetingId: string, clientId: string): Promise<void> {
@@ -472,6 +475,8 @@ async function applyIngest(
 
   if (summaryRaw) {
     await sendSummaryToOwner(ourMeetingId, clientId);
+
+    await new Promise((resolve) => setTimeout(resolve, OWNER_BUBBLE_GAP_MS));
 
     // Staff-picker (to owner) + client summary email — each isolated so one failure
     // doesn't block the others. Both are independently idempotent.

@@ -2,7 +2,6 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import cron from "node-cron";
 import express, { type Request, type Response } from "express";
-import { setWebhookSettings } from "./domains/whatsapp/whatsapp.service.js";
 import { ensureClientDocumentsBucket } from "./lib/storage.js";
 import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeless.service.js";
 import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
@@ -130,28 +129,11 @@ const server = app.listen(env.PORT, () => {
     .then((created) => logger.info({ created }, "client-documents bucket ready"))
     .catch((err: unknown) => logger.warn({ err }, "client-documents bucket ensure failed"));
 
-  // Register GreenAPI webhook on boot (best-effort, non-blocking).
-  // Guarded: only runs when BACKEND_URL is a public HTTPS URL. Dev / localhost
-  // boots must NOT touch the shared GreenAPI instance, or they overwrite
-  // production's webhook with an unreachable URL.
   const webhookUrl = env.BACKEND_URL ? `${env.BACKEND_URL}/api/whatsapp/webhook` : null;
   const isPublicWebhook =
     !!webhookUrl &&
     webhookUrl.startsWith("https://") &&
     !/(localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(webhookUrl);
-
-  if (isPublicWebhook) {
-    setWebhookSettings(webhookUrl!)
-      .then(() => logger.info({ webhookUrl }, "GreenAPI webhook registered"))
-      .catch((err: unknown) =>
-        logger.warn({ err, webhookUrl }, "GreenAPI webhook registration failed — continuing"),
-      );
-  } else {
-    logger.info(
-      { webhookUrl, nodeEnv: env.NODE_ENV },
-      "Skipping GreenAPI webhook registration — BACKEND_URL is not a public HTTPS URL",
-    );
-  }
 
   // Timeless webhook registration + hourly poll cron — skipped in dev (same guard as WhatsApp above)
   if (isPublicWebhook && env.TIMELESS_API_KEY) {

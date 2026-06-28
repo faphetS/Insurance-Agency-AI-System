@@ -4,19 +4,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vi.hoisted shared mock functions
 // ---------------------------------------------------------------------------
 const {
-  mockSendButtons,
-  mockSendMessage,
+  mockClixSendButtons,
+  mockClixSendText,
   mockSendOwnerEmail,
   mockFromImpl,
 } = vi.hoisted(() => {
-  const mockSendButtons = vi.fn();
-  const mockSendMessage = vi.fn();
+  const mockClixSendButtons = vi.fn();
+  const mockClixSendText = vi.fn();
   const mockSendOwnerEmail = vi.fn();
   const mockFromImpl = vi.fn();
 
   return {
-    mockSendButtons,
-    mockSendMessage,
+    mockClixSendButtons,
+    mockClixSendText,
     mockSendOwnerEmail,
     mockFromImpl,
   };
@@ -57,11 +57,10 @@ vi.mock("../../ai/ai.service.js", () => ({
   generateReply: vi.fn(),
 }));
 
-vi.mock("../../whatsapp/whatsapp.service.js", () => ({
-  sendButtons: mockSendButtons,
-  sendMessage: mockSendMessage,
-  sendMessageWithTyping: vi.fn(),
-  sendInteractiveButtonsWithTyping: vi.fn(),
+vi.mock("../../whatsapp/whatsapp.clix-send.js", () => ({
+  clixSendButtons: mockClixSendButtons,
+  clixSendText: mockClixSendText,
+  clixSendCreds: vi.fn().mockReturnValue({ url: "http://clix", token: "tok" }),
 }));
 
 // Use the REAL toChatId implementation so 639219909210 → 639219909210@c.us is genuinely exercised.
@@ -120,7 +119,7 @@ describe("sendStaffPickerToOwner", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSendButtons.mockResolvedValue({ idMessage: "btn-msg-1" });
+    mockClixSendButtons.mockResolvedValue(undefined);
   });
 
   it("calls sendButtons with chatId 639219909210@c.us and 5-button array when 5 active staff", async () => {
@@ -138,8 +137,8 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockSendButtons).toHaveBeenCalledOnce();
-    const [chatId, body, buttons] = mockSendButtons.mock.calls[0] as [
+    expect(mockClixSendButtons).toHaveBeenCalledOnce();
+    const [chatId, body, buttons] = mockClixSendButtons.mock.calls[0] as [
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -161,7 +160,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockSendButtons.mock.calls[0] as [
+    const [, , buttons] = mockClixSendButtons.mock.calls[0] as [
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -178,7 +177,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockSendButtons.mock.calls[0] as [
+    const [, , buttons] = mockClixSendButtons.mock.calls[0] as [
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -193,7 +192,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockSendButtons).not.toHaveBeenCalled();
+    expect(mockClixSendButtons).not.toHaveBeenCalled();
   });
 
   it("does NOT call sendButtons when staff select returns null", async () => {
@@ -202,7 +201,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockSendButtons).not.toHaveBeenCalled();
+    expect(mockClixSendButtons).not.toHaveBeenCalled();
   });
 
   it("does NOT call sendButtons when idempotency claim returns null (already sent)", async () => {
@@ -214,7 +213,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockSendButtons).not.toHaveBeenCalled();
+    expect(mockClixSendButtons).not.toHaveBeenCalled();
   });
 
   it("allows >3 buttons (more than 3 staff is valid)", async () => {
@@ -228,7 +227,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockSendButtons.mock.calls[0] as [
+    const [, , buttons] = mockClixSendButtons.mock.calls[0] as [
       string,
       string,
       { buttonId: string; buttonText: string }[],
