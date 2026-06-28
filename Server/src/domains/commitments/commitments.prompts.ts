@@ -18,6 +18,7 @@ Return ONLY JSON in this exact shape:
 
 Rules:
 - "who" is always "Didi" (we only track Didi's own commitments).
+- Write "what" in HEBREW, even when the conversation is in another language (English, Tagalog, etc.) — translate it.
 - Resolve relative dates (tomorrow, next week, Sunday, "25/07" DD/MM format) relative to the conversation date provided in Asia/Jerusalem timezone.
 - Return {"commitments":[]} if nothing qualifies.
 - Never include explanations outside the JSON object.`;

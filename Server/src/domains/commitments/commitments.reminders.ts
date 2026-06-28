@@ -42,7 +42,7 @@ export async function sendSelfMessage(text: string): Promise<void> {
 function buildFallbackMorningMessage(commitments: Commitment[]): string {
   const lines = ["בוקר טוב! התזכורות להיום:"];
   for (const c of commitments) {
-    const timeLabel = c.due_time ? ` (${c.due_time})` : "";
+    const timeLabel = c.due_time ? ` (${c.due_time.slice(0, 5)})` : "";
     const dateLabel = c.due_date ? ` ב-${c.due_date}` : "";
     lines.push(`• ${c.commitment_text}${dateLabel}${timeLabel} — ${c.contact_name}`);
   }
@@ -55,7 +55,7 @@ export async function composeMorningMessage(commitments: Commitment[]): Promise<
   const listText = commitments
     .map((c) => {
       const dateLabel = c.due_date ? ` ב-${c.due_date}` : "";
-      const timeLabel = c.due_time ? ` בשעה ${c.due_time}` : "";
+      const timeLabel = c.due_time ? ` בשעה ${c.due_time.slice(0, 5)}` : "";
       return `- ${c.commitment_text}${dateLabel}${timeLabel} (מהשיחה עם ${c.contact_name})`;
     })
     .join("\n");
@@ -181,7 +181,7 @@ export async function fireTimedReminders(): Promise<void> {
 
   for (const [minuteKey, group] of byMinute) {
     const lines = group.map((c) => {
-      const timeLabel = c.due_time ? ` בשעה ${c.due_time}` : "";
+      const timeLabel = c.due_time ? ` בשעה ${c.due_time.slice(0, 5)}` : "";
       return `• ${c.commitment_text}${timeLabel} — ${c.contact_name}`;
     });
 
