@@ -10,9 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Staff-facing UX is **WhatsApp / email notifications**, not a web UI.
 - There is **no frontend** anymore. A throwaway React inspector app once lived under `Client/`; it was deleted during the Postgres migration (2026-06-03).
 
-> **📍 Flow reference:** `SYSTEM_FLOW.md` (repo root) is the canonical end-to-end behavioral map — conversational + operational flow, scheduled-job cadences, and **where every piece of data is saved** — traced from source on 2026-06-24. Read it first for "how the system behaves," and keep it updated when the flow changes.
+> **📍 Flow reference:** `SYSTEM_FLOW.md` (repo root) is the canonical end-to-end behavioral map — conversational + operational flow, scheduled-job cadences, and **where every piece of data is saved** — traced from source on 2026-06-29. Read it first for "how the system behaves," and keep it updated when the flow changes.
 
 > **BAFI is dropped (2026-06-24):** the agency will not pursue any BAFI integration. BAFI reference docs/assets live in `temp-files/` (gitignored). The Historical context section below is kept only as a record — do not build BAFI features.
+
+> **Conversational gateway = Clix; GreenAPI #1 retired (2026-06):** the conversational bot runs on the **Clix** WhatsApp gateway (the "didi-bot" line) — inbound, replies, AND the post-meeting owner/staff sends (summary, staff-picker buttons, handoff). GreenAPI **instance #1** (`GREENAPI_*`, `7107600944`) is **retired/expired** — its env vars are kept (required) but unused. The GreenAPI **operational instance #2** (`GREENAPI_OP_*`) powers the operational bot.
 
 > **Migration note (2026-06-03):** the backend was moved OFF Supabase onto self-hosted Postgres. Some details below changed accordingly. See **Historical context** at the bottom for the old Supabase + duplicated-BAFI setup, which is intentionally preserved as a record.
 
@@ -50,10 +52,10 @@ There is **no root `package.json`** (the old npm-workspaces monorepo is gone). W
 - **Middleware:** `src/middleware/` — requestId, auth (static admin token + role gate), validate (Zod), audit logging.
 - **Domains:** `src/domains/`:
   - `ai/` — conversational bot: `intake.orchestrator.ts` (WhatsApp intake state machine), `ai.orchestrator.ts` (auto-reply), `ai.service.ts` (OpenRouter LLM).
-  - `whatsapp/` — inbound webhook, message/conversation handling, sending (GreenAPI), escalation, unanswered-scan.
+  - `whatsapp/` — inbound webhook (Clix + GreenAPI shapes), message/conversation handling, sending (`whatsapp.clix-send.ts` for the Clix conversational line; GreenAPI for the operational line), escalation.
   - `calendar/` — Google Calendar OAuth, booking sync (event→client matching, meeting creation), 24h/1h reminders.
-  - `operations/` — the operational assistant: task-chain checkers, daily digest, alerts, BAFI provider (stubbed), service-meeting + email + whatsapp monitors.
-  - `integrations/timeless` — Timeless.day meeting recordings. (Gmail access is via the single Google Workspace token in `integrations/google`.)
+  - `operations/` — the operational bot (GreenAPI op instance #2): missed/declined-call reminders (`call-events`/`call-reminder`), commitment reminders (in `commitments/`), and email staff-mentions (`email-mentions`); call + commitment merge into one 08:00 Hebrew digest (`morning-digest`). (The old task-chain / milestone / SLA / cross-check engine was removed 2026-06-25.)
+  - `integrations/google` — single Google Workspace OAuth (Sheets + Drive + Gmail read/send, one account); `integrations/timeless` — Timeless.day meeting recordings.
 - **Routes:** `src/routes/index.ts` — aggregates domain routes, mounted at `/api`. A signed `/files/*splat` route (outside `/api`) serves stored documents.
 - **Lib:** `src/lib/db.ts` (pg pool + query-builder shim), `src/lib/storage.ts` (filesystem document storage), `src/lib/errors.ts` (AppError hierarchy + global error handler).
 
@@ -73,8 +75,8 @@ There is **no root `package.json`** (the old npm-workspaces monorepo is gone). W
 ### Environment Variables (`Server/.env`)
 - Core: `NODE_ENV`, `PORT`, `BACKEND_URL`, `FRONTEND_URL`, `ALLOWED_ORIGINS`, `RATE_LIMIT_*`, `LOG_LEVEL`.
 - DB / auth / storage: `DATABASE_URL`, `DATABASE_POOL_MAX`, `ADMIN_API_TOKEN`, `STORAGE_DIR`, `JWT_SECRET` (HMAC key for signed `/files` URLs).
-- Integrations: `GREENAPI_*`, `OPENROUTER_API_KEY` + `AI_MODEL`, `GOOGLE_*` (Calendar) + `GOOGLE_WS_*` (Workspace), `TIMELESS_API_KEY`.
-- Provider toggles: `BAFI_PROVIDER` (default `stub`), `EMAIL_PROVIDER`, `WHATSAPP_PROVIDER`.
+- Integrations: `GREENAPI_*` (instance #1 — retired, kept) + `GREENAPI_OP_*` / `GREENAPI_SCAN_*` (operational instance #2) + `CLIX_SEND_*` / `CLIX_WEBHOOK_TOKEN` (conversational gateway), `OPENROUTER_API_KEY` + `AI_MODEL`, `GOOGLE_*` (Calendar) + `GOOGLE_WS_*` (Workspace: Sheets/Drive/Gmail), `TIMELESS_API_KEY`, `SUMMARY_RECIPIENT_PHONE` (owner line).
+- Provider toggles: `EMAIL_PROVIDER`, `WHATSAPP_PROVIDER`, `STAFF_EMAIL_NOTIFY_MODE` (`log`/`send` — the staff-mention email pillar). (BAFI dropped.)
 - `.env.sample` lists all keys; `.env` is gitignored.
 
 ## Key Conventions
