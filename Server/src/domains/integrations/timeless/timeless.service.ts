@@ -6,7 +6,7 @@ import { AppError } from "../../../lib/errors.js";
 import { ensureHebrew } from "../../ai/ai.service.js";
 import { sendMessage, sendButtons } from "../../whatsapp/whatsapp.service.js";
 import { toChatId } from "../../whatsapp/whatsapp.util.js";
-import { getOwnerGmailIntegration, sendGmailEmail } from "../gmail/gmail.service.js";
+import { sendOwnerEmail } from "../google/google.gmail.js";
 import {
   createWebhook,
   deleteWebhook,
@@ -377,16 +377,6 @@ export async function sendClientSummaryEmail(meetingId: string, clientId: string
     return;
   }
 
-  const integration = await getOwnerGmailIntegration();
-  if (!integration) {
-    logger.warn({ meetingId }, "timeless.sendClientSummaryEmail: no owner Gmail integration — reverting claim");
-    await supabaseAdmin
-      .from("meetings")
-      .update({ client_summary_emailed_at: null })
-      .eq("id", meetingId);
-    return;
-  }
-
   const summaryFinal = (claimed as Record<string, unknown>).summary_final as string | null;
   const summaryDraft = (claimed as Record<string, unknown>).summary_draft as string | null;
   const hebrew = (summaryFinal ?? summaryDraft ?? "").trim();
@@ -414,7 +404,7 @@ export async function sendClientSummaryEmail(meetingId: string, clientId: string
   ].join("\n");
 
   try {
-    await sendGmailEmail(integration, email, subject, body);
+    await sendOwnerEmail(email, subject, body);
     logger.info({ meetingId, clientId, email }, "timeless.sendClientSummaryEmail: sent");
   } catch (err) {
     logger.error({ err, meetingId }, "timeless.sendClientSummaryEmail: send failed — reverting claim");
