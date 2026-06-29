@@ -13,26 +13,27 @@ The system is a Node/Express + self-hosted Postgres backend for an Israeli insur
 text + vision); commitment extraction uses `COMMITMENT_AI_MODEL` (default
 `google/gemini-3.1-flash-lite`, hard-coded fallback `google/gemini-2.5-flash`).
 
-Two logical "bots" share the codebase but now run on **different WhatsApp gateways**:
+Two logical "bots" share the codebase but run on **different WhatsApp gateways**:
 
 - **Conversational bot** — talks to leads/clients (intake, auto-reply, booking, reminders) and routes
-  post-meeting summaries to the owner. Runs on the **Clix gateway** (with a GreenAPI fallback path).
+  post-meeting summaries to the owner. Runs on the **conversational GreenAPI instance** (`GREENAPI_*`).
 - **Operational bot** (rebuilt 2026-06-25 as **three pillars**) — a back-office assistant for Didi:
   missed/declined-call reminders, personal-commitment reminders, and email staff-mentions. **Scans** via
   the **GreenAPI operational instance (#2)** (call webhooks + journal reads) plus the single Google
-  Workspace Gmail, but **sends its Didi-facing reminders through the Clix conversational-bot line** (a real
-  notification to Didi, not a silent self-note) — see §5.
+  Workspace Gmail, and **sends its Didi-facing reminders through the same conversational GreenAPI instance**
+  (`notifyOwner`) — a real notification to Didi, not a silent self-note — see §5.
 
-**Major changes since the 2026-06-24 trace** (all reflected below): conversational bot moved to Clix;
-GreenAPI instance #1 retired; old operational engine (task-chain milestones, SLA monitor, old daily
-digest, WhatsApp-unanswered scan, Gmail-milestone scan, cross-check) **removed and replaced** by the
-three pillars; booking switched to Calendly + Zoom; intake v2 (new/old fork, 7-button inquiry);
-Timeless matching switched from ±30 min to **same Israel calendar day**; Gmail consolidated to one
-Workspace account (per-staff `gmail_integrations` removed). The post-meeting **dormant approval path is
-gone**. **Latest (2026-06-29):** the operational bot's Didi-facing reminders (call, commitment, the
-merged 08:00 digest, the 15-min timed reminders) now **deliver via the Clix conversational line**
-(`notifyOwnerViaClix`) instead of a GreenAPI op-line self-message — scanning is unchanged; and the
-**biennial service-meeting reminder** was reworked (08:10 cron, null-date fix, fire-once re-arm via
+**Major changes since the 2026-06-24 trace** (all reflected below): GreenAPI instance #1 retired and then
+fully replaced — the conversational bot now runs on a freshly provisioned GreenAPI conversational instance;
+Clix was **removed entirely** (commit `38c563e`); old operational engine (task-chain milestones, SLA
+monitor, old daily digest, WhatsApp-unanswered scan, Gmail-milestone scan, cross-check) **removed and
+replaced** by the three pillars; booking switched to Calendly + Zoom; intake v2 (new/old fork, 7-button
+inquiry); Timeless matching switched from ±30 min to **same Israel calendar day**; Gmail consolidated to
+one Workspace account (per-staff `gmail_integrations` removed). The post-meeting **dormant approval path
+is gone**. **Latest (2026-06-29): conversational bot migrated Clix→GreenAPI (commit `38c563e`); Clix
+removed; interactive buttons uncapped (GreenAPI delivers >3 reply buttons; the 4-button team menu,
+7-button inquiry menu, and N-button staff-picker all send fine); verified live end-to-end.** The
+**biennial service-meeting reminder** was also reworked (08:10 cron, null-date fix, fire-once re-arm via
 `clients.last_service_reminder_at`, trimmed message, and it **reopens intake** on send).
 
 ---
@@ -40,81 +41,75 @@ merged 08:00 digest, the 15-min timed reminders) now **deliver via the Clix conv
 ## 1. Gateways & WhatsApp instances
 
 Two WhatsApp transports are in play. A connected line maps to a `whatsapp_instances` DB row
-(`purpose` = `conversational` | `operational`, `gateway_customer_id` for Clix, `green_api_*` for
-GreenAPI).
+(`purpose` = `conversational` | `operational`, `green_api_*` for GreenAPI). Clix is fully removed.
 
-- **Clix gateway (the "didi-bot" line)** — the **live conversational line**. Inbound arrives at the same
-  webhook in Clix's own shape (`whatsapp.controller.ts` detects it via `isClixShaped` = no `typeWebhook`
-  but has `customerId` + `type`) and is normalised by `clixToInternal` (`whatsapp.validator.ts`). Media
-  arrives inline as base64. Outbound text/buttons go via `whatsapp.clix-send.ts`
-  (`clixSendText` / `clixSendButtons`; buttons are mapped to `{id,text}` with text truncated to 25 chars,
-  and there is **no 3-button cap**). Enabled when `CLIX_SEND_URL` + `CLIX_SEND_TOKEN` are set.
-- **GreenAPI instance #1 (`GREENAPI_*`, number 7107600944) — RETIRED / expired.** Its env vars are still
-  **required** by `env.ts` (dead creds remain in `.env`), but boot no longer registers its webhook
-  (`setWebhookSettings` is defined but never called) and all sends that used to go through it have moved
-  to Clix. It survives only as the **fallback gateway** if a conversation isn't tagged to a Clix line.
-- **GreenAPI operational instance (#2)** — **scan-only** now (it no longer sends Didi's reminders; those
-  moved to Clix, see §5). Two env families coexist:
-  - `GREENAPI_OP_*` (`opCreds()`, id `7103519997` / number `639219909210`) — the **operational
-    line**. Receives **call webhooks** (→ `call_events`) and is the line whose 24h message journals the
-    commitment scanner reads. As of 2026-06-29 it **no longer sends** the call/commitment/digest reminders
-    — those go to Didi via Clix (`notifyOwnerViaClix`). `opCreds()` being configured is still the gate that
-    enables the operational features.
+- **GreenAPI conversational instance (`GREENAPI_*`)** — the **live conversational line** as of commit
+  `38c563e`. All four env vars (`GREENAPI_ID_INSTANCE`, `GREENAPI_API_TOKEN`, `GREENAPI_BASE_URL`,
+  `GREENAPI_WEBHOOK_TOKEN`) are **optional** in `env.ts` — when blank, outbound sends no-op with a log
+  warning (staged rollout guard). When set, `whatsapp.service.ts` uses `envCreds()` for all sends and
+  `setWebhookSettings` can register the inbound webhook URL. Outbound text goes via `sendMessage` /
+  `sendMessageWithTyping`; buttons go via `sendInteractiveButtons` / `sendInteractiveButtonsWithTyping`
+  → GreenAPI endpoint `sendInteractiveButtonsReply`, body `{chatId, body, footer?, buttons:[{buttonId,
+  buttonText}]}`. **No button cap** — GreenAPI delivers >3 reply buttons without issue; the 4-button
+  team menu, 7-button inquiry menu, and N-button staff-picker all send fine. Button taps return
+  `interactiveButtonsResponse.selectedId`. Media arrives via GreenAPI `downloadUrl` (fetched server-side
+  with `storage.fetchRemoteFile`), not inline base64.
+- **GreenAPI operational instance (#2)** — **scan-only** for the operational bot (it does not send
+  Didi's reminders; those go via the conversational instance, see §5). Two env families coexist:
+  - `GREENAPI_OP_*` (`opCreds()`) — the **operational line**. Receives **call webhooks**
+    (→ `call_events`) and is the line whose 24h message journals the commitment scanner reads.
+    `opCreds()` being configured is still the gate that enables the operational features.
   - `GREENAPI_SCAN_*` (`scanCreds()` / `opsCreds()`) — pull-based journal reads
-    (`lastIncoming/OutgoingMessagesWith`). The commitment scanner reads the op line's 24h journals through
-    these. **(verify)** whether `GREENAPI_OP_*` and `GREENAPI_SCAN_*` point at the same physical line in
-    `.env`; the code treats them as separate cred sets.
+    (`lastIncoming/OutgoingMessagesWith`). The commitment scanner reads the op line's 24h journals
+    through these. **(verify)** whether `GREENAPI_OP_*` and `GREENAPI_SCAN_*` point at the same
+    physical line in `.env`; the code treats them as separate cred sets.
 
-**Per-chat outbound routing — `resolveGatewayForChat(chatId)` (`whatsapp.service.ts`):** returns `"clix"`
-only when the chat's conversation row has a `whatsapp_instance_id` whose instance has a non-null
-`gateway_customer_id` **and** Clix send creds exist; otherwise `"greenapi"` (safe fallback on any error).
-`sendMessage` / `sendMessageWithTyping` / `sendInteractiveButtonsWithTyping` all consult this, so the
-client-facing conversational bot uses Clix for Clix-tagged conversations and GreenAPI otherwise. Clix
-sends get a synthesised `idMessage` (`clix-out:<ts>:<rand>`) so the unique `whatsapp_message_id` index
-never collides.
+**Outbound routing:** all conversational sends — intake replies, button menus, appointment confirmations,
+reminders, post-meeting summaries, staff-picker, owner acks, and the operational Didi-facing reminders
+— go through the single conversational GreenAPI instance via `envCreds()`. There is no per-chat gateway
+selection and no `resolveGatewayForChat`. `sendMessage` / `sendMessageWithTyping` /
+`sendInteractiveButtonsWithTyping` are all direct GreenAPI calls; if creds are blank they return a
+`noop:` idMessage and log a warning.
 
-Helpers: `toChatId()` normalises Israeli numbers to `<972…>@c.us`; `isStaffChat()` matches a chat against
-active staff phones; `extractButtonId()` reads GreenAPI interactive-button taps.
-(`whatsapp.util.ts`, `whatsapp.service.ts`, `whatsapp.clix-send.ts`)
+Helpers: `toChatId()` normalises Israeli numbers to `<972…>@c.us`; `isStaffChat()` matches a chat
+against active staff phones; `extractButtonId()` reads GreenAPI interactive-button taps.
+(`whatsapp.util.ts`, `whatsapp.service.ts`)
 
 ---
 
 ## 2. Inbound webhook dispatcher — `whatsapp/whatsapp.controller.ts`
 
-Single front door (`POST /api/whatsapp/webhook`, body limit 20 MB for this route so Clix base64 media
-fits). Always returns 200 fast; real work runs in `setImmediate`. Decision order:
+Single front door (`POST /api/whatsapp/webhook`). Always returns 200 fast; real work runs in
+`setImmediate`. Decision order:
 
 1. **Operational-call short-circuit.** If `instanceData.idInstance === GREENAPI_OP_ID_INSTANCE` and
    `typeWebhook` is `incomingCall`/`outgoingCall` → `recordCallEvent(body)` (writes `call_events`) and
    persist the op line's own `wid` to `system_settings.op_self_chat_id`. Ack 200, stop.
-2. **Token check.** Accepts `Authorization: Bearer <GREENAPI_WEBHOOK_TOKEN>`, `?token=<GREENAPI_WEBHOOK_TOKEN>`,
-   or `?token=<CLIX_WEBHOOK_TOKEN>`. Mismatch → **401** if the body is Clix-shaped (Clix reads it, no retry
-   storm), otherwise **200 + ignore** (GreenAPI retry suppression).
-3. **Clix normalisation** (if Clix-shaped):
-   - A Clix `type:"outgoing"` event = a human replying from the bot account (Clix does **not** echo the
-     bot's own API sends) → **pause that chat's bot for 1h** (human takeover). Plus a test-only branch: if
-     the bot line *is* the owner number (`SUMMARY_RECIPIENT_PHONE`), an outgoing self-chat message carrying
-     a staff name triggers `tryAssignByStaffName` (inert in prod, where bot ≠ owner).
-   - Otherwise `clixToInternal` produces the internal payload; media base64 is logged but **not persisted**
-     and carried forward as `clixMedia`. The line's `whatsapp_instances` row is resolved by
-     `gateway_customer_id`; unknown/inactive line → ignore; `purpose === 'operational'` sets
-     `isOperational` (store-and-skip later).
-4. `outgoingAPIMessageReceived` (GreenAPI: bot's own API send) → ignore.
-5. `outgoingMessageReceived` (GreenAPI: human typed from the phone):
-   - Owner self-chat staff-picker tap (`assign_staff:<meetingId>:<staffId>`) → `assignStaffToMeeting`.
+2. **Token check.** Accepts `Authorization: Bearer <GREENAPI_WEBHOOK_TOKEN>` or
+   `?token=<GREENAPI_WEBHOOK_TOKEN>`. Mismatch → **200 + ignore** (GreenAPI retry suppression).
+3. `outgoingAPIMessageReceived` (bot's own API send) → ignore.
+4. `outgoingMessageReceived` (human typed from the phone):
+   - Owner self-chat staff-picker tap (`assign_staff:<meetingId>:<staffId>`) — in production the owner
+     is a separate phone and taps arrive as `incomingMessageReceived`; this branch handles the test-only
+     case where the bot's number is the owner number (`SUMMARY_RECIPIENT_PHONE` = bot line) → `assignStaffToMeeting`.
    - Message our bot sent (matched by `whatsapp_message_id` + `sent_by='bot'`) → skip.
    - Otherwise (non-group) → **pause bot 1h** for that chat.
-6. Only `incomingMessageReceived` proceeds. Group chats (`@g.us`) → ignore.
-7. **Owner number** (`SUMMARY_RECIPIENT_PHONE`) → operational-only: only `assign_staff:` taps act
+5. Only `incomingMessageReceived` proceeds. Group chats (`@g.us`) → ignore.
+6. **Owner number** (`SUMMARY_RECIPIENT_PHONE`) → operational-only: only `assign_staff:` taps act
    (`assignStaffToMeeting`); everything else ignored (never enters intake).
-8. **Staff intercept** (`isStaffChat`) → **log and skip** (the old approve/edit summary handler has been
-   retired — staff inbound does nothing here).
-9. Else **client**: upsert `conversations` (by `whatsapp_chat_id`, tag `whatsapp_instance_id` for Clix),
-   insert inbound `messages` (dedup by unique `whatsapp_message_id`), link/create the `clients` row. Then:
-   - If `isOperational` → **store-and-skip** (no client creation dispatch, no bot).
+7. **Staff intercept** (`isStaffChat`) → **log and skip** (staff inbound does nothing here).
+8. Else **client**: upsert `conversations` (by `whatsapp_chat_id`), insert inbound `messages` (dedup by
+   unique `whatsapp_message_id`), link/create the `clients` row. Then:
    - `REPLY_ALLOWLIST` (if set) → non-allowlisted senders are stored but get no reply.
    - Dispatch async: `wantsHuman()` → escalation; else `handleIntake()` (auto-reply is **not** currently
      chained after intake here — see §3.2 **(verify)**).
+
+**Media payload:** GreenAPI sends images and documents as a `downloadUrl` in `imageMessageData`,
+`documentMessageData`, or `fileMessageData`. `extractPayload` (`whatsapp.validator.ts`) reads these and
+returns `{ kind: "image"|"document", fileUrl, ... }` — the URL is fetched server-side later (e.g. for
+Drive upload). Button taps are extracted from `interactiveButtonsResponse.selectedId` /
+`templateButtonReplyMessage.selectedId` / `buttonsResponseMessage.selectedButtonId` (all three shapes
+are checked in order against both the Zod-parsed payload and the raw body).
 
 ---
 
@@ -144,9 +139,9 @@ All prompts in Hebrew. Gated by `bot_settings.enabled` (singleton id=1) and the 
   `other` "אחר". (Legacy free-text classification keys still exist only for old client rows.)
 - **id_photo** — image only. One combined vision pass `validateIdPhoto()` confirms a readable ID **and**
   extracts the 9-digit Israeli ID number (`id_number`); foreign IDs are handled by the same OCR. On
-  success the bytes (Clix base64 or fetched URL) are uploaded to **Google Drive** (see §10) and a
-  `documents` row + `clients.id_photo_url`/`id_number`/`id_validated=true` are written. OCR/upload failure
-  → re-prompt a resend (no data loss).
+  success the bytes (fetched from the GreenAPI `downloadUrl`) are uploaded to **Google Drive** (see §10)
+  and a `documents` row + `clients.id_photo_url`/`id_number`/`id_validated=true` are written. OCR/upload
+  failure → re-prompt a resend (no data loss).
 - **poa** — optional. Reply "דלג"/skip/לא/אין → advance; an image/document → uploaded to Drive + `documents`
   row + `clients.poa_doc_url`.
 - **finalize (`done`)** — `classifyComplexity()` (skipped for old clients → `simple`) sets
@@ -167,11 +162,11 @@ described — confirm whether free-form auto-reply is still wired into the inbou
 ### 3.3 Human escalation — `whatsapp/whatsapp.escalation.ts`
 Trigger regex (נציג / בן אדם / אנושי / human / agent / representative …). Replies
 `"בקשתך התקבלה. נציג יצור איתך קשר בהקדם."`, **pauses 2h**, and WhatsApps the **assigned staff + the
-owner** (`role='owner'`) an alert. Sends go through `sendMessageWithTyping` (Clix or GreenAPI per the
-chat). No notification row is written (the `notifications` table no longer exists).
+owner** (`role='owner'`) an alert. Sends go through `sendMessageWithTyping` (conversational GreenAPI
+instance). No notification row is written (the `notifications` table no longer exists).
 
 ### 3.4 Pause / cooldown system
-- Manual human send (Clix outgoing, GreenAPI outgoing, or `POST /api/whatsapp/send`) → **1h**.
+- Manual human send (GreenAPI `outgoingMessageReceived`, or `POST /api/whatsapp/send`) → **1h**.
 - Escalation → **2h**.
 - Intake completion → indefinite (`bot_paused=true`).
 - All timed pauses auto-expire via `bot_paused_until` and auto-resume. Global kill switch: `bot_settings`.
@@ -218,22 +213,25 @@ verifies the signature, acks 200 immediately, records the event, and forwards `p
 
 ### 4.2 Delivery order — `applyIngest` (only when a summary exists)
 1. `sendSummaryToOwner` — the **owner WhatsApp** (`SUMMARY_RECIPIENT_PHONE`) gets the Hebrew summary via
-   **Clix `clixSendText`**, no buttons. Atomic claim flips `summary_status='sent'`.
+   GreenAPI `sendMessage` (conversational instance), no buttons. Atomic claim flips `summary_status='sent'`.
 2. **5 s gap** (`OWNER_BUBBLE_GAP_MS`) to avoid spam flags.
 3. `sendStaffPickerToOwner` — owner gets a **second bubble**: a button per active staff
-   (`assign_staff:<meetingId>:<staffId>`) via **Clix `clixSendButtons`** (handles > 3 buttons). Idempotent
-   via `staff_picker_sent_at`.
+   (`assign_staff:<meetingId>:<staffId>`) via GreenAPI `sendInteractiveButtons` (uncapped — all active
+   staff rendered). Idempotent via `staff_picker_sent_at`.
 4. `sendClientSummaryEmail` — the **client gets the summary by EMAIL** (only if an email is on file) via
    the single Google Workspace Gmail (`sendOwnerEmail`). Subject `"סיכום הפגישה שלך"`, signed off
    "צוות שקד". Idempotent via `client_summary_emailed_at`. **No human review gate before this email.**
 
 ### 4.3 Owner taps a staff button → `meetings/meeting-handoff.service.ts` `assignStaffToMeeting`
-- **First-tap-wins** atomic claim of `clients.assigned_handler_id` (dup taps reply `"✅ כבר הוקצה ל…"`).
+- **First-tap-wins** atomic claim of `clients.assigned_handler_id` (dup taps reply `"✅ כבר הוקצה ל…"` via
+  GreenAPI `sendMessage`).
 - Sets `clients.last_service_date = today` if unset (**starts the biennial service clock**).
-- `notifyStaffHandoff` — the chosen staff gets a **minimal one-bubble** Clix handoff:
-  `"👤 דידי הקצה אותך לטיפול בלקוח {name}"` followed by `"📝 סיכום הפגישה"` + the summary. (No client file /
+- `notifyStaffHandoff` — the chosen staff gets a handoff **by EMAIL** (to `staff.email`) via
+  `sendOwnerEmail`, gated by `STAFF_EMAIL_NOTIFY_MODE` (default `log` = dry-run; `send` = live). Body:
+  `"👤 דידי הקצה אותך לטיפול בלקוח {name}"` + `"📝 סיכום הפגישה"` + the summary text. (No client file /
   doc links / task list — that detail is gone with the task chain.)
-- **5 s gap** (`HANDOFF_ACK_GAP_MS`), then the owner gets an ack `"✅ הוקצה ל{name}"`.
+- **5 s gap** (`HANDOFF_ACK_GAP_MS`), then the owner gets a WhatsApp ack `"✅ הוקצה ל{name}"` via
+  GreenAPI `sendMessage`.
 - `tryAssignByStaffName` is a **test-only** self-chat helper (resolves staff by name against the
   most-recent picker-sent meeting); inert in production where the owner is a separate phone.
 
@@ -245,16 +243,15 @@ verifies the signature, acks 200 immediately, records the event, and forwards `p
 
 ## 5. Operational bot — three pillars (`operations/*`, `commitments/*`)
 
-**Send transport (changed 2026-06-29):** the Didi-facing reminders (pillars 1 & 2 + the merged digest)
-now **deliver through the Clix conversational line** via `notifyOwnerViaClix(text)`
-(`operations/owner-notify.ts` → `clixSendText(toChatId(SUMMARY_RECIPIENT_PHONE), text)`) — a real
-notification to Didi rather than the silent GreenAPI op-line self-message used before. It returns `false`
-(and sends nothing) if `SUMMARY_RECIPIENT_PHONE` or the Clix send creds are unset, and the "mark
-sent"/prune steps are gated on a `true` result. **Scanning is still the GreenAPI op line** (`opCreds()`
-journals + call webhooks). The `op_self_chat_id` / `commitment_self_chat_id` / `commitment_bot_chat_id`
-settings are still populated and still used to **exclude Didi's own self/bot chat from the commitment
-scan** (`getExcludedChatIds`) — they are no longer used as a send target. The email pillar (3) still
-sends via Gmail.
+**Send transport:** the Didi-facing reminders (pillars 1 & 2 + the merged digest) **deliver through the
+conversational GreenAPI instance** via `notifyOwner(text)` (`operations/owner-notify.ts` →
+`sendMessage(toChatId(SUMMARY_RECIPIENT_PHONE), text)`) — a real notification to Didi. It returns `false`
+(and sends nothing) if `SUMMARY_RECIPIENT_PHONE` is unset or the conversational GreenAPI creds are blank
+(the no-op guard is inside `sendMessage`), and the "mark sent"/prune steps are gated on a `true` result.
+**Scanning is still the GreenAPI op line** (`opCreds()` journals + call webhooks). The `op_self_chat_id` /
+`commitment_self_chat_id` / `commitment_bot_chat_id` settings are still populated and still used to
+**exclude Didi's own self/bot chat from the commitment scan** (`getExcludedChatIds`) — they are not used
+as a send target. The email pillar (3) still sends via Gmail.
 
 ### 5.1 Pillar 1 — Missed/declined-call reminder — `operations/call-events.service.ts`, `call-reminder.service.ts`
 - **Ingest.** Op-line call webhooks → `recordCallEvent` upserts one row per call into `call_events`,
@@ -264,10 +261,11 @@ sends via Gmail.
 - **Build (`buildCallReminderSection`).** Looks back 24h for **incoming** calls that are `missed`/`declined`,
   one row per phone (`getUnresolvedMissedSince`): **latest-wins / answered-callback-cancels** — a later
   `accepted` call to the same (digit-normalised) number suppresses the entry. Output:
-  `"היי, תזכורת על שיחות שלא נענו אתמול:"` + `- <phone> בשעה <HH:mm>` lines.
-- **Send.** `sendDailyCallReminder` exists as a standalone sender (manual route) and now delivers to Didi
-  via **Clix** (`notifyOwnerViaClix`), but in production this section is **merged into the 08:00 morning
-  digest** (§5.4). `call_events` are pruned older than 48h **only after a successful send**.
+  `"תזכורת על שיחות שלא נענו אתמול:"` + `- <phone> בשעה <HH:mm>` lines (no greeting prefix — removed 2026-06-29).
+- **Send.** `sendDailyCallReminder` exists as a standalone sender (manual route) and delivers to Didi
+  via `notifyOwner` (conversational GreenAPI instance), but in production this section is **merged into
+  the 08:00 morning digest** (§5.4). `call_events` are pruned older than 48h **only after a successful
+  send**.
 
 ### 5.2 Pillar 2 — Personal commitment reminders — `commitments/*`
 - **Scan (`scanRecentChats`).** Reads the op line's last-24h **incoming + outgoing** journals
@@ -291,8 +289,9 @@ sends via Gmail.
     `date_only`/`floating`, `fire_at <= now`) is composed by the LLM into a Hebrew bullet list
     (`"בוקר טוב! התזכורות להיום:"`, fallback template on LLM failure) and **merged into the 08:00 digest**;
     the included ids are then marked `sent`.
-- All commitment reminders go to **Didi via Clix** (`sendSelfMessage` now wraps `notifyOwnerViaClix`;
-  despite the legacy name it is no longer an op-line self-message).
+- All commitment reminders go to **Didi via the conversational GreenAPI instance** (`sendSelfMessage`
+  wraps `notifyOwner` — despite the legacy name it sends to `SUMMARY_RECIPIENT_PHONE`, not as a
+  self-message on the op line).
 
 ### 5.3 Pillar 3 — Email staff-mentions — `operations/email-mentions.service.ts`
 - **Scan (`scanAndStoreSentMentions`).** Lists Didi's **sent** Gmail of the last day
@@ -310,7 +309,8 @@ sends via Gmail.
 ### 5.4 The merged 08:00 digest — `operations/morning-digest.service.ts`
 `sendMorningDigest` (cron `0 8 * * *`, Asia/Jerusalem) re-scans commitments (`refreshCommitments`), builds
 the **commitment morning section** and the **call-reminder section**, joins them (commitments first, blank
-line, then calls) into **one** Hebrew message and sends it **to Didi via Clix** (`notifyOwnerViaClix`).
+line, then calls) into **one** Hebrew message and sends it **to Didi via `notifyOwner`** (conversational
+GreenAPI instance).
 The included commitments are marked `sent` **only when the send succeeds**; `call_events` are then pruned
 older than 48h. Still gated on `opCreds()` (scan line must be configured). If both sections are empty it
 sends nothing. The same cron tick also fires `runStaffEmailNotify` (Pillar 3).
@@ -327,7 +327,7 @@ case is now **excluded** — that was a bug that messaged brand-new clients) **a
 been reminded for this overdue cycle (`last_service_reminder_at IS NULL OR last_service_reminder_at <
 last_service_date`) — so a client is reminded **at most once per 2-year-overdue cycle** instead of every
 day. It **messages the client directly** via `sendServiceDueToClient` → `sendMessageWithTyping`
-(Clix for Clix-tagged conversations; the retired GreenAPI #1 is the fallback only for untagged convos).
+(conversational GreenAPI instance).
 The message is trimmed to **3 lines with no scheduling CTA and no reply nudge**:
 
 > שלום [שם] 😊
@@ -398,8 +398,8 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 - `email_staff_mentions`: `gmail_message_id`, `staff_id`, `staff_email` (canonical delivery target),
   `detected_via` (`to_cc`/`body`), `subject`/`recipients`/`snippet`, `status` (`pending`/`sent`/`cancelled`),
   unique `(gmail_message_id, staff_id)`.
-- `whatsapp_instances`: `gateway_customer_id` (Clix, unique), `green_api_*`, `purpose`
-  (`conversational`/`operational`), `is_connected` (generated).
+- `whatsapp_instances`: `gateway_customer_id` (legacy Clix column — unused, Clix is removed), `green_api_*`,
+  `purpose` (`conversational`/`operational`), `is_connected` (generated).
 - `system_settings`: key/value store — keys include `google_calendar_last_sync`, `op_self_chat_id`,
   `commitment_self_chat_id`/`commitment_bot_chat_id`, `google_ws_refresh_token`,
   `timeless_webhook_id`/`timeless_webhook_secret`/`timeless_last_event_at`/`timeless_last_poll_at`,
@@ -414,13 +414,13 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   Drive upload path).
 - **External (not in our DB)** — Google Calendar (events, read), Gmail (one Workspace mailbox; OAuth
   refresh token in `system_settings`), Google Sheets (lead mirror), Timeless.day (recordings/transcripts/
-  summary docs — fetched, summary copied into `meetings`), Clix + GreenAPI (message/call transport only).
+  summary docs — fetched, summary copied into `meetings`), GreenAPI (message/call transport only).
 
 ### Writes by flow stage (the "where is X saved" map)
 - **Inbound message** → `messages` (direction, sent_by, body, `whatsapp_message_id` unique-dedup, status).
-  **Conversation** upsert → `conversations` (by `whatsapp_chat_id`; `last_message_at`,
-  `whatsapp_instance_id` for Clix). **Client** create/link → `clients`. **Pauses** →
-  `conversations.bot_paused` / `bot_paused_until`. Settings read → `bot_settings` (id=1).
+  **Conversation** upsert → `conversations` (by `whatsapp_chat_id`; `last_message_at`). **Client**
+  create/link → `clients`. **Pauses** → `conversations.bot_paused` / `bot_paused_until`. Settings read
+  → `bot_settings` (id=1).
 - **Intake answers** → `clients` (`intake_state`, `intake_current_slot`, `client_type`, `full_name`,
   `email`, `inquiry_type`, `id_number`, `id_validated`, `complexity`, `pipeline_stage`,
   `intake_completed_at`). On each advance + finalize → **Google Sheet** row (new clients only, §10).
@@ -445,26 +445,27 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 - **Operational** → `call_events` (call webhooks, pruned > 48h **after a successful send**); `commitments`
   (insert pending → `sent`/`cancelled`); `email_staff_mentions` (insert pending → `sent`); `system_settings`
   (`op_self_chat_id`, `commitment_self_chat_id` — still written for self-chat **exclusion**, no longer a
-  send target). The Didi-facing reminders themselves go out over **Clix** (not stored as our `messages`).
+  send target). The Didi-facing reminders themselves go out over the **conversational GreenAPI instance**
+  (not stored as our `messages`).
 
 ---
 
 ## 8. Config / providers (`config/env.ts`)
 
-- **WhatsApp:** GreenAPI instance #1 `GREENAPI_*` **required but unused** (retired line). Scan/op creds
-  `GREENAPI_SCAN_*` and `GREENAPI_OP_*` optional (features stay dormant if unset). Clix:
-  `CLIX_WEBHOOK_TOKEN` required (inbound); `CLIX_SEND_URL` + `CLIX_SEND_TOKEN` optional (outbound — must
-  both be set to enable Clix sends).
+- **WhatsApp:** conversational GreenAPI instance: `GREENAPI_ID_INSTANCE`, `GREENAPI_API_TOKEN`,
+  `GREENAPI_BASE_URL`, `GREENAPI_WEBHOOK_TOKEN` — all **optional** in `env.ts`; when blank, sends no-op
+  with a warning (staged rollout guard). Scan/op creds `GREENAPI_SCAN_*` and `GREENAPI_OP_*` optional
+  (features stay dormant if unset). There are no `CLIX_*` env vars — Clix is fully removed.
 - **AI:** `OPENROUTER_API_KEY` required; `AI_MODEL` default `google/gemini-2.5-flash`; `AI_FALLBACK_MODEL`
   `google/gemini-3.1-pro-preview`; `COMMITMENT_AI_MODEL` `google/gemini-3.1-flash-lite`.
 - **Google:** **Calendar** OAuth `GOOGLE_*` (separate client) for booking sync. **Workspace** OAuth
   `GOOGLE_WS_CLIENT_ID`/`GOOGLE_WS_CLIENT_SECRET` (single account) for Sheets + Drive + Gmail. The old
   per-staff `GOOGLE_OAUTH_*` Gmail vars are **gone**.
 - **Timeless:** `TIMELESS_API_KEY`; `SUMMARY_RECIPIENT_PHONE` (owner line — the target for the post-meeting
-  summary/staff-picker **and**, as of 2026-06-29, the operational Didi-reminders via Clix
-  (`notifyOwnerViaClix`); also gates the operational-only owner number in the webhook).
-  **Currently BLANK (2026-06-29):** while unset, all owner-facing sends (op Didi-reminders + post-meeting
-  summary/staff-picker) **skip** — the feature code is intact, only the recipient is unconfigured.
+  summary/staff-picker and the operational Didi-reminders via `notifyOwner`; also gates the
+  operational-only owner number in the webhook). **Currently BLANK (2026-06-29):** while unset, all
+  owner-facing sends (op Didi-reminders + post-meeting summary/staff-picker) **skip** — the feature code
+  is intact, only the recipient is unconfigured.
 - **Leads mirror:** `LEADS_SPREADSHEET_ID`, `LEADS_SHEET_TAB`, `LEADS_SHEET_TAB_NEW`,
   `LEADS_DRIVE_FOLDER_ID`, `LEADS_MIRROR_ENABLED` — all have defaults in `env.ts`.
 - **Provider toggles:** `EMAIL_PROVIDER`, `WHATSAPP_PROVIDER` (`stub`/`live`); `STAFF_EMAIL_NOTIFY_MODE`
@@ -484,15 +485,23 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   authorised Workspace mailbox (`userId:"me"` = `didi@ddins.net`, which holds the `google_ws_refresh_token`).
   That account's **primary send-as is `shaked-ins.com`**, so the From shown to recipients resolves to
   **`"דידי פרידלנדר" <didi@shaked-ins.com>`** — confirmed by a real test send (2026-06-28).
-- **GreenAPI instance #1 is retired but still required by `env.ts`** — its dead creds must stay in `.env`
-  or boot fails. The conversational bot falls back to it only for non-Clix-tagged conversations; in
-  practice that line is offline, so a fallback send would error.
+- **Conversational GreenAPI creds are optional in `env.ts`** — if `GREENAPI_ID_INSTANCE` / `GREENAPI_API_TOKEN` /
+  `GREENAPI_BASE_URL` / `GREENAPI_WEBHOOK_TOKEN` are blank, all conversational sends no-op silently.
+  Confirm these are set to the live line before go-live.
+- **GreenAPI instances are TESTING, not production (2026-06-29)** — both the conversational (`GREENAPI_*`)
+  and operational (`GREENAPI_OP_*`) instances are free-tier test instances (subject to a weekly message
+  cap). All owner-facing sends were **verified live end-to-end on 2026-06-29** (missed-call reminder,
+  merged digest, post-meeting summary, 9-button staff picker, and staff-tap→email handoff in dry-run).
+  **Production cutover (pending real instances):** provision paid prod instances, authorize each on its
+  own WhatsApp line (conversational bot line ≠ Didi's number; conversational ≠ operational number), point
+  each webhook at `…/api/whatsapp/webhook` (conversational `webhookUrlToken` == `GREENAPI_WEBHOOK_TOKEN`,
+  Incoming + Outgoing notifications on), then set the creds + Didi's real `SUMMARY_RECIPIENT_PHONE` and
+  lift `REPLY_ALLOWLIST`.
 - **`STAFF_EMAIL_NOTIFY_MODE` defaults to `log`** — Pillar 3 is **dry-run** until flipped to `send`. Rows
   still flip to `sent`, so flipping the mode later won't re-notify already-scanned mail.
 - **`SUMMARY_RECIPIENT_PHONE` is currently BLANK (2026-06-29)** — while unset, **both** the post-meeting
-  owner-summary/staff-picker flow **and** the operational Didi-reminders (now sent via Clix,
-  `notifyOwnerViaClix`) **silently skip**. Set it to Didi's real WhatsApp before go-live (and verify it is
-  not a test number).
+  owner-summary/staff-picker flow **and** the operational Didi-reminders (`notifyOwner`) **silently skip**.
+  Set it to Didi's real WhatsApp before go-live (and verify it is not a test number).
 - **`team_routing` buttons are cosmetic (verify intent)** — the choice (Team Y/Z/Contact Didi/Stay) is
   shown but never stored or acted on; routing is driven only by the new/old `client_type`.
 - **Auto-reply wiring (verify)** — confirm whether free-form `ai.orchestrator` auto-reply still runs after
