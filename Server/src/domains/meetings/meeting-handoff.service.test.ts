@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockClixSendText, mockFromImpl } = vi.hoisted(() => {
-  const mockClixSendText = vi.fn();
+const { mockSendMessage, mockSendOwnerEmail, mockFromImpl, mockEnv } = vi.hoisted(() => {
+  const mockSendMessage = vi.fn();
+  const mockSendOwnerEmail = vi.fn();
   const mockFromImpl = vi.fn();
-  return { mockClixSendText, mockFromImpl };
+  const mockEnv = { STAFF_EMAIL_NOTIFY_MODE: "send" as "send" | "log" };
+  return { mockSendMessage, mockSendOwnerEmail, mockFromImpl, mockEnv };
 });
 
-vi.mock("../whatsapp/whatsapp.clix-send.js", () => ({
-  clixSendText: mockClixSendText,
-  clixSendCreds: vi.fn().mockReturnValue({ url: "http://clix", token: "tok" }),
+vi.mock("../whatsapp/whatsapp.service.js", () => ({
+  sendMessage: mockSendMessage,
 }));
 
 vi.mock("../../config/supabase.js", () => ({
@@ -19,13 +20,12 @@ vi.mock("../../config/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-vi.mock("../whatsapp/whatsapp.util.js", () => ({
-  toChatId: (raw: string | null | undefined): string | null => {
-    if (!raw) return null;
-    const digits = raw.replace(/\D/g, "");
-    if (digits.length < 10) return null;
-    return `${digits}@c.us`;
-  },
+vi.mock("../integrations/google/google.gmail.js", () => ({
+  sendOwnerEmail: mockSendOwnerEmail,
+}));
+
+vi.mock("../../config/env.js", () => ({
+  env: mockEnv,
 }));
 
 type Builder = Record<string, unknown>;
@@ -57,16 +57,18 @@ function setupFromSequence(builders: Builder[]): void {
 
 import { notifyStaffHandoff } from "./meeting-handoff.service.js";
 
-describe("notifyStaffHandoff — minimal Clix body", () => {
+describe("notifyStaffHandoff — email handoff", () => {
   const MEETING_ID = "meeting-handoff-1";
-  const STAFF_PHONE = "972501234567";
+  const STAFF_EMAIL = "dana@shaked-ins.com";
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockClixSendText.mockResolvedValue(undefined);
+    mockEnv.STAFF_EMAIL_NOTIFY_MODE = "send";
+    mockSendOwnerEmail.mockResolvedValue({ id: "msg-1" });
+    mockSendMessage.mockResolvedValue({ idMessage: "msg-wa" });
   });
 
-  it("sends a message containing the assignment line and the summary", async () => {
+  it("sends an email containing the assignment line and the summary", async () => {
     const summaryText = "הלקוח מעוניין בביטוח חיים, דרושה בדיקה נוספת.";
 
     const meetingBuilder = makeBuilder({
@@ -78,7 +80,7 @@ describe("notifyStaffHandoff — minimal Clix body", () => {
       error: null,
     });
     const staffBuilder = makeBuilder({
-      data: { full_name: "דנה לוי", phone: STAFF_PHONE },
+      data: { full_name: "דנה לוי", email: STAFF_EMAIL },
       error: null,
     });
 
@@ -86,10 +88,11 @@ describe("notifyStaffHandoff — minimal Clix body", () => {
 
     await notifyStaffHandoff(MEETING_ID);
 
-    expect(mockClixSendText).toHaveBeenCalledOnce();
-    const [chatId, body] = mockClixSendText.mock.calls[0] as [string, string];
+    expect(mockSendOwnerEmail).toHaveBeenCalledOnce();
+    const [to, subject, body] = mockSendOwnerEmail.mock.calls[0] as [string, string, string];
 
-    expect(chatId).toBe(`${STAFF_PHONE}@c.us`);
+    expect(to).toBe(STAFF_EMAIL);
+    expect(subject).toContain("יוסי כהן");
     expect(body).toContain("דידי הקצה אותך");
     expect(body).toContain("יוסי כהן");
     expect(body).toContain(summaryText);
@@ -106,7 +109,7 @@ describe("notifyStaffHandoff — minimal Clix body", () => {
       error: null,
     });
     const staffBuilder = makeBuilder({
-      data: { full_name: "משה לוי", phone: STAFF_PHONE },
+      data: { full_name: "משה לוי", email: STAFF_EMAIL },
       error: null,
     });
 
@@ -114,40 +117,11 @@ describe("notifyStaffHandoff — minimal Clix body", () => {
 
     await notifyStaffHandoff(MEETING_ID);
 
-    expect(mockClixSendText).toHaveBeenCalledOnce();
-    const [, body] = mockClixSendText.mock.calls[0] as [string, string];
+    expect(mockSendOwnerEmail).toHaveBeenCalledOnce();
+    const [, , body] = mockSendOwnerEmail.mock.calls[0] as [string, string, string];
 
     expect(body).toContain("דידי הקצה אותך");
     expect(body).not.toContain("📝 סיכום הפגישה");
-  });
-
-  it("does NOT contain phone, ID, inquiry type, or document lines", async () => {
-    const summaryText = "סיכום הפגישה עם הלקוח.";
-
-    const meetingBuilder = makeBuilder({
-      data: { id: MEETING_ID, client_id: "client-3", summary_final: summaryText, summary_draft: null },
-      error: null,
-    });
-    const clientBuilder = makeBuilder({
-      data: { full_name: "דוד כץ", assigned_to: null, assigned_handler_id: "staff-3" },
-      error: null,
-    });
-    const staffBuilder = makeBuilder({
-      data: { full_name: "שרה גולן", phone: STAFF_PHONE },
-      error: null,
-    });
-
-    setupFromSequence([meetingBuilder, clientBuilder, staffBuilder]);
-
-    await notifyStaffHandoff(MEETING_ID);
-
-    const [, body] = mockClixSendText.mock.calls[0] as [string, string];
-
-    expect(body).not.toContain("טלפון:");
-    expect(body).not.toContain('ת"ז:');
-    expect(body).not.toContain("סוג הפנייה:");
-    expect(body).not.toContain("מסמכים");
-    expect(body).not.toContain("ייפוי כוח");
   });
 
   it("returns early without sending when no meeting found", async () => {
@@ -156,7 +130,7 @@ describe("notifyStaffHandoff — minimal Clix body", () => {
 
     await notifyStaffHandoff(MEETING_ID);
 
-    expect(mockClixSendText).not.toHaveBeenCalled();
+    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
   });
 
   it("returns early without sending when client has no assigned staff", async () => {
@@ -173,7 +147,7 @@ describe("notifyStaffHandoff — minimal Clix body", () => {
 
     await notifyStaffHandoff(MEETING_ID);
 
-    expect(mockClixSendText).not.toHaveBeenCalled();
+    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
   });
 
   it("falls back to summary_draft when summary_final is null", async () => {
@@ -188,7 +162,7 @@ describe("notifyStaffHandoff — minimal Clix body", () => {
       error: null,
     });
     const staffBuilder = makeBuilder({
-      data: { full_name: "אהרן גורן", phone: STAFF_PHONE },
+      data: { full_name: "אהרן גורן", email: STAFF_EMAIL },
       error: null,
     });
 
@@ -196,7 +170,30 @@ describe("notifyStaffHandoff — minimal Clix body", () => {
 
     await notifyStaffHandoff(MEETING_ID);
 
-    const [, body] = mockClixSendText.mock.calls[0] as [string, string];
+    const [, , body] = mockSendOwnerEmail.mock.calls[0] as [string, string, string];
     expect(body).toContain(draftSummary);
+  });
+
+  it("does NOT send email in log mode (dry-run)", async () => {
+    mockEnv.STAFF_EMAIL_NOTIFY_MODE = "log";
+
+    const meetingBuilder = makeBuilder({
+      data: { id: MEETING_ID, client_id: "client-7", summary_final: "סיכום.", summary_draft: null },
+      error: null,
+    });
+    const clientBuilder = makeBuilder({
+      data: { full_name: "אורי שלם", assigned_to: null, assigned_handler_id: "staff-7" },
+      error: null,
+    });
+    const staffBuilder = makeBuilder({
+      data: { full_name: "נועה ברק", email: STAFF_EMAIL },
+      error: null,
+    });
+
+    setupFromSequence([meetingBuilder, clientBuilder, staffBuilder]);
+
+    await notifyStaffHandoff(MEETING_ID);
+
+    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
   });
 });

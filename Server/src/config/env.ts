@@ -46,11 +46,12 @@ const envSchema = z.object({
     .default("")
     .transform((v) => (v.trim() === "" ? [] : v.split(",").map((s) => s.trim()))),
 
-  // GreenAPI (WhatsApp gateway) — instance #1: conversational bot
-  GREENAPI_ID_INSTANCE: z.string().min(1),
-  GREENAPI_API_TOKEN: z.string().min(1),
-  GREENAPI_BASE_URL: z.string().url(),
-  GREENAPI_WEBHOOK_TOKEN: z.string().min(16),
+  // GreenAPI (WhatsApp gateway) — conversational bot instance (creds supplied when provisioned)
+  // All four are optional so the app boots with blank values during staged rollout.
+  GREENAPI_ID_INSTANCE: z.string().optional(),
+  GREENAPI_API_TOKEN: z.string().optional(),
+  GREENAPI_BASE_URL: z.string().optional(),
+  GREENAPI_WEBHOOK_TOKEN: z.string().optional(),
 
   // GreenAPI instance #2: scanning / operational bot (leave blank until provisioned)
   GREENAPI_SCAN_ID_INSTANCE: z.string().optional(),
@@ -99,17 +100,8 @@ const envSchema = z.object({
   GREENAPI_OP_ID_INSTANCE: z.string().optional(),
   GREENAPI_OP_API_TOKEN: z.string().optional(),
 
-  // Clix (WClixAPI) gateway — inbound webhook token (Milestone 1: receive & store)
-  CLIX_WEBHOOK_TOKEN: z.string().min(16),
-
-  // Clix outbound send API (Milestone 2: reply via Clix for Clix conversations)
-  // Both must be set to enable Clix outbound; leave blank to keep dormant.
-  CLIX_SEND_URL: z.string().url().optional(),
-  CLIX_SEND_TOKEN: z.string().optional(),
-
   // Provider toggles — set to "stub" to disable live API calls
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
-  WHATSAPP_PROVIDER: z.enum(["stub", "live"]).default("live"),
 
   // Staff email notification mode for the daily sent-Gmail mention scan.
   // "log" = dry-run (compose to pm2 logs, no send); "send" = actually email staff.

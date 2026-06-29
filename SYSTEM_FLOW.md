@@ -18,8 +18,10 @@ Two logical "bots" share the codebase but now run on **different WhatsApp gatewa
 - **Conversational bot** — talks to leads/clients (intake, auto-reply, booking, reminders) and routes
   post-meeting summaries to the owner. Runs on the **Clix gateway** (with a GreenAPI fallback path).
 - **Operational bot** (rebuilt 2026-06-25 as **three pillars**) — a back-office assistant for Didi:
-  missed/declined-call reminders, personal-commitment reminders, and email staff-mentions. Runs on the
-  **GreenAPI operational instance (#2)** plus the single Google Workspace Gmail.
+  missed/declined-call reminders, personal-commitment reminders, and email staff-mentions. **Scans** via
+  the **GreenAPI operational instance (#2)** (call webhooks + journal reads) plus the single Google
+  Workspace Gmail, but **sends its Didi-facing reminders through the Clix conversational-bot line** (a real
+  notification to Didi, not a silent self-note) — see §5.
 
 **Major changes since the 2026-06-24 trace** (all reflected below): conversational bot moved to Clix;
 GreenAPI instance #1 retired; old operational engine (task-chain milestones, SLA monitor, old daily
@@ -27,7 +29,11 @@ digest, WhatsApp-unanswered scan, Gmail-milestone scan, cross-check) **removed a
 three pillars; booking switched to Calendly + Zoom; intake v2 (new/old fork, 7-button inquiry);
 Timeless matching switched from ±30 min to **same Israel calendar day**; Gmail consolidated to one
 Workspace account (per-staff `gmail_integrations` removed). The post-meeting **dormant approval path is
-gone**.
+gone**. **Latest (2026-06-29):** the operational bot's Didi-facing reminders (call, commitment, the
+merged 08:00 digest, the 15-min timed reminders) now **deliver via the Clix conversational line**
+(`notifyOwnerViaClix`) instead of a GreenAPI op-line self-message — scanning is unchanged; and the
+**biennial service-meeting reminder** was reworked (08:10 cron, null-date fix, fire-once re-arm via
+`clients.last_service_reminder_at`, trimmed message, and it **reopens intake** on send).
 
 ---
 
@@ -47,10 +53,13 @@ GreenAPI).
   **required** by `env.ts` (dead creds remain in `.env`), but boot no longer registers its webhook
   (`setWebhookSettings` is defined but never called) and all sends that used to go through it have moved
   to Clix. It survives only as the **fallback gateway** if a conversation isn't tagged to a Clix line.
-- **GreenAPI operational instance (#2)** — two env families coexist:
+- **GreenAPI operational instance (#2)** — **scan-only** now (it no longer sends Didi's reminders; those
+  moved to Clix, see §5). Two env families coexist:
   - `GREENAPI_OP_*` (`opCreds()`, id `7103519997` / number `639219909210`) — the **operational
-    line**. Receives **call webhooks**, and **sends to its own self-chat** (send-to-self) for the call
-    reminder, commitment reminders, and the merged morning digest.
+    line**. Receives **call webhooks** (→ `call_events`) and is the line whose 24h message journals the
+    commitment scanner reads. As of 2026-06-29 it **no longer sends** the call/commitment/digest reminders
+    — those go to Didi via Clix (`notifyOwnerViaClix`). `opCreds()` being configured is still the gate that
+    enables the operational features.
   - `GREENAPI_SCAN_*` (`scanCreds()` / `opsCreds()`) — pull-based journal reads
     (`lastIncoming/OutgoingMessagesWith`). The commitment scanner reads the op line's 24h journals through
     these. **(verify)** whether `GREENAPI_OP_*` and `GREENAPI_SCAN_*` point at the same physical line in
@@ -236,9 +245,16 @@ verifies the signature, acks 200 immediately, records the event, and forwards `p
 
 ## 5. Operational bot — three pillars (`operations/*`, `commitments/*`)
 
-All operational sends use the **GreenAPI operational line** (`opCreds()` → `sendMessageWith`), targeting
-the line's **own self-chat** (`system_settings.op_self_chat_id`, captured from a call webhook's `wid`;
-commitments resolve `commitment_self_chat_id` via `getWaSettings`). The email pillar sends via Gmail.
+**Send transport (changed 2026-06-29):** the Didi-facing reminders (pillars 1 & 2 + the merged digest)
+now **deliver through the Clix conversational line** via `notifyOwnerViaClix(text)`
+(`operations/owner-notify.ts` → `clixSendText(toChatId(SUMMARY_RECIPIENT_PHONE), text)`) — a real
+notification to Didi rather than the silent GreenAPI op-line self-message used before. It returns `false`
+(and sends nothing) if `SUMMARY_RECIPIENT_PHONE` or the Clix send creds are unset, and the "mark
+sent"/prune steps are gated on a `true` result. **Scanning is still the GreenAPI op line** (`opCreds()`
+journals + call webhooks). The `op_self_chat_id` / `commitment_self_chat_id` / `commitment_bot_chat_id`
+settings are still populated and still used to **exclude Didi's own self/bot chat from the commitment
+scan** (`getExcludedChatIds`) — they are no longer used as a send target. The email pillar (3) still
+sends via Gmail.
 
 ### 5.1 Pillar 1 — Missed/declined-call reminder — `operations/call-events.service.ts`, `call-reminder.service.ts`
 - **Ingest.** Op-line call webhooks → `recordCallEvent` upserts one row per call into `call_events`,
@@ -249,9 +265,9 @@ commitments resolve `commitment_self_chat_id` via `getWaSettings`). The email pi
   one row per phone (`getUnresolvedMissedSince`): **latest-wins / answered-callback-cancels** — a later
   `accepted` call to the same (digit-normalised) number suppresses the entry. Output:
   `"היי, תזכורת על שיחות שלא נענו אתמול:"` + `- <phone> בשעה <HH:mm>` lines.
-- **Send.** `sendDailyCallReminder` exists as a standalone sender (manual route), but in production this
-  section is **merged into the 08:00 morning digest** (§5.4). `call_events` are pruned older than 48h after
-  each send.
+- **Send.** `sendDailyCallReminder` exists as a standalone sender (manual route) and now delivers to Didi
+  via **Clix** (`notifyOwnerViaClix`), but in production this section is **merged into the 08:00 morning
+  digest** (§5.4). `call_events` are pruned older than 48h **only after a successful send**.
 
 ### 5.2 Pillar 2 — Personal commitment reminders — `commitments/*`
 - **Scan (`scanRecentChats`).** Reads the op line's last-24h **incoming + outgoing** journals
@@ -269,12 +285,14 @@ commitments resolve `commitment_self_chat_id` via `getWaSettings`). The email pi
 - **Fire.**
   - **Timed:** `fireTimedReminders` runs every **15 min** (`setInterval` in `startCommitmentCrons`). It
     cancels `timed` rows that are stale by > 2 h, then sends due rows grouped by minute as
-    `"⏰ תזכורת:"` + `• <text> בשעה <HH:mm> — <contact>`, and flips them to `sent`.
+    `"⏰ תזכורת:"` + `• <text> בשעה <HH:mm> — <contact>`, and flips them to `sent` (only after a successful
+    send).
   - **Date-only / floating:** `buildMorningCommitmentSection` (status `pending`, kind in
     `date_only`/`floating`, `fire_at <= now`) is composed by the LLM into a Hebrew bullet list
     (`"בוקר טוב! התזכורות להיום:"`, fallback template on LLM failure) and **merged into the 08:00 digest**;
     the included ids are then marked `sent`.
-- All commitment reminders go to Didi's **op self-chat**.
+- All commitment reminders go to **Didi via Clix** (`sendSelfMessage` now wraps `notifyOwnerViaClix`;
+  despite the legacy name it is no longer an op-line self-message).
 
 ### 5.3 Pillar 3 — Email staff-mentions — `operations/email-mentions.service.ts`
 - **Scan (`scanAndStoreSentMentions`).** Lists Didi's **sent** Gmail of the last day
@@ -292,19 +310,36 @@ commitments resolve `commitment_self_chat_id` via `getWaSettings`). The email pi
 ### 5.4 The merged 08:00 digest — `operations/morning-digest.service.ts`
 `sendMorningDigest` (cron `0 8 * * *`, Asia/Jerusalem) re-scans commitments (`refreshCommitments`), builds
 the **commitment morning section** and the **call-reminder section**, joins them (commitments first, blank
-line, then calls) into **one** Hebrew self-message to the op line, marks the included commitments `sent`,
-and prunes old `call_events`. If both sections are empty it sends nothing. The same cron tick also fires
-`runStaffEmailNotify` (Pillar 3).
+line, then calls) into **one** Hebrew message and sends it **to Didi via Clix** (`notifyOwnerViaClix`).
+The included commitments are marked `sent` **only when the send succeeds**; `call_events` are then pruned
+older than 48h. Still gated on `opCreds()` (scan line must be configured). If both sections are empty it
+sends nothing. The same cron tick also fires `runStaffEmailNotify` (Pillar 3).
 
 ### 5.5 Manual triggers — `operations/operations.controller.ts` + `operations.routes.ts`
 Admin-only (`authenticate` + `authorize("admin")`) POST endpoints under `/api/operations` mirror the
 scheduled jobs: `/call-reminder/run`, `/commitments/run`, `/morning-digest/run`, `/email-mentions/run`.
 
 ### 5.6 Biennial service meetings — `calendar/service-meeting.service.ts`
-`checkServiceMeetingEligibility` (daily) finds **active** clients with `last_service_date` null or older
-than 24 months and **messages the client directly** (Hebrew retention outreach to book a service meeting)
-via `sendServiceDueToClient` → `sendMessageWithTyping` (Clix/GreenAPI per chat). This is the only piece of
-the old operational layer that was rebuilt.
+`checkServiceMeetingEligibility` (reworked 2026-06-29) runs on a **cron at 08:10 Asia/Jerusalem**
+(`server.ts`, staggered after the 08:00 digest — no longer a boot-tied 24h `setInterval`). It finds
+**`status='active'`** clients whose **`last_service_date` is non-null and `<= today − 2 years`** (the null
+case is now **excluded** — that was a bug that messaged brand-new clients) **and** that have not already
+been reminded for this overdue cycle (`last_service_reminder_at IS NULL OR last_service_reminder_at <
+last_service_date`) — so a client is reminded **at most once per 2-year-overdue cycle** instead of every
+day. It **messages the client directly** via `sendServiceDueToClient` → `sendMessageWithTyping`
+(Clix for Clix-tagged conversations; the retired GreenAPI #1 is the fallback only for untagged convos).
+The message is trimmed to **3 lines with no scheduling CTA and no reply nudge**:
+
+> שלום [שם] 😊
+> עברו שנתיים מאז הפגישה האחרונה שלנו — זה הזמן לפגישת שירות תקופתית.
+> נשמח לבדוק יחד שהביטוחים שלך עדיין מתאימים לצרכים שלך ולעדכן במידת הצורך.
+
+**On a successful send** it (1) stamps `clients.last_service_reminder_at = today` (the re-arm), and (2)
+**reopens intake** — sets the client's `intake_state='collecting'` + `intake_current_slot='welcome'` and
+clears the conversation's `bot_paused`/`bot_paused_until`, so the client's next reply re-enters the bot
+greeting (New/Old client buttons → "Old client" → booking link). The biennial clock itself is still
+started at staff-assignment by stamping `clients.last_service_date = today` (§4.3). This is the only piece
+of the old operational layer that was rebuilt.
 
 > **Removed (confirmed absent from the codebase):** the task-chain milestone engine
 > (`TASK_CHAIN_DEFINITION`, `checkDueAndOverdueTasks`, `completeTask`, `advancePipelineStage`), the SLA
@@ -324,7 +359,7 @@ localhost) so dev boots never touch live lines or prod data. Timeless cron addit
 |---|---|---|---|
 | Calendar booking sync | `setTimeout` + `setInterval` | first +30 s, then every 3 min | `booking-sync.service.ts` |
 | Appointment reminders (24h/1h) | `setInterval` | every 10 min | `reminder.service.ts` |
-| Service-meeting eligibility (biennial) | `setInterval` | every 24 h | `service-meeting.service.ts` |
+| Service-meeting eligibility (biennial) | `cron` | `10 8 * * *` Asia/Jerusalem | `service-meeting.service.ts` |
 | Commitment timed reminders | `setInterval` (`startCommitmentCrons`) | every 15 min | `commitments.reminders.ts` |
 | Morning digest (commitments + calls) **and** email staff-mentions | `cron` | `0 8 * * *` Asia/Jerusalem | `morning-digest.service.ts` + `email-mentions.service.ts` |
 | Timeless meeting poll (backstop) | `cron` | `0 * * * *` (hourly) | `timeless.poll.ts` |
@@ -342,7 +377,9 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 `v_client_pipeline`.**
 
 - `clients`: `pipeline_stage`, `complexity`, `id_number`, `policy_number`, `client_type` (`new`/`old`),
-  `assigned_to` / `assigned_handler_id` (handler preferred), `last_service_date`, intake columns
+  `assigned_to` / `assigned_handler_id` (handler preferred), `last_service_date`,
+  `last_service_reminder_at` (date, nullable — biennial re-arm; set on a successful service-meeting
+  reminder so it fires at most once per overdue cycle, §5.6), intake columns
   (`intake_state`, `intake_current_slot` incl. `client_type`/`team_routing`, `id_photo_url`, `poa_doc_url`,
   `id_validated`, `intake_completed_at`), and `mirrored_to_sheet_at` (column exists but is **not currently
   read/written by the lead-mirror code** — sheet idempotency is phone-based, see §10).
@@ -402,9 +439,13 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   claims); `timeless_unmatched_meetings` (parked); `system_settings` (`timeless_*`). The client summary
   **email** goes via Gmail (body not stored).
 - **Staff assignment** → `clients` (`assigned_handler_id`, `last_service_date`). No task rows.
-- **Operational** → `call_events` (call webhooks, pruned > 48h); `commitments` (insert pending → `sent`/
-  `cancelled`); `email_staff_mentions` (insert pending → `sent`); `system_settings`
-  (`op_self_chat_id`, `commitment_self_chat_id`).
+- **Biennial service reminder** (§5.6) → on a successful client send: `clients`
+  (`last_service_reminder_at = today`, `intake_state='collecting'`, `intake_current_slot='welcome'`) +
+  `conversations` (`bot_paused=false`, `bot_paused_until=NULL`) + `messages` (the outreach). 
+- **Operational** → `call_events` (call webhooks, pruned > 48h **after a successful send**); `commitments`
+  (insert pending → `sent`/`cancelled`); `email_staff_mentions` (insert pending → `sent`); `system_settings`
+  (`op_self_chat_id`, `commitment_self_chat_id` — still written for self-chat **exclusion**, no longer a
+  send target). The Didi-facing reminders themselves go out over **Clix** (not stored as our `messages`).
 
 ---
 
@@ -419,8 +460,11 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 - **Google:** **Calendar** OAuth `GOOGLE_*` (separate client) for booking sync. **Workspace** OAuth
   `GOOGLE_WS_CLIENT_ID`/`GOOGLE_WS_CLIENT_SECRET` (single account) for Sheets + Drive + Gmail. The old
   per-staff `GOOGLE_OAUTH_*` Gmail vars are **gone**.
-- **Timeless:** `TIMELESS_API_KEY`; `SUMMARY_RECIPIENT_PHONE` (owner summary line, also gates the
-  operational-only owner number in the webhook).
+- **Timeless:** `TIMELESS_API_KEY`; `SUMMARY_RECIPIENT_PHONE` (owner line — the target for the post-meeting
+  summary/staff-picker **and**, as of 2026-06-29, the operational Didi-reminders via Clix
+  (`notifyOwnerViaClix`); also gates the operational-only owner number in the webhook).
+  **Currently BLANK (2026-06-29):** while unset, all owner-facing sends (op Didi-reminders + post-meeting
+  summary/staff-picker) **skip** — the feature code is intact, only the recipient is unconfigured.
 - **Leads mirror:** `LEADS_SPREADSHEET_ID`, `LEADS_SHEET_TAB`, `LEADS_SHEET_TAB_NEW`,
   `LEADS_DRIVE_FOLDER_ID`, `LEADS_MIRROR_ENABLED` — all have defaults in `env.ts`.
 - **Provider toggles:** `EMAIL_PROVIDER`, `WHATSAPP_PROVIDER` (`stub`/`live`); `STAFF_EMAIL_NOTIFY_MODE`
@@ -445,8 +489,10 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   practice that line is offline, so a fallback send would error.
 - **`STAFF_EMAIL_NOTIFY_MODE` defaults to `log`** — Pillar 3 is **dry-run** until flipped to `send`. Rows
   still flip to `sent`, so flipping the mode later won't re-notify already-scanned mail.
-- **`SUMMARY_RECIPIENT_PHONE` may be a test number** — verify it points at Didi's real WhatsApp before
-  go-live; the owner-summary/staff-picker flow targets it.
+- **`SUMMARY_RECIPIENT_PHONE` is currently BLANK (2026-06-29)** — while unset, **both** the post-meeting
+  owner-summary/staff-picker flow **and** the operational Didi-reminders (now sent via Clix,
+  `notifyOwnerViaClix`) **silently skip**. Set it to Didi's real WhatsApp before go-live (and verify it is
+  not a test number).
 - **`team_routing` buttons are cosmetic (verify intent)** — the choice (Team Y/Z/Contact Didi/Stay) is
   shown but never stored or acted on; routing is driven only by the new/old `client_type`.
 - **Auto-reply wiring (verify)** — confirm whether free-form `ai.orchestrator` auto-reply still runs after

@@ -29,7 +29,7 @@ const {
 // env is re-assigned per test suite via vi.stubGlobal; default = no allowlist
 const envMock = {
   GREENAPI_WEBHOOK_TOKEN: "tok",
-  CLIX_WEBHOOK_TOKEN: "clix-secret-token-x1",
+  GREENAPI_OP_ID_INSTANCE: undefined as string | undefined,
   SUMMARY_RECIPIENT_PHONE: "639219909210",
   NODE_ENV: "test",
   FRONTEND_URL: "http://localhost:5173",
@@ -157,6 +157,22 @@ function makeButtonBody(chatId: string, buttonId: string): Record<string, unknow
   };
 }
 
+function makeTemplateButtonBody(chatId: string, selectedId: string): Record<string, unknown> {
+  return {
+    typeWebhook: "incomingMessageReceived",
+    idMessage: `msg-${Math.random().toString(36).slice(2)}`,
+    senderData: {
+      chatId,
+      senderName: "Test User",
+      sender: chatId,
+    },
+    messageData: {
+      typeMessage: "templateButtonsReplyMessage",
+      templateButtonReplyMessage: { selectedId, selectedDisplayText: "Some label" },
+    },
+  };
+}
+
 function makeReq(body: Record<string, unknown>): Request {
   return {
     headers: { authorization: "Bearer tok" },
@@ -268,60 +284,98 @@ describe("whatsappController.handleWebhook — owner operational-only routing", 
 });
 
 // ---------------------------------------------------------------------------
-// Clix token guard
+// Token guard — GreenAPI only
 // ---------------------------------------------------------------------------
 
-function makeClixTextBody(): Record<string, unknown> {
-  return {
-    customerId: "clix-inst-1",
-    type: "incoming",
-    chatType: "private",
-    from: "639123456789",
-    pushName: "Clix User",
-    message: "Hello from Clix",
-    messageType: "text",
-    timestamp: 1718900000,
-  };
-}
-
-describe("whatsappController.handleWebhook — Clix token guard", () => {
+describe("whatsappController.handleWebhook — token guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("Clix-shaped body with wrong token → 401", async () => {
+  it("correct Authorization: Bearer token → 200", async () => {
     const req = {
-      headers: {},
-      query: { token: "wrong-token" },
-      body: makeClixTextBody(),
-    } as unknown as Request;
-    const res = makeRes();
-
-    await whatsappController.handleWebhook(req, res);
-
-    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(401);
-    expect((res.json as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
-      expect.objectContaining({ ok: false }),
-    );
-  });
-
-  it("Clix-shaped body with correct token → 200", async () => {
-    // clixToInternal will parse and normalise, then instance lookup runs;
-    // mock supabase to return an unknown (inactive) instance so it short-circuits
-    // after the token check with a 200.
-    const instanceBuilder = makeBuilder({ data: null, error: null });
-    setupFrom([instanceBuilder]);
-
-    const req = {
-      headers: {},
-      query: { token: "clix-secret-token-x1" },
-      body: makeClixTextBody(),
+      headers: { authorization: "Bearer tok" },
+      query: {},
+      body: makeTextBody(OWNER_CHAT_ID, "שלום"),
     } as unknown as Request;
     const res = makeRes();
 
     await whatsappController.handleWebhook(req, res);
 
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+  });
+
+  it("correct ?token= query param → 200", async () => {
+    const req = {
+      headers: {},
+      query: { token: "tok" },
+      body: makeTextBody(OWNER_CHAT_ID, "שלום"),
+    } as unknown as Request;
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+  });
+
+  it("wrong token → 200 (prevent retry storms)", async () => {
+    const req = {
+      headers: {},
+      query: { token: "wrong-token" },
+      body: makeTextBody(LEAD_CHAT_ID, "hello"),
+    } as unknown as Request;
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+    expect((res.json as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith({ ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// templateButtonsReplyMessage — normalises to kind:"text" with selectedId
+// ---------------------------------------------------------------------------
+
+describe("whatsappController.handleWebhook — templateButtonsReplyMessage normalisation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsStaffChat.mockResolvedValue(null);
+    mockWantsHuman.mockReturnValue(false);
+    mockHandleIntake.mockResolvedValue({ consumed: true });
+  });
+
+  it("assign_staff button tap via templateButtonsReplyMessage routes to assignStaffToMeeting", async () => {
+    const body = makeTemplateButtonBody(OWNER_CHAT_ID, "assign_staff:meet-x:staff-y");
+    const req = makeReq(body);
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(mockAssignStaffToMeeting).toHaveBeenCalledOnce();
+    expect(mockAssignStaffToMeeting).toHaveBeenCalledWith("meet-x", "staff-y", OWNER_CHAT_ID);
+    expect(mockHandleIntake).not.toHaveBeenCalled();
+  });
+
+  it("intake button tap via templateButtonsReplyMessage dispatches to handleIntake", async () => {
+    const convUpsertBuilder = makeBuilder({ data: { id: "conv-t" }, error: null });
+    const msgInsertBuilder = makeBuilder({ data: { id: "msg-t" }, error: null });
+    const convSelectBuilder = makeBuilder({ data: { id: "conv-t", client_id: "client-t" }, error: null });
+
+    setupFrom([convUpsertBuilder, msgInsertBuilder, convSelectBuilder]);
+
+    const body = makeTemplateButtonBody(LEAD_CHAT_ID, "life_insurance");
+    const req = makeReq(body);
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(mockHandleIntake).toHaveBeenCalled();
+    const callArgs = mockHandleIntake.mock.calls[0] as [string, string, string, { kind: string; text: string }];
+    expect(callArgs[3].kind).toBe("text");
+    expect(callArgs[3].text).toBe("life_insurance");
   });
 });
 
@@ -402,7 +456,6 @@ describe("whatsappController.handleWebhook — reply allowlist", () => {
   });
 
   it("allowlist matching strips non-digit chars from both sides", async () => {
-    // Entry has dashes/spaces; phone from chatId is digits only
     envMock.REPLY_ALLOWLIST = ["+972-50-1111111"];
 
     const convUpsertBuilder = makeBuilder({ data: { id: "conv-fmt" }, error: null });

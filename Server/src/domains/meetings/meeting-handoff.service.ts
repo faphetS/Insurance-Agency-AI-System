@@ -1,7 +1,8 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { clixSendText } from "../whatsapp/whatsapp.clix-send.js";
-import { toChatId } from "../whatsapp/whatsapp.util.js";
+import { env } from "../../config/env.js";
+import { sendMessage } from "../whatsapp/whatsapp.service.js";
+import { sendOwnerEmail } from "../integrations/google/google.gmail.js";
 
 // Gap between the two post-assignment sends (staff handoff, then the owner ack) so the
 // gateway doesn't flag back-to-back sends as spam.
@@ -36,13 +37,13 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
 
     const { data: staff } = await supabaseAdmin
       .from("staff")
-      .select("full_name, phone")
+      .select("full_name, email")
       .eq("id", staffId)
       .maybeSingle();
 
-    const chatId = toChatId(staff?.phone ?? null);
-    if (!chatId) {
-      logger.warn({ meetingId, staffId }, "notifyStaffHandoff: staff has no usable phone");
+    const staffEmail = (staff?.email as string | null) ?? null;
+    if (!staffEmail) {
+      logger.warn({ meetingId, staffId }, "notifyStaffHandoff: staff has no email");
       return;
     }
 
@@ -52,9 +53,14 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
       lines.push("", "📝 סיכום הפגישה", summaryText);
     }
     const body = lines.join("\n");
+    const subject = `הקצאת לקוח חדשה — ${client.full_name as string}`;
 
-    await clixSendText(chatId, body);
-    logger.info({ meetingId, staffId }, "notifyStaffHandoff: sent");
+    if (env.STAFF_EMAIL_NOTIFY_MODE === "send") {
+      await sendOwnerEmail(staffEmail, subject, body);
+      logger.info({ meetingId, staffId, to: staffEmail }, "notifyStaffHandoff: email sent");
+    } else {
+      logger.info({ meetingId, staffId, to: staffEmail, subject, body }, "notifyStaffHandoff (DRY RUN — not sent)");
+    }
   } catch (err) {
     logger.error({ err, meetingId }, "notifyStaffHandoff: unexpected error");
   }
@@ -72,7 +78,7 @@ export async function assignStaffToMeeting(
     .maybeSingle();
 
   if (!meeting) {
-    await clixSendText(ownerChatId, "❌ הפגישה לא נמצאה.");
+    await sendMessage(ownerChatId, "❌ הפגישה לא נמצאה.");
     return;
   }
 
@@ -83,7 +89,7 @@ export async function assignStaffToMeeting(
     .maybeSingle();
 
   if (!staff) {
-    await clixSendText(ownerChatId, "❌ העובד לא נמצא.");
+    await sendMessage(ownerChatId, "❌ העובד לא נמצא.");
     return;
   }
 
@@ -115,7 +121,7 @@ export async function assignStaffToMeeting(
         .maybeSingle();
       currentName = (curStaff?.full_name as string | null) ?? "";
     }
-    await clixSendText(ownerChatId, currentName ? `✅ כבר הוקצה ל${currentName}` : "✅ כבר הוקצה");
+    await sendMessage(ownerChatId, currentName ? `✅ כבר הוקצה ל${currentName}` : "✅ כבר הוקצה");
     return;
   }
 
@@ -129,34 +135,5 @@ export async function assignStaffToMeeting(
 
   await notifyStaffHandoff(meetingId);
   await new Promise((resolve) => setTimeout(resolve, HANDOFF_ACK_GAP_MS));
-  await clixSendText(ownerChatId, `✅ הוקצה ל${fullName}`);
-}
-
-// Owner staff-pick from a SELF-CHAT tap (testing setup where the owner number is the bot
-// line). Such taps arrive as plain text carrying the button LABEL (staff name), not the
-// `assign_staff:<meetingId>:<staffId>` id — so resolve the staff by name and target the
-// most-recent meeting whose picker was sent. Returns true if it drove an assignment.
-export async function tryAssignByStaffName(staffName: string, ownerChatId: string): Promise<boolean> {
-  const name = staffName.trim();
-  if (!name) return false;
-
-  const { data: staff } = await supabaseAdmin
-    .from("staff")
-    .select("id")
-    .eq("is_active", true)
-    .eq("full_name", name)
-    .maybeSingle();
-  if (!staff) return false;
-
-  const { data: meeting } = await supabaseAdmin
-    .from("meetings")
-    .select("id")
-    .not("staff_picker_sent_at", "is", null)
-    .order("staff_picker_sent_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!meeting) return false;
-
-  await assignStaffToMeeting(meeting.id as string, staff.id as string, ownerChatId);
-  return true;
+  await sendMessage(ownerChatId, `✅ הוקצה ל${fullName}`);
 }

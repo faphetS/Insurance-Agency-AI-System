@@ -272,8 +272,7 @@ async function handleClientType(
   clientId: string,
   payload: MessagePayload,
 ): Promise<void> {
-  // Map button tap to 'new' or 'old'. Labels ("New client"/"Old client") come from Clix;
-  // ids ("new_client"/"old_client") come from GreenAPI. Anything matching /old/i → 'old'.
+  // Map button tap to 'new' or 'old'. GreenAPI delivers the buttonId; anything matching /old/i → 'old'.
   const client_type: string =
     payload.kind === "text" && /old/i.test(payload.text) ? "old" : "new";
 
@@ -403,10 +402,7 @@ async function handleIdPhoto(
   }
 
   // Combined OCR pass: validate the ID photo AND extract the ID number in one call.
-  // For Clix-path payloads the media arrives as base64 (no remote URL); pass a data URL.
-  const imageUrl = payload.base64
-    ? `data:${payload.mimeType ?? "image/jpeg"};base64,${payload.base64}`
-    : payload.fileUrl;
+  const imageUrl = payload.fileUrl;
   let ocrResult: Awaited<ReturnType<typeof validateIdPhoto>> | undefined;
   try {
     ocrResult = await validateIdPhoto(imageUrl);
@@ -453,9 +449,7 @@ async function handleIdPhoto(
 
   const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את תעודת הזהות.";
 
-  const bytes = payload.base64
-    ? Buffer.from(payload.base64, "base64")
-    : await fetchRemoteFile(payload.fileUrl);
+  const bytes = await fetchRemoteFile(payload.fileUrl);
   if (!bytes) {
     try {
       const { idMessage } = await sendMessageWithTyping(chatId, resendText);
@@ -538,9 +532,7 @@ async function handlePoa(
 
     const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את ייפוי הכוח.";
 
-    const bytes = payload.base64
-      ? Buffer.from(payload.base64, "base64")
-      : await fetchRemoteFile(payload.fileUrl);
+    const bytes = await fetchRemoteFile(payload.fileUrl);
     if (!bytes) {
       try {
         const { idMessage } = await sendMessageWithTyping(chatId, resendText);

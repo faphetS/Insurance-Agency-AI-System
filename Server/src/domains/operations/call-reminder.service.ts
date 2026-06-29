@@ -1,6 +1,6 @@
 import { logger } from "../../config/logger.js";
 import { getUnresolvedMissedSince, pruneCallsOlderThan } from "./call-events.service.js";
-import { notifyOwnerViaClix } from "./owner-notify.js";
+import { notifyOwner } from "./owner-notify.js";
 
 const TZ = "Asia/Jerusalem";
 
@@ -36,7 +36,7 @@ export async function sendDailyCallReminder(): Promise<void> {
     return;
   }
 
-  const ok = await notifyOwnerViaClix(text);
+  const ok = await notifyOwner(text);
   if (ok) {
     logger.info({ count: text.split("\n").length - 2 }, "call-reminder: daily reminder sent");
     await pruneCallsOlderThan(new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());

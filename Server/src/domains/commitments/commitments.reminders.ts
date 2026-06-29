@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
-import { notifyOwnerViaClix } from "../operations/owner-notify.js";
+import { notifyOwner } from "../operations/owner-notify.js";
 import { COMMITMENT_COMPOSITION_SYSTEM_PROMPT } from "./commitments.prompts.js";
 import type { Commitment } from "./commitments.types.js";
 
@@ -15,7 +15,7 @@ const openai = new OpenAI({
 });
 
 export async function sendSelfMessage(text: string): Promise<boolean> {
-  return notifyOwnerViaClix(text);
+  return notifyOwner(text);
 }
 
 function buildFallbackMorningMessage(commitments: Commitment[]): string {

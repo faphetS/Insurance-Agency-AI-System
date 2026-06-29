@@ -72,7 +72,7 @@ app.use(
 );
 
 // 5. Body parsing with size limits.
-// The Clix webhook delivers media as inline base64 — give that path 20 MB.
+// The webhook route gets 20 MB to accommodate large GreenAPI media payloads.
 // All other routes keep the 1 MB guard. Both parsers use the same rawBody
 // capture so existing rawBody consumers are unaffected.
 const captureRawBody = (req: IncomingMessage, _res: ServerResponse, buf: Buffer): void => {

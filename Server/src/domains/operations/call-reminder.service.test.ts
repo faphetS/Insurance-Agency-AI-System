@@ -6,11 +6,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const {
   mockGetUnresolvedMissedSince,
   mockPruneCallsOlderThan,
-  mockNotifyOwnerViaClix,
+  mockNotifyOwner,
 } = vi.hoisted(() => ({
   mockGetUnresolvedMissedSince: vi.fn(),
   mockPruneCallsOlderThan: vi.fn(),
-  mockNotifyOwnerViaClix: vi.fn(),
+  mockNotifyOwner: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ vi.mock("./call-events.service.js", () => ({
 }));
 
 vi.mock("./owner-notify.js", () => ({
-  notifyOwnerViaClix: mockNotifyOwnerViaClix,
+  notifyOwner: mockNotifyOwner,
 }));
 
 // ---------------------------------------------------------------------------
@@ -50,18 +50,18 @@ describe("sendDailyCallReminder", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPruneCallsOlderThan.mockResolvedValue(undefined);
-    mockNotifyOwnerViaClix.mockResolvedValue(true);
+    mockNotifyOwner.mockResolvedValue(true);
   });
 
-  it("does NOT call notifyOwnerViaClix when there are no missed/declined rows", async () => {
+  it("does NOT call notifyOwner when there are no missed/declined rows", async () => {
     mockGetUnresolvedMissedSince.mockResolvedValue([]);
 
     await sendDailyCallReminder();
 
-    expect(mockNotifyOwnerViaClix).not.toHaveBeenCalled();
+    expect(mockNotifyOwner).not.toHaveBeenCalled();
   });
 
-  it("calls notifyOwnerViaClix with a message containing the phone numbers when rows exist", async () => {
+  it("calls notifyOwner with a message containing the phone numbers when rows exist", async () => {
     mockGetUnresolvedMissedSince.mockResolvedValue([
       { counterpart_phone: "972501234567@c.us", called_at: "2026-06-25T09:30:00Z" },
       { counterpart_phone: "972509876543@c.us", called_at: "2026-06-25T14:00:00Z" },
@@ -69,8 +69,8 @@ describe("sendDailyCallReminder", () => {
 
     await sendDailyCallReminder();
 
-    expect(mockNotifyOwnerViaClix).toHaveBeenCalledOnce();
-    const [text] = mockNotifyOwnerViaClix.mock.calls[0] as [string];
+    expect(mockNotifyOwner).toHaveBeenCalledOnce();
+    const [text] = mockNotifyOwner.mock.calls[0] as [string];
     expect(text).toContain("972501234567");
     expect(text).toContain("972509876543");
     expect(text).toMatch(/\d{2}:\d{2}/);
@@ -83,16 +83,16 @@ describe("sendDailyCallReminder", () => {
 
     await sendDailyCallReminder();
 
-    const [text] = mockNotifyOwnerViaClix.mock.calls[0] as [string];
+    const [text] = mockNotifyOwner.mock.calls[0] as [string];
     expect(text).toContain("972501111111");
     expect(text).not.toContain("@c.us");
   });
 
-  it("does NOT prune when notifyOwnerViaClix returns false", async () => {
+  it("does NOT prune when notifyOwner returns false", async () => {
     mockGetUnresolvedMissedSince.mockResolvedValue([
       { counterpart_phone: "972501234567@c.us", called_at: "2026-06-25T09:30:00Z" },
     ]);
-    mockNotifyOwnerViaClix.mockResolvedValue(false);
+    mockNotifyOwner.mockResolvedValue(false);
 
     await sendDailyCallReminder();
 

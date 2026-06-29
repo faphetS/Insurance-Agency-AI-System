@@ -4,19 +4,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vi.hoisted shared mock functions
 // ---------------------------------------------------------------------------
 const {
-  mockClixSendButtons,
-  mockClixSendText,
+  mockSendInteractiveButtons,
+  mockSendMessage,
   mockSendOwnerEmail,
   mockFromImpl,
 } = vi.hoisted(() => {
-  const mockClixSendButtons = vi.fn();
-  const mockClixSendText = vi.fn();
+  const mockSendInteractiveButtons = vi.fn();
+  const mockSendMessage = vi.fn();
   const mockSendOwnerEmail = vi.fn();
   const mockFromImpl = vi.fn();
 
   return {
-    mockClixSendButtons,
-    mockClixSendText,
+    mockSendInteractiveButtons,
+    mockSendMessage,
     mockSendOwnerEmail,
     mockFromImpl,
   };
@@ -57,10 +57,9 @@ vi.mock("../../ai/ai.service.js", () => ({
   generateReply: vi.fn(),
 }));
 
-vi.mock("../../whatsapp/whatsapp.clix-send.js", () => ({
-  clixSendButtons: mockClixSendButtons,
-  clixSendText: mockClixSendText,
-  clixSendCreds: vi.fn().mockReturnValue({ url: "http://clix", token: "tok" }),
+vi.mock("../../whatsapp/whatsapp.service.js", () => ({
+  sendMessage: mockSendMessage,
+  sendInteractiveButtons: mockSendInteractiveButtons,
 }));
 
 // Use the REAL toChatId implementation so 639219909210 → 639219909210@c.us is genuinely exercised.
@@ -76,7 +75,7 @@ vi.mock("../google/google.gmail.js", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Builder shim helpers (same pattern as timeless.summary.test.ts)
+// Builder shim helpers
 // ---------------------------------------------------------------------------
 type Builder = Record<string, unknown>;
 
@@ -92,7 +91,6 @@ function makeBuilder(result: unknown): Builder {
   }
   builder["maybeSingle"] = terminal;
   builder["single"] = terminal;
-  // Make the builder thenable so `await builder` (without a terminal) resolves to `result`
   builder["then"] = (onFulfilled: (v: unknown) => unknown) => Promise.resolve(result).then(onFulfilled);
   return builder;
 }
@@ -119,10 +117,10 @@ describe("sendStaffPickerToOwner", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockClixSendButtons.mockResolvedValue(undefined);
+    mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-msg" });
   });
 
-  it("calls sendButtons with chatId 639219909210@c.us and 5-button array when 5 active staff", async () => {
+  it("calls sendInteractiveButtons with chatId 639219909210@c.us and 5-button array when 5 active staff", async () => {
     const staffList = [
       { id: "s1", full_name: "אריאל כהן" },
       { id: "s2", full_name: "דנה לוי" },
@@ -137,8 +135,8 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockClixSendButtons).toHaveBeenCalledOnce();
-    const [chatId, body, buttons] = mockClixSendButtons.mock.calls[0] as [
+    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
+    const [chatId, body, buttons] = mockSendInteractiveButtons.mock.calls[0] as [
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -160,7 +158,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockClixSendButtons.mock.calls[0] as [
+    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -169,7 +167,7 @@ describe("sendStaffPickerToOwner", () => {
   });
 
   it("truncates full_name >25 chars to 25 in buttonText", async () => {
-    const longName = "א".repeat(30); // 30 chars
+    const longName = "א".repeat(30);
     const staffList = [{ id: "s-long", full_name: longName }];
     const staffBuilder = makeBuilder({ data: staffList, error: null });
     const claimBuilder = makeBuilder({ data: { id: MEETING_ID }, error: null });
@@ -177,7 +175,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockClixSendButtons.mock.calls[0] as [
+    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -186,37 +184,36 @@ describe("sendStaffPickerToOwner", () => {
     expect(buttons[0].buttonText).toBe(longName.slice(0, 25));
   });
 
-  it("does NOT call sendButtons when staff list is empty", async () => {
+  it("does NOT call sendInteractiveButtons when staff list is empty", async () => {
     const staffBuilder = makeBuilder({ data: [], error: null });
     setupFromSequence([staffBuilder]);
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockClixSendButtons).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
   });
 
-  it("does NOT call sendButtons when staff select returns null", async () => {
+  it("does NOT call sendInteractiveButtons when staff select returns null", async () => {
     const staffBuilder = makeBuilder({ data: null, error: null });
     setupFromSequence([staffBuilder]);
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockClixSendButtons).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
   });
 
-  it("does NOT call sendButtons when idempotency claim returns null (already sent)", async () => {
+  it("does NOT call sendInteractiveButtons when idempotency claim returns null (already sent)", async () => {
     const staffList = [{ id: "s1", full_name: "Test" }];
     const staffBuilder = makeBuilder({ data: staffList, error: null });
-    // Claim update returns null — already claimed
     const claimBuilder = makeBuilder({ data: null, error: null });
     setupFromSequence([staffBuilder, claimBuilder]);
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockClixSendButtons).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
   });
 
-  it("allows >3 buttons (more than 3 staff is valid)", async () => {
+  it("allows >3 buttons (7 staff members — no cap)", async () => {
     const staffList = Array.from({ length: 7 }, (_, i) => ({
       id: `s${i}`,
       full_name: `Staff ${i}`,
@@ -227,7 +224,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockClixSendButtons.mock.calls[0] as [
+    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -284,7 +281,6 @@ describe("sendClientSummaryEmail", () => {
     await sendClientSummaryEmail(MEETING_ID, CLIENT_ID);
 
     expect(mockSendOwnerEmail).not.toHaveBeenCalled();
-    // Only 1 from() call — no claim update
     expect(mockFromImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -303,11 +299,9 @@ describe("sendClientSummaryEmail", () => {
     const revertBuilder = makeBuilder({ data: null, error: null });
     setupFromSequence([clientBuilder, claimBuilder, revertBuilder]);
 
-    // sendClientSummaryEmail catches and does NOT re-throw
     await sendClientSummaryEmail(MEETING_ID, CLIENT_ID);
 
     expect(mockSendOwnerEmail).toHaveBeenCalledOnce();
-    // 3rd from() call is the revert
     expect(mockFromImpl).toHaveBeenCalledTimes(3);
     const revertBuilderUpdate = revertBuilder["update"] as ReturnType<typeof vi.fn>;
     expect(revertBuilderUpdate).toHaveBeenCalledWith({ client_summary_emailed_at: null });
@@ -318,7 +312,6 @@ describe("sendClientSummaryEmail", () => {
       data: { full_name: "Test", email: "test@example.com" },
       error: null,
     });
-    // Claim returns null — already claimed
     const claimBuilder = makeBuilder({ data: null, error: null });
     setupFromSequence([clientBuilder, claimBuilder]);
 

@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vi.hoisted shared mock functions
 // ---------------------------------------------------------------------------
 const {
-  mockClixSendText,
+  mockSendMessage,
   mockGenerateReply,
   mockGetDocument,
   mockGetTranscript,
@@ -12,7 +12,7 @@ const {
   mockGetMeeting,
   mockFromImpl,
 } = vi.hoisted(() => {
-  const mockClixSendText = vi.fn();
+  const mockSendMessage = vi.fn();
   const mockGenerateReply = vi.fn();
   const mockGetDocument = vi.fn();
   const mockGetTranscript = vi.fn();
@@ -21,7 +21,7 @@ const {
   const mockFromImpl = vi.fn();
 
   return {
-    mockClixSendText,
+    mockSendMessage,
     mockGenerateReply,
     mockGetDocument,
     mockGetTranscript,
@@ -73,17 +73,15 @@ vi.mock("../../ai/ai.service.js", () => {
     isHebrew: isHebrewImpl,
     ensureHebrew: async (text: string) => {
       if (isHebrewImpl(text)) return text;
-      // Delegate to the mock generateReply
       return mockGenerateReply([{ role: "user", text }], "translate-system-prompt", "google/gemini-2.5-flash");
     },
     generateReply: mockGenerateReply,
   };
 });
 
-vi.mock("../../whatsapp/whatsapp.clix-send.js", () => ({
-  clixSendText: mockClixSendText,
-  clixSendButtons: vi.fn().mockResolvedValue(undefined),
-  clixSendCreds: vi.fn().mockReturnValue({ url: "http://clix", token: "tok" }),
+vi.mock("../../whatsapp/whatsapp.service.js", () => ({
+  sendMessage: mockSendMessage,
+  sendInteractiveButtons: vi.fn().mockResolvedValue({ idMessage: "btn-msg" }),
 }));
 
 vi.mock("../../whatsapp/whatsapp.util.js", () => ({
@@ -150,12 +148,10 @@ describe("isHebrew", () => {
   });
 
   it("returns true when Hebrew letters >= Latin letters (Hebrew heavy)", () => {
-    // "הלקוח מעוניין" = 13 Hebrew chars, "ok" = 2 Latin chars
     expect(isHebrew("הלקוח מעוניין ok")).toBe(true);
   });
 
   it("returns false when Latin letters > Hebrew letters", () => {
-    // "meeting summary" = 14 Latin, "סיכום" = 5 Hebrew
     expect(isHebrew("meeting summary סיכום")).toBe(false);
   });
 });
@@ -234,11 +230,10 @@ describe("sendSummaryToOwner — Scenario A: Hebrew summary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // generateReply must NOT be called for Hebrew — fail the test if it is
     mockGenerateReply.mockImplementation(() => {
       throw new Error("generateReply MUST NOT be called for already-Hebrew input");
     });
-    mockClixSendText.mockResolvedValue({ idMessage: "msg-a" });
+    mockSendMessage.mockResolvedValue({ idMessage: "msg-a" });
   });
 
   it("sends to owner chatId derived from SUMMARY_RECIPIENT_PHONE without translation", async () => {
@@ -256,9 +251,9 @@ describe("sendSummaryToOwner — Scenario A: Hebrew summary", () => {
     await sendSummaryToOwner("meet-a", "client-a");
 
     expect(mockGenerateReply).not.toHaveBeenCalled();
-    expect(mockClixSendText).toHaveBeenCalledOnce();
+    expect(mockSendMessage).toHaveBeenCalledOnce();
 
-    const [chatId, body] = mockClixSendText.mock.calls[0] as [string, string];
+    const [chatId, body] = mockSendMessage.mock.calls[0] as [string, string];
     expect(chatId).toBe("639219909210@c.us");
     expect(body).toContain(hebrewContent);
     expect(body).toContain("📋 סיכום פגישה");
@@ -280,7 +275,7 @@ describe("sendSummaryToOwner — Scenario A: Hebrew summary", () => {
 
     await sendSummaryToOwner("meet-a2", "client-a2");
 
-    const [, body] = mockClixSendText.mock.calls[0] as [string, string];
+    const [, body] = mockSendMessage.mock.calls[0] as [string, string];
     expect(body).toContain(recordingUrl);
   });
 });
@@ -295,7 +290,7 @@ describe("sendSummaryToOwner — Scenario B: English summary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGenerateReply.mockResolvedValue(hebrewTranslation);
-    mockClixSendText.mockResolvedValue({ idMessage: "msg-b" });
+    mockSendMessage.mockResolvedValue({ idMessage: "msg-b" });
   });
 
   it("calls generateReply with model 'google/gemini-2.5-flash' and sends Hebrew translation", async () => {
@@ -317,8 +312,8 @@ describe("sendSummaryToOwner — Scenario B: English summary", () => {
     expect(model).toBe("google/gemini-2.5-flash");
     expect(history[0].text).toBe(englishContent);
 
-    expect(mockClixSendText).toHaveBeenCalledOnce();
-    const [chatId, body] = mockClixSendText.mock.calls[0] as [string, string];
+    expect(mockSendMessage).toHaveBeenCalledOnce();
+    const [chatId, body] = mockSendMessage.mock.calls[0] as [string, string];
     expect(chatId).toBe("639219909210@c.us");
     expect(body).toContain(hebrewTranslation);
   });
@@ -358,10 +353,10 @@ describe("sendSummaryToOwner — Scenario B: English summary", () => {
 // Idempotency: claim returns null → already sent, skip send
 // ---------------------------------------------------------------------------
 describe("sendSummaryToOwner — idempotency (already sent)", () => {
-  it("does not call sendStaffMessage when claim returns null data", async () => {
+  it("does not call sendMessage when claim returns null data", async () => {
     vi.clearAllMocks();
     mockGenerateReply.mockResolvedValue("הסיכום בעברית.");
-    mockClixSendText.mockResolvedValue({ idMessage: "msg-idem" });
+    mockSendMessage.mockResolvedValue({ idMessage: "msg-idem" });
 
     const hebrewContent = "סיכום כבר קיים.";
     const meetingSelectBuilder = makeBuilder({
@@ -375,7 +370,7 @@ describe("sendSummaryToOwner — idempotency (already sent)", () => {
 
     await sendSummaryToOwner("meet-idem", "client-idem");
 
-    expect(mockClixSendText).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -383,13 +378,13 @@ describe("sendSummaryToOwner — idempotency (already sent)", () => {
 // Error handling: send failure reverts the claim
 // ---------------------------------------------------------------------------
 describe("sendSummaryToOwner — error handling", () => {
-  it("reverts claim and re-throws when sendStaffMessage fails", async () => {
+  it("reverts claim and re-throws when sendMessage fails", async () => {
     vi.clearAllMocks();
     mockGenerateReply.mockImplementation(() => {
       throw new Error("generateReply must not be called for Hebrew");
     });
     const sendError = new Error("WhatsApp send failed");
-    mockClixSendText.mockRejectedValue(sendError);
+    mockSendMessage.mockRejectedValue(sendError);
 
     const hebrewContent = "סיכום הפגישה בעברית.";
 
@@ -399,14 +394,12 @@ describe("sendSummaryToOwner — error handling", () => {
     });
     const clientSelectBuilder = makeBuilder({ data: { full_name: "לקוח" }, error: null });
     const claimUpdateBuilder = makeBuilder({ data: { id: "meet-err" }, error: null });
-    // Revert update (called on error)
     const revertBuilder = makeBuilder({ data: null, error: null });
 
     setupFromSequence([meetingSelectBuilder, clientSelectBuilder, claimUpdateBuilder, revertBuilder]);
 
     await expect(sendSummaryToOwner("meet-err", "client-err")).rejects.toThrow("WhatsApp send failed");
 
-    // Revert should have been called (4th from() call)
     expect(mockFromImpl).toHaveBeenCalledTimes(4);
   });
 });
@@ -423,7 +416,7 @@ describe("sendSummaryToOwner — no SUMMARY_RECIPIENT_PHONE", () => {
 
     await sendSummaryToOwner("meet-nophone", "client-nophone");
 
-    expect(mockClixSendText).not.toHaveBeenCalled();
+    expect(mockSendMessage).not.toHaveBeenCalled();
     expect(mockFromImpl).not.toHaveBeenCalled();
 
     (env as Record<string, unknown>)["SUMMARY_RECIPIENT_PHONE"] = originalPhone;

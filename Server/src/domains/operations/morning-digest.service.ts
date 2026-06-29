@@ -4,7 +4,7 @@ import { refreshCommitments } from "../commitments/commitments.service.js";
 import { buildMorningCommitmentSection, markCommitmentsSent } from "../commitments/commitments.reminders.js";
 import { buildCallReminderSection } from "./call-reminder.service.js";
 import { pruneCallsOlderThan } from "./call-events.service.js";
-import { notifyOwnerViaClix } from "./owner-notify.js";
+import { notifyOwner } from "./owner-notify.js";
 
 export async function sendMorningDigest(): Promise<void> {
   if (!opCreds()) {
@@ -25,7 +25,7 @@ export async function sendMorningDigest(): Promise<void> {
   }
 
   const text = [commit.text, call].filter(Boolean).join("\n\n");
-  const ok = await notifyOwnerViaClix(text);
+  const ok = await notifyOwner(text);
   logger.info({ hasCommit: !!commit.text, hasCalls: !!call, ok }, "morning-digest: sent");
   if (ok && commit.ids.length > 0) {
     await markCommitmentsSent(commit.ids);

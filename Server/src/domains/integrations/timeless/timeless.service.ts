@@ -4,7 +4,7 @@ import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { AppError } from "../../../lib/errors.js";
 import { ensureHebrew } from "../../ai/ai.service.js";
-import { clixSendText, clixSendButtons } from "../../whatsapp/whatsapp.clix-send.js";
+import { sendMessage, sendInteractiveButtons } from "../../whatsapp/whatsapp.service.js";
 import { toChatId } from "../../whatsapp/whatsapp.util.js";
 import { sendOwnerEmail } from "../google/google.gmail.js";
 import {
@@ -317,7 +317,7 @@ export async function sendSummaryToOwner(meetingId: string, clientId: string): P
   }
 
   try {
-    await clixSendText(chatId, body);
+    await sendMessage(chatId, body);
     logger.info({ meetingId, clientId }, "timeless: owner summary sent");
   } catch (err) {
     logger.error({ err, meetingId }, "timeless.sendSummaryToOwner: send failed — reverting claim");
@@ -367,7 +367,7 @@ export async function sendStaffPickerToOwner(meetingId: string): Promise<void> {
     buttonText: String(s.full_name).slice(0, 25),
   }));
 
-  await clixSendButtons(chatId, "👤 בחר/י את הגורם המטפל בלקוח:", buttons);
+  await sendInteractiveButtons(chatId, "👤 בחר/י את הגורם המטפל בלקוח:", buttons);
 }
 
 export async function sendClientSummaryEmail(meetingId: string, clientId: string): Promise<void> {

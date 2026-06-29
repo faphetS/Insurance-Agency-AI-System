@@ -1,12 +1,6 @@
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { AppError } from "../../lib/errors.js";
-import { supabaseAdmin } from "../../config/supabase.js";
-import {
-  clixSendCreds,
-  clixSendText,
-  clixSendButtons,
-} from "./whatsapp.clix-send.js";
 
 export interface GreenApiCreds {
   idInstance: string;
@@ -53,12 +47,12 @@ async function requestWith<T>(
   return data;
 }
 
-function envCreds(): GreenApiCreds {
-  return {
-    idInstance: env.GREENAPI_ID_INSTANCE,
-    token: env.GREENAPI_API_TOKEN,
-    baseUrl: env.GREENAPI_BASE_URL,
-  };
+function envCreds(): GreenApiCreds | null {
+  const id = env.GREENAPI_ID_INSTANCE;
+  const tok = env.GREENAPI_API_TOKEN;
+  const url = env.GREENAPI_BASE_URL;
+  if (!id || !tok || !url) return null;
+  return { idInstance: id, token: tok, baseUrl: url };
 }
 
 async function request<T>(
@@ -66,64 +60,23 @@ async function request<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  return requestWith<T>(envCreds(), method, path, body);
-}
-
-/**
- * Determine which outbound gateway to use for a given chatId.
- *
- * Returns "clix" only when ALL of these hold:
- *   1. A conversation row exists for that chatId.
- *   2. That conversation's whatsapp_instance_id points to a row with a non-null gateway_customer_id.
- *   3. CLIX_SEND_URL + CLIX_SEND_TOKEN are both set.
- *
- * Falls back to "greenapi" on ANY error, missing row, or absent creds — this guarantees
- * that existing GreenAPI conversations are never affected.
- */
-export async function resolveGatewayForChat(chatId: string): Promise<"clix" | "greenapi"> {
-  try {
-    const { data: conv, error: convErr } = await supabaseAdmin
-      .from("conversations")
-      .select("whatsapp_instance_id")
-      .eq("whatsapp_chat_id", chatId)
-      .maybeSingle();
-
-    if (convErr || !conv?.whatsapp_instance_id) return "greenapi";
-
-    const { data: inst, error: instErr } = await supabaseAdmin
-      .from("whatsapp_instances")
-      .select("gateway_customer_id")
-      .eq("id", conv.whatsapp_instance_id)
-      .maybeSingle();
-
-    if (instErr || !inst?.gateway_customer_id) return "greenapi";
-
-    if (!clixSendCreds()) return "greenapi";
-
-    return "clix";
-  } catch {
-    return "greenapi";
+  const creds = envCreds();
+  if (!creds) {
+    throw new AppError(503, "Conversational GreenAPI creds not configured", "GREENAPI_NOT_CONFIGURED");
   }
-}
-
-/**
- * Synthesised unique id for a Clix outbound send (the gateway returns no message id we
- * persist). Prevents whatsapp_message_id unique-index collisions when an outbound Clix
- * reply is stored — an empty string is not NULL and would collide on the 2nd send.
- */
-function clixOutboundId(): string {
-  return `clix-out:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+  return requestWith<T>(creds, method, path, body);
 }
 
 export async function sendMessage(
   chatId: string,
   text: string,
 ): Promise<{ idMessage: string }> {
-  if (await resolveGatewayForChat(chatId) === "clix") {
-    await clixSendText(chatId, text);
-    return { idMessage: clixOutboundId() };
+  const creds = envCreds();
+  if (!creds) {
+    logger.warn({ chatId }, "sendMessage: conversational GreenAPI creds not set — skipping");
+    return { idMessage: `noop:${Date.now()}` };
   }
-  return request<{ idMessage: string }>("POST", "sendMessage", {
+  return requestWith<{ idMessage: string }>(creds, "POST", "sendMessage", {
     chatId,
     message: text,
   });
@@ -179,8 +132,13 @@ export async function sendInteractiveButtons(
   buttons: { buttonId: string; buttonText: string }[],
   footer?: string,
 ): Promise<{ idMessage: string }> {
-  if (buttons.length === 0 || buttons.length > 3) {
-    throw new AppError(400, "buttons must have 1–3 items", "INVALID_BUTTONS");
+  const creds = envCreds();
+  if (!creds) {
+    logger.warn({ chatId, buttonCount: buttons.length }, "sendInteractiveButtons: conversational GreenAPI creds not set — skipping");
+    return { idMessage: `noop:${Date.now()}` };
+  }
+  if (buttons.length === 0) {
+    throw new AppError(400, "buttons must have at least 1 item", "INVALID_BUTTONS");
   }
   for (const btn of buttons) {
     if (btn.buttonText.length > 25) {
@@ -192,7 +150,7 @@ export async function sendInteractiveButtons(
     }
   }
 
-  return request<{ idMessage: string }>("POST", "sendInteractiveButtonsReply", {
+  return requestWith<{ idMessage: string }>(creds, "POST", "sendInteractiveButtonsReply", {
     chatId,
     body,
     ...(footer ? { footer } : {}),
@@ -216,7 +174,12 @@ export async function setWebhookSettings(webhookUrl: string): Promise<void> {
 }
 
 export async function sendTyping(chatId: string, typingTimeMs = 2000): Promise<void> {
-  const url = `${env.GREENAPI_BASE_URL}/waInstance${env.GREENAPI_ID_INSTANCE}/sendTyping/${env.GREENAPI_API_TOKEN}`;
+  const creds = envCreds();
+  if (!creds) {
+    logger.warn({ chatId }, "sendTyping: conversational GreenAPI creds not set — skipping");
+    return;
+  }
+  const url = `${creds.baseUrl}/waInstance${creds.idInstance}/sendTyping/${creds.token}`;
   try {
     await fetch(url, {
       method: "POST",
@@ -233,13 +196,14 @@ export async function sendMessageWithTyping(
   message: string,
   typingMs = 2000,
 ): Promise<{ idMessage: string }> {
-  if (await resolveGatewayForChat(chatId) === "clix") {
-    await clixSendText(chatId, message);
-    return { idMessage: clixOutboundId() };
+  const creds = envCreds();
+  if (!creds) {
+    logger.warn({ chatId }, "sendMessageWithTyping: conversational GreenAPI creds not set — skipping");
+    return { idMessage: `noop:${Date.now()}` };
   }
   await sendTyping(chatId, typingMs);
   await new Promise((r) => setTimeout(r, typingMs));
-  return request<{ idMessage: string }>("POST", "sendMessage", {
+  return requestWith<{ idMessage: string }>(creds, "POST", "sendMessage", {
     chatId,
     message,
   });
@@ -252,9 +216,10 @@ export async function sendInteractiveButtonsWithTyping(
   footer?: string,
   typingMs = 2000,
 ): Promise<{ idMessage: string }> {
-  if (await resolveGatewayForChat(chatId) === "clix") {
-    await clixSendButtons(chatId, body, buttons, undefined, footer);
-    return { idMessage: clixOutboundId() };
+  const creds = envCreds();
+  if (!creds) {
+    logger.warn({ chatId, buttonCount: buttons.length }, "sendInteractiveButtonsWithTyping: conversational GreenAPI creds not set — skipping");
+    return { idMessage: `noop:${Date.now()}` };
   }
   await sendTyping(chatId, typingMs);
   await new Promise((r) => setTimeout(r, typingMs));
@@ -289,7 +254,11 @@ async function journalGetWith(creds: GreenApiCreds, endpoint: string, minutes: n
 }
 
 async function journalGet(endpoint: string, minutes: number): Promise<GreenApiHistoryMessage[]> {
-  return journalGetWith(envCreds(), endpoint, minutes);
+  const creds = envCreds();
+  if (!creds) {
+    throw new AppError(503, "Conversational GreenAPI creds not configured", "GREENAPI_NOT_CONFIGURED");
+  }
+  return journalGetWith(creds, endpoint, minutes);
 }
 
 export async function lastIncomingMessages(minutes = 1440): Promise<GreenApiHistoryMessage[]> {
@@ -393,8 +362,8 @@ export async function sendInteractiveButtonsWith(
   buttons: { buttonId: string; buttonText: string }[],
   footer?: string,
 ): Promise<{ idMessage: string }> {
-  if (buttons.length === 0 || buttons.length > 3) {
-    throw new AppError(400, "buttons must have 1–3 items", "INVALID_BUTTONS");
+  if (buttons.length === 0) {
+    throw new AppError(400, "buttons must have at least 1 item", "INVALID_BUTTONS");
   }
   for (const btn of buttons) {
     if (btn.buttonText.length > 25) {
@@ -417,9 +386,8 @@ export async function sendInteractiveButtonsWith(
   });
 }
 
-// Staff-facing text — sent via instance #1 (the conversational connection). Staff numbers
+// Staff-facing text — sent via the conversational GreenAPI instance. Staff numbers
 // are blocklisted from the lead/intake flow (isStaffChat), so reusing this line is safe.
-// Instance #2 (operational line) is reserved for the lead-scanning feature only.
 export async function sendStaffMessage(
   chatId: string,
   text: string,
@@ -427,7 +395,7 @@ export async function sendStaffMessage(
   return sendMessageWithTyping(chatId, text);
 }
 
-// Staff-facing buttons — sent via instance #1 (the conversational connection); staff numbers
+// Staff-facing buttons — sent via the conversational GreenAPI instance; staff numbers
 // are blocklisted from intake, so reusing this line is safe.
 export async function sendStaffButtons(
   chatId: string,
@@ -437,3 +405,4 @@ export async function sendStaffButtons(
 ): Promise<{ idMessage: string }> {
   return sendInteractiveButtonsWithTyping(chatId, body, buttons, footer);
 }
+
