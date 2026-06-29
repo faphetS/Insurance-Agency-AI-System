@@ -1,7 +1,6 @@
-import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
-import { opCreds, sendMessageWith } from "../whatsapp/whatsapp.service.js";
 import { getUnresolvedMissedSince, pruneCallsOlderThan } from "./call-events.service.js";
+import { notifyOwnerViaClix } from "./owner-notify.js";
 
 const TZ = "Asia/Jerusalem";
 
@@ -37,26 +36,9 @@ export async function sendDailyCallReminder(): Promise<void> {
     return;
   }
 
-  const { data: settingRow } = await supabaseAdmin
-    .from("system_settings")
-    .select("value")
-    .eq("key", "op_self_chat_id")
-    .maybeSingle();
-
-  const selfChatId = (settingRow?.value as string | null | undefined) ?? null;
-  if (!selfChatId) {
-    logger.warn("call-reminder: op_self_chat_id not set in system_settings — skipping");
-    return;
+  const ok = await notifyOwnerViaClix(text);
+  if (ok) {
+    logger.info({ count: text.split("\n").length - 2 }, "call-reminder: daily reminder sent");
+    await pruneCallsOlderThan(new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
   }
-
-  const creds = opCreds();
-  if (!creds) {
-    logger.warn("call-reminder: GREENAPI_OP_* creds not configured — skipping");
-    return;
-  }
-
-  await sendMessageWith(creds, selfChatId, text);
-  logger.info({ count: text.split("\n").length - 2, selfChatId }, "call-reminder: daily reminder sent");
-
-  await pruneCallsOlderThan(new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
 }

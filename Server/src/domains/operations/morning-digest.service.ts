@@ -1,10 +1,10 @@
 import { logger } from "../../config/logger.js";
-import { supabaseAdmin } from "../../config/supabase.js";
-import { opCreds, sendMessageWith } from "../whatsapp/whatsapp.service.js";
+import { opCreds } from "../whatsapp/whatsapp.service.js";
 import { refreshCommitments } from "../commitments/commitments.service.js";
 import { buildMorningCommitmentSection, markCommitmentsSent } from "../commitments/commitments.reminders.js";
 import { buildCallReminderSection } from "./call-reminder.service.js";
 import { pruneCallsOlderThan } from "./call-events.service.js";
+import { notifyOwnerViaClix } from "./owner-notify.js";
 
 export async function sendMorningDigest(): Promise<void> {
   if (!opCreds()) {
@@ -24,26 +24,10 @@ export async function sendMorningDigest(): Promise<void> {
     return;
   }
 
-  const { data: settingRow } = await supabaseAdmin
-    .from("system_settings")
-    .select("value")
-    .eq("key", "op_self_chat_id")
-    .maybeSingle();
-
-  const selfChatId = (settingRow?.value as string | null | undefined) ?? null;
-  if (!selfChatId) {
-    logger.warn("morning-digest: op_self_chat_id not set in system_settings — skipping");
-    return;
-  }
-
-  const creds = opCreds();
-  if (!creds) return;
-
   const text = [commit.text, call].filter(Boolean).join("\n\n");
-  await sendMessageWith(creds, selfChatId, text);
-  logger.info({ hasCommit: !!commit.text, hasCalls: !!call }, "morning-digest: sent");
-
-  if (commit.ids.length > 0) {
+  const ok = await notifyOwnerViaClix(text);
+  logger.info({ hasCommit: !!commit.text, hasCalls: !!call, ok }, "morning-digest: sent");
+  if (ok && commit.ids.length > 0) {
     await markCommitmentsSent(commit.ids);
   }
   await pruneCallsOlderThan(new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());

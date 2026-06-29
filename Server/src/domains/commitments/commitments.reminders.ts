@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
-import { opCreds, sendMessageWith } from "../whatsapp/whatsapp.service.js";
+import { notifyOwnerViaClix } from "../operations/owner-notify.js";
 import { COMMITMENT_COMPOSITION_SYSTEM_PROMPT } from "./commitments.prompts.js";
 import type { Commitment } from "./commitments.types.js";
 
@@ -14,29 +14,8 @@ const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
 });
 
-async function getSelfChatId(): Promise<string | null> {
-  const { data } = await supabaseAdmin
-    .from("system_settings")
-    .select("value")
-    .eq("key", "commitment_self_chat_id")
-    .maybeSingle();
-  return (data?.value as string | null) ?? null;
-}
-
-export async function sendSelfMessage(text: string): Promise<void> {
-  const creds = opCreds();
-  if (!creds) return;
-
-  try {
-    const chatId = await getSelfChatId();
-    if (!chatId) {
-      logger.warn("commitments: commitment_self_chat_id not set — cannot send self-message");
-      return;
-    }
-    await sendMessageWith(creds, chatId, text);
-  } catch (err) {
-    logger.warn({ err }, "commitments: sendSelfMessage failed — ignoring");
-  }
+export async function sendSelfMessage(text: string): Promise<boolean> {
+  return notifyOwnerViaClix(text);
 }
 
 function buildFallbackMorningMessage(commitments: Commitment[]): string {
@@ -129,9 +108,11 @@ export async function buildMorningCommitmentSection(): Promise<{ text: string | 
 export async function fireMorningBatch(): Promise<void> {
   const { text, ids } = await buildMorningCommitmentSection();
   if (!text) return;
-  await sendSelfMessage(text);
-  await markCommitmentsSent(ids);
-  logger.info({ count: ids.length }, "commitments: morning batch sent");
+  const ok = await sendSelfMessage(text);
+  if (ok) {
+    await markCommitmentsSent(ids);
+    logger.info({ count: ids.length }, "commitments: morning batch sent");
+  }
 }
 
 export async function fireTimedReminders(): Promise<void> {
@@ -188,8 +169,10 @@ export async function fireTimedReminders(): Promise<void> {
     // Timed reminders fire ~1h before by design; each line shows the meeting time,
     // so a simple header avoids fragile relative-time math across timezones.
     const text = `⏰ תזכורת:\n${lines.join("\n")}`;
-    await sendSelfMessage(text);
-    await markCommitmentsSent(group.map((c) => c.id));
-    logger.info({ count: group.length, fireAt: minuteKey }, "commitments: timed reminder sent");
+    const ok = await sendSelfMessage(text);
+    if (ok) {
+      await markCommitmentsSent(group.map((c) => c.id));
+      logger.info({ count: group.length, fireAt: minuteKey }, "commitments: timed reminder sent");
+    }
   }
 }
