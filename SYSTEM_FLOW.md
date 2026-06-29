@@ -485,23 +485,28 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   authorised Workspace mailbox (`userId:"me"` = `didi@ddins.net`, which holds the `google_ws_refresh_token`).
   That account's **primary send-as is `shaked-ins.com`**, so the From shown to recipients resolves to
   **`"דידי פרידלנדר" <didi@shaked-ins.com>`** — confirmed by a real test send (2026-06-28).
-- **Conversational GreenAPI creds are optional in `env.ts`** — if `GREENAPI_ID_INSTANCE` / `GREENAPI_API_TOKEN` /
-  `GREENAPI_BASE_URL` / `GREENAPI_WEBHOOK_TOKEN` are blank, all conversational sends no-op silently.
-  Confirm these are set to the live line before go-live.
-- **GreenAPI instances are TESTING, not production (2026-06-29)** — both the conversational (`GREENAPI_*`)
-  and operational (`GREENAPI_OP_*`) instances are free-tier test instances (subject to a weekly message
-  cap). All owner-facing sends were **verified live end-to-end on 2026-06-29** (missed-call reminder,
-  merged digest, post-meeting summary, 9-button staff picker, and staff-tap→email handoff in dry-run).
-  **Production cutover (pending real instances):** provision paid prod instances, authorize each on its
-  own WhatsApp line (conversational bot line ≠ Didi's number; conversational ≠ operational number), point
-  each webhook at `…/api/whatsapp/webhook` (conversational `webhookUrlToken` == `GREENAPI_WEBHOOK_TOKEN`,
-  Incoming + Outgoing notifications on), then set the creds + Didi's real `SUMMARY_RECIPIENT_PHONE` and
-  lift `REPLY_ALLOWLIST`.
-- **`STAFF_EMAIL_NOTIFY_MODE` defaults to `log`** — Pillar 3 is **dry-run** until flipped to `send`. Rows
-  still flip to `sent`, so flipping the mode later won't re-notify already-scanned mail.
-- **`SUMMARY_RECIPIENT_PHONE` is currently BLANK (2026-06-29)** — while unset, **both** the post-meeting
-  owner-summary/staff-picker flow **and** the operational Didi-reminders (`notifyOwner`) **silently skip**.
-  Set it to Didi's real WhatsApp before go-live (and verify it is not a test number).
+- **Conversational GreenAPI creds** (`GREENAPI_*`): when **blank**, all conversational sends no-op silently
+  (no throw); when **set but the instance is unauthorized** (no number connected), sends error `502` (caught
+  by callers — no crash).
+- **GreenAPI PROD cutover APPLIED (2026-06-30, pre-staged — awaiting QR connect):** conversational `GREENAPI_*`
+  = instance **`7107600945`**; operational `GREENAPI_OP_*` = instance **`7107600944`** (= **Didi's phone**);
+  both host `https://7107.api.greenapi.com`. Settings verified live via `getSettings`: both webhooks →
+  `…/api/whatsapp/webhook`; **945** token = `GREENAPI_WEBHOOK_TOKEN` (`becf48…`), incoming + outgoing-msg ON,
+  calls OFF; **944** token BLANK (OK — the op short-circuit at `whatsapp.controller.ts` runs *before* the token
+  gate, matched by `idInstance`), incoming + outgoing **calls ON**. Stale `commitment_self_chat_id` /
+  `op_self_chat_id` (old test number) were cleared → re-derive from 944. ⚠️ **No WhatsApp number connected yet
+  → bot OFFLINE**; outbound crons `502` harmlessly until the team scans the QR (**944 → Didi `972547725826`**;
+  **945 → a separate bot line**, ≠ Didi & ≠ 944). On scan it goes live automatically — no restart / no
+  `setSettings` needed. (Owner-facing sends were verified end-to-end on the test instances 2026-06-29.)
+- **`SUMMARY_RECIPIENT_PHONE` = `972547725826`** (Didi, `054-7725826`) **and `REPLY_ALLOWLIST` = `972547725826`**
+  (2026-06-30) — the **Didi-lock**: intake is closed to ALL clients (non-allowlisted senders get no reply); only
+  Didi's `assign_staff:` taps act (owner-guard runs *before* the allowlist gate). To reopen intake to clients,
+  blank `REPLY_ALLOWLIST`.
+- **`STAFF_EMAIL_NOTIFY_MODE` = `send` (turned ON 2026-06-30 — go-live)** — Pillar 3 now emails **real** staff:
+  the **08:00 email-mentions** cron sends each mentioned staff a reminder (subject `תזכורת ממשרד שקד`), and the
+  **staff-tap handoff** emails the assigned staff (subject `הקצאת לקוח חדשה — <client>`) once the conv bot is
+  connected. Both send via the Gmail WS token; the 08:00 mentions cron is **independent of WhatsApp** (runs even
+  before the numbers connect). Rows flip to `sent`, so re-runs don't re-notify.
 - **`team_routing` buttons are cosmetic (verify intent)** — the choice (Team Y/Z/Contact Didi/Stay) is
   shown but never stored or acted on; routing is driven only by the new/old `client_type`.
 - **Auto-reply wiring (verify)** — confirm whether free-form `ai.orchestrator` auto-reply still runs after
