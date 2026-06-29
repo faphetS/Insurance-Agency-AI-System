@@ -187,12 +187,16 @@ const server = app.listen(env.PORT, () => {
       );
     }, 10 * 60 * 1000);
 
-    // Service meeting eligibility — daily (every 24h)
-    setInterval(() => {
-      checkServiceMeetingEligibility().catch((err: unknown) =>
-        logger.error({ err }, "service-meeting: eligibility check failed"),
-      );
-    }, 24 * 60 * 60 * 1000);
+    // Service meeting eligibility — daily at 08:10 Jerusalem (staggered after the 08:00 digest)
+    cron.schedule(
+      "10 8 * * *",
+      () => {
+        checkServiceMeetingEligibility().catch((err: unknown) =>
+          logger.error({ err }, "service-meeting: eligibility check failed"),
+        );
+      },
+      { timezone: "Asia/Jerusalem" },
+    );
   } else {
     logger.info("Skipping booking/reminder schedulers — BACKEND_URL not public");
   }

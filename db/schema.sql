@@ -66,6 +66,7 @@ CREATE TABLE public.clients (
   source_channel       text        NOT NULL
                        CHECK (source_channel IN ('wa', 'email')),
   last_service_date    date,
+  last_service_reminder_at date,
   notes                text,
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now(),
