@@ -26,7 +26,7 @@ export async function buildCallReminderSection(): Promise<string | null> {
     .map((r) => `- ${stripCus(r.counterpart_phone)} בשעה ${formatTime(r.called_at)}`)
     .join("\n");
 
-  return `היי, תזכורת על שיחות שלא נענו אתמול:\n\n${lines}`;
+  return `תזכורת על שיחות שלא נענו אתמול:\n\n${lines}`;
 }
 
 export async function sendDailyCallReminder(): Promise<void> {
