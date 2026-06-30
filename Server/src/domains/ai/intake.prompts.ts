@@ -7,7 +7,7 @@ export const INTAKE_PROMPTS = {
     text: "היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. נשמח לעזור לך! כדי שנוכל להפנות אותך לגורם המתאים, אנא בחר/י:",
     buttons: [
       { buttonId: "old_client", buttonText: "אני לקוח/ה קיים/ת" },
-      { buttonId: "new_client", buttonText: "אני עדיין לא לקוח/ה (מתעניין/ת)" },
+      { buttonId: "new_client", buttonText: "אני עדיין לא לקוח/ה" },
     ],
   },
   full_name: { text: "מהו השם המלא?" },
