@@ -1,6 +1,6 @@
 # SYSTEM_FLOW.md — End-to-End Behavioral Reference
 
-> Canonical description of **how the system behaves**, re-traced from source on **2026-06-29**.
+> Canonical description of **how the system behaves**, re-traced from source on **2026-07-01**.
 > Complements `CLAUDE.md` (architecture + conventions). BAFI is fully dropped (decision 2026-06-24);
 > its reference assets live in `temp-files/` and no BAFI code remains.
 > **When code and this doc disagree, the code wins — update this doc.** Items that could not be fully
@@ -19,9 +19,11 @@ Two logical "bots" share the codebase but run on **different WhatsApp gateways**
   post-meeting summaries to the owner. Runs on the **conversational GreenAPI instance** (`GREENAPI_*`).
 - **Operational bot** (rebuilt 2026-06-25 as **three pillars**) — a back-office assistant for Didi:
   missed/declined-call reminders, personal-commitment reminders, and email staff-mentions. **Scans** via
-  the **GreenAPI operational instance (#2)** (call webhooks + journal reads) plus the single Google
-  Workspace Gmail, and **sends its Didi-facing reminders through the same conversational GreenAPI instance**
-  (`notifyOwner`) — a real notification to Didi, not a silent self-note — see §5.
+  the **GreenAPI operational instance (#2)** (journal reads only) plus the single Google Workspace Gmail.
+  Missed/declined calls are ingested via **Zadarma** (SIM/VoIP, `POST /api/zadarma/call-webhook`) — the
+  GreenAPI op-line call-webhook path has been removed. All **Didi-facing reminders go through the
+  conversational GreenAPI instance** (`notifyOwner`) — a real notification to Didi, not a silent
+  self-note — see §5 and §5a.
 
 **Major changes since the 2026-06-24 trace** (all reflected below): GreenAPI instance #1 retired and then
 fully replaced — the conversational bot now runs on a freshly provisioned GreenAPI conversational instance;
@@ -30,11 +32,14 @@ monitor, old daily digest, WhatsApp-unanswered scan, Gmail-milestone scan, cross
 replaced** by the three pillars; booking switched to Calendly + Zoom; intake v2 (new/old fork, 7-button
 inquiry); Timeless matching switched from ±30 min to **same Israel calendar day**; Gmail consolidated to
 one Workspace account (per-staff `gmail_integrations` removed). The post-meeting **dormant approval path
-is gone**. **Latest (2026-06-29): conversational bot migrated Clix→GreenAPI (commit `38c563e`); Clix
-removed; interactive buttons uncapped (GreenAPI delivers >3 reply buttons; the 4-button team menu,
-7-button inquiry menu, and N-button staff-picker all send fine); verified live end-to-end.** The
-**biennial service-meeting reminder** was also reworked (08:10 cron, null-date fix, fire-once re-arm via
-`clients.last_service_reminder_at`, trimmed message, and it **reopens intake** on send).
+is gone**. **2026-06-29: conversational bot migrated Clix→GreenAPI (commit `38c563e`); Clix removed;
+interactive buttons uncapped; biennial service-meeting reminder reworked (08:10 cron, null-date fix,
+fire-once re-arm via `clients.last_service_reminder_at`, trimmed message, reopens intake on send).
+2026-07-01: Zadarma is now the sole missed-call ingest source (`POST /api/zadarma/call-webhook`);
+GreenAPI op-line call-event recording removed; intake v3 — `team_routing` slot dropped, `inquiry_type`
+now immediately follows `client_type`; old-client branch adds `issue`→`action_choice` slots; human
+escalation (`whatsapp.escalation.ts`) deleted; department-routing WhatsApp ping on inquiry-type
+selection added.**
 
 ---
 
@@ -50,15 +55,16 @@ Two WhatsApp transports are in play. A connected line maps to a `whatsapp_instan
   `setWebhookSettings` can register the inbound webhook URL. Outbound text goes via `sendMessage` /
   `sendMessageWithTyping`; buttons go via `sendInteractiveButtons` / `sendInteractiveButtonsWithTyping`
   → GreenAPI endpoint `sendInteractiveButtonsReply`, body `{chatId, body, footer?, buttons:[{buttonId,
-  buttonText}]}`. **No button cap** — GreenAPI delivers >3 reply buttons without issue; the 4-button
-  team menu, 7-button inquiry menu, and N-button staff-picker all send fine. Button taps return
+  buttonText}]}`. **No button cap** — GreenAPI delivers >3 reply buttons without issue; the 7-button
+  inquiry menu, 2-button action_choice, and N-button staff-picker all send fine. Button taps return
   `interactiveButtonsResponse.selectedId`. Media arrives via GreenAPI `downloadUrl` (fetched server-side
   with `storage.fetchRemoteFile`), not inline base64.
 - **GreenAPI operational instance (#2)** — **scan-only** for the operational bot (it does not send
-  Didi's reminders; those go via the conversational instance, see §5). Two env families coexist:
-  - `GREENAPI_OP_*` (`opCreds()`) — the **operational line**. Receives **call webhooks**
-    (→ `call_events`) and is the line whose 24h message journals the commitment scanner reads.
-    `opCreds()` being configured is still the gate that enables the operational features.
+  Didi's reminders; those go via the conversational instance, see §5). Its inbound webhooks are ACK'd
+  and immediately dropped (no call recording via this path — see §5a). Two env families coexist:
+  - `GREENAPI_OP_*` (`opCreds()`) — the **operational line**. Its 24h message journals are what
+    the commitment scanner reads. `opCreds()` being configured is the gate that enables the
+    operational features.
   - `GREENAPI_SCAN_*` (`scanCreds()` / `opsCreds()`) — pull-based journal reads
     (`lastIncoming/OutgoingMessagesWith`). The commitment scanner reads the op line's 24h journals
     through these. **(verify)** whether `GREENAPI_OP_*` and `GREENAPI_SCAN_*` point at the same
@@ -82,9 +88,10 @@ against active staff phones; `extractButtonId()` reads GreenAPI interactive-butt
 Single front door (`POST /api/whatsapp/webhook`). Always returns 200 fast; real work runs in
 `setImmediate`. Decision order:
 
-1. **Operational-call short-circuit.** If `instanceData.idInstance === GREENAPI_OP_ID_INSTANCE` and
-   `typeWebhook` is `incomingCall`/`outgoingCall` → `recordCallEvent(body)` (writes `call_events`) and
-   persist the op line's own `wid` to `system_settings.op_self_chat_id`. Ack 200, stop.
+1. **Operational-instance short-circuit.** If `instanceData.idInstance === GREENAPI_OP_ID_INSTANCE`
+   → **ACK 200 and stop immediately** (no call recording, no pipeline). SIM/cellular missed calls are
+   captured independently via the Zadarma webhook (§5a). The op-line wid / self-chat-id derivation that
+   used to happen here has been removed along with `recordCallEvent`.
 2. **Token check.** Accepts `Authorization: Bearer <GREENAPI_WEBHOOK_TOKEN>` or
    `?token=<GREENAPI_WEBHOOK_TOKEN>`. Mismatch → **200 + ignore** (GreenAPI retry suppression).
 3. `outgoingAPIMessageReceived` (bot's own API send) → ignore.
@@ -101,8 +108,9 @@ Single front door (`POST /api/whatsapp/webhook`). Always returns 200 fast; real 
 8. Else **client**: upsert `conversations` (by `whatsapp_chat_id`), insert inbound `messages` (dedup by
    unique `whatsapp_message_id`), link/create the `clients` row. Then:
    - `REPLY_ALLOWLIST` (if set) → non-allowlisted senders are stored but get no reply.
-   - Dispatch async: `wantsHuman()` → escalation; else `handleIntake()` (auto-reply is **not** currently
-     chained after intake here — see §3.2 **(verify)**).
+   - Dispatch async: `handleIntake()` (auto-reply is **not** currently chained after intake here — see
+     §3.2 **(verify)**). Human escalation has been **removed** — `wantsHuman()` and
+     `whatsapp.escalation.ts` are deleted.
 
 **Media payload:** GreenAPI sends images and documents as a `downloadUrl` in `imageMessageData`,
 `documentMessageData`, or `fileMessageData`. `extractPayload` (`whatsapp.validator.ts`) reads these and
@@ -118,37 +126,53 @@ are checked in order against both the Zod-parsed payload and the raw body).
 ### 3.1 Intake state machine — `ai/intake.orchestrator.ts`, prompts in `ai/intake.prompts.ts`
 
 **Slot order (`SLOT_ORDER`):**
-`welcome → client_type → team_routing → full_name → email → inquiry_type → id_photo → poa → done`.
+`welcome → client_type → inquiry_type → full_name → email → id_photo → poa → done`.
+Two branch-only slots exist outside `SLOT_ORDER` for the existing-client path: `issue` and `action_choice`.
 All prompts in Hebrew. Gated by `bot_settings.enabled` (singleton id=1) and the per-conversation pause
 (auto-resumes when `bot_paused_until` lapses). New `clients` rows default `intake_current_slot='welcome'`.
 
 - **welcome** — no message of its own; `handleWelcome` immediately advances to `client_type`. (The
-  `welcome.text1/text2` strings in `intake.prompts.ts` are **dead** — never sent.)
-- **client_type** — first thing the lead sees: `"שלום, תודה שפנית אלינו 🙏"` with two buttons
-  **New client** / **Old client**. Any reply matching `/old/i` → `client_type='old'`, else `'new'`.
-- **team_routing** — sends `"פנית לצוות שלנו — כיצד נוכל לעזור לך?"` with 4 buttons (Team Y / Team Z /
-  Contact Didi / Stay). **The selection is not stored or acted on** — `handleTeamRouting` only branches on
-  `client_type`: **old → jump straight to `done`** (skip data collection); new → continue to `full_name`.
-  **(verify the intent of the team_routing buttons — they are currently cosmetic.)**
-- **full_name / email** — text only. Email has a regex fast-path; otherwise both go through the LLM
-  validator `classifyIntakeResponse` (invalid/off-topic → re-prompt, not stored).
+  `welcome.text1/text2` strings in `intake.prompts.ts` are dead — never sent.)
+- **client_type** — first thing the lead sees:
+  `"היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. נשמח לעזור לך! כדי שנוכל להפנות אותך לגורם המתאים, אנא בחר/י:"`
+  with two buttons: `old_client` "אני לקוח/ה קיים/ת" / `new_client` "אני עדיין לא לקוח/ה".
+  Any reply matching `/old/i` or containing `קיים` → `client_type='old'`; otherwise `'new'`. Both paths
+  then advance to **inquiry_type**.
+  (`team_routing` slot and its 4-button cosmetic menu have been **removed**.)
 - **inquiry_type** — interactive buttons, **fixed 7-button set** (button-only; free text must match a
   button id or label or it re-prompts):
   `vehicle` "ביטוח רכב", `home` "ביטוח דירה", `business` "ביטוח עסקים",
   `life_health_pension` "ביטוח חיים/בריאות/פנסיה", `travel` 'ביטוח נסיעות לחו"ל', `finance` "פיננסים",
-  `other` "אחר". (Legacy free-text classification keys still exist only for old client rows.)
-- **id_photo** — image only. One combined vision pass `validateIdPhoto()` confirms a readable ID **and**
-  extracts the 9-digit Israeli ID number (`id_number`); foreign IDs are handled by the same OCR. On
-  success the bytes (fetched from the GreenAPI `downloadUrl`) are uploaded to **Google Drive** (see §10)
-  and a `documents` row + `clients.id_photo_url`/`id_number`/`id_validated=true` are written. OCR/upload
-  failure → re-prompt a resend (no data loss).
-- **poa** — optional. Reply "דלג"/skip/לא/אין → advance; an image/document → uploaded to Drive + `documents`
-  row + `clients.poa_doc_url`.
+  `other` "אחר". On selection: (1) **department-routing ping** fires fire-and-forget (see below);
+  (2) **path forks by `client_type`**: `old` → advance to `issue`; `new` → advance to `full_name`.
+- **issue (old-client branch only)** — free-text description of the problem; stored as
+  `clients.issue_description`. Advances to `action_choice`.
+- **action_choice (old-client branch only)** — two buttons: `move_to_rep` "מעבר לנציג/ה" →
+  sends ack `"העברנו את הפרטים לנציג/ה הרלוונטי/ת — ניצור איתך קשר בהקדם"` then calls
+  `finalizeRepresentative` (no booking link, `pipeline_stage='new_lead'`); `schedule_meeting`
+  "קביעת פגישה" → advances to `done` (standard booking flow).
+- **full_name / email (new-client path)** — text only. Email has a regex fast-path; otherwise both go
+  through the LLM validator `classifyIntakeResponse` (invalid/off-topic → re-prompt, not stored).
+- **id_photo (new-client path)** — image only. One combined vision pass `validateIdPhoto()` confirms a
+  readable ID **and** extracts the 9-digit Israeli ID number (`id_number`); foreign IDs are handled by
+  the same OCR. On success the bytes (fetched from the GreenAPI `downloadUrl`) are uploaded to **Google
+  Drive** (see §10) and a `documents` row + `clients.id_photo_url`/`id_number`/`id_validated=true` are
+  written. OCR/upload failure → re-prompt a resend (no data loss).
+- **poa (new-client path)** — optional. Reply "דלג"/skip/לא/אין → advance; an image/document → uploaded
+  to Drive + `documents` row + `clients.poa_doc_url`.
 - **finalize (`done`)** — `classifyComplexity()` (skipped for old clients → `simple`) sets
   `clients.complexity`; flips `intake_state='completed'`, `pipeline_stage='meeting_scheduling'`; inserts a
   `meetings` row (`type='google_meet'`, `status='pending_booking'`) so booking-sync can match later; sends
   the **Calendly booking link** (`GOOGLE_CALENDAR_BOOKING_URL`); **pauses the bot** (`bot_paused=true`).
   Old vs new clients get slightly different done copy (`done_existing` vs `done`).
+  `finalizeRepresentative` (old-client → rep path) sets `pipeline_stage='new_lead'`, no booking link, and
+  also pauses the bot and calls `mirrorLeadToSheet`.
+
+**Department-routing ping (`whatsapp/department-routing.ts`):** fires on inquiry-type selection,
+fire-and-forget, never blocks intake. Elementary types (`vehicle`/`home`/`business`) ping
+`DEPT_ELEMENTARY_PHONE`; life/finance types (`life_health_pension`/`finance`) ping
+`DEPT_LIFE_FINANCE_PHONE`. Travel and other → no ping. Message sent via the conversational
+`sendMessage`: `"📩 פנייה חדשה מהבוט\nסוג הביטוח: <label>\nטלפון הלקוח: <phone>\nסוג לקוח: מתעניין|לקוח קיים"`.
 
 **Sheet mirror during intake:** `mirrorLeadToSheet(clientId)` is called on every slot advance and at
 finalize (see §10) — best-effort, never blocks intake.
@@ -159,17 +183,17 @@ Replies via OpenRouter using recent history, gated by `bot_settings.enabled` + `
 appear to fall through to `handleIncomingMessage()`/auto-reply after intake completes the way the old doc
 described — confirm whether free-form auto-reply is still wired into the inbound path.
 
-### 3.3 Human escalation — `whatsapp/whatsapp.escalation.ts`
-Trigger regex (נציג / בן אדם / אנושי / human / agent / representative …). Replies
-`"בקשתך התקבלה. נציג יצור איתך קשר בהקדם."`, **pauses 2h**, and WhatsApps the **assigned staff + the
-owner** (`role='owner'`) an alert. Sends go through `sendMessageWithTyping` (conversational GreenAPI
-instance). No notification row is written (the `notifications` table no longer exists).
+### 3.3 Human escalation — **REMOVED**
+`whatsapp/whatsapp.escalation.ts`, `wantsHuman()`, and the human-escalation branch in the webhook
+dispatcher have been deleted. The old-client `action_choice → move_to_rep` path in the intake state
+machine (§3.1) is the current replacement for routing an existing client to a representative.
 
 ### 3.4 Pause / cooldown system
 - Manual human send (GreenAPI `outgoingMessageReceived`, or `POST /api/whatsapp/send`) → **1h**.
-- Escalation → **2h**.
 - Intake completion → indefinite (`bot_paused=true`).
+- `finalizeRepresentative` (old-client → rep path) → indefinite (`bot_paused=true`).
 - All timed pauses auto-expire via `bot_paused_until` and auto-resume. Global kill switch: `bot_settings`.
+  (The 2h escalation pause is **gone** — human escalation was removed, §3.3.)
 
 ### 3.5 Booking → confirmation → reminders — `calendar/booking-sync.service.ts`, `calendar/reminder.service.ts`
 Booking is via the **Calendly link** sent at finalize; the booked **Google Calendar** event carries a
@@ -248,24 +272,26 @@ conversational GreenAPI instance** via `notifyOwner(text)` (`operations/owner-no
 `sendMessage(toChatId(SUMMARY_RECIPIENT_PHONE), text)`) — a real notification to Didi. It returns `false`
 (and sends nothing) if `SUMMARY_RECIPIENT_PHONE` is unset or the conversational GreenAPI creds are blank
 (the no-op guard is inside `sendMessage`), and the "mark sent"/prune steps are gated on a `true` result.
-**Scanning is still the GreenAPI op line** (`opCreds()` journals + call webhooks). The `op_self_chat_id` /
-`commitment_self_chat_id` / `commitment_bot_chat_id` settings are still populated and still used to
-**exclude Didi's own self/bot chat from the commitment scan** (`getExcludedChatIds`) — they are not used
-as a send target. The email pillar (3) still sends via Gmail.
+**Scanning is still the GreenAPI op line** (`opCreds()` journals only — call webhooks are now handled by
+Zadarma, §5a). The `commitment_self_chat_id` / `commitment_bot_chat_id` settings are still populated and
+still used to **exclude Didi's own self/bot chat from the commitment scan** (`getExcludedChatIds`) — they
+are not used as a send target. (`op_self_chat_id` is no longer actively re-derived since op-line call
+webhooks were removed, but the key remains in `system_settings`.) The email pillar (3) still sends via
+Gmail.
 
 ### 5.1 Pillar 1 — Missed/declined-call reminder — `operations/call-events.service.ts`, `call-reminder.service.ts`
-- **Ingest.** Op-line call webhooks → `recordCallEvent` upserts one row per call into `call_events`,
-  keyed by `id_message` (`ON CONFLICT (id_message) DO UPDATE` so the offer + outcome collapse into one
-  row). Status mapping: `offer→ringing`, `pickUp→accepted`, `hangUp→declined` (**we** rejected),
-  `declined→missed` (caller's call went unanswered). `direction` from `incomingCall`/`outgoingCall`.
-- **Build (`buildCallReminderSection`).** Looks back 24h for **incoming** calls that are `missed`/`declined`,
-  one row per phone (`getUnresolvedMissedSince`): **latest-wins / answered-callback-cancels** — a later
-  `accepted` call to the same (digit-normalised) number suppresses the entry. Output:
-  `"תזכורת על שיחות שלא נענו אתמול:"` + `- <phone> בשעה <HH:mm>` lines (no greeting prefix — removed 2026-06-29).
+- **Ingest.** Calls are now recorded **exclusively via the Zadarma webhook** (§5a). The old GreenAPI
+  op-line call-webhook path (`recordCallEvent` / `mapStatus` for GreenAPI shapes) has been deleted.
+  `call-events.service.ts` now only exports `recordZadarmaCallEvent`, `getUnresolvedMissedSince`, and
+  `pruneCallsOlderThan`.
+- **Build (`buildCallReminderSection`).** Looks back 24h for **incoming** calls with
+  `status IN ('missed','declined')` via `getUnresolvedMissedSince`. The query is plain dedup-by-number:
+  `SELECT counterpart_phone, MAX(called_at) FROM call_events WHERE ... GROUP BY counterpart_phone ORDER BY called_at ASC` —
+  **no answered-callback suppression** (the "latest answered call cancels a missed-call entry" logic was
+  removed). Output: `"תזכורת על שיחות שלא נענו אתמול:"` + `- <phone> בשעה <HH:mm>` lines.
 - **Send.** `sendDailyCallReminder` exists as a standalone sender (manual route) and delivers to Didi
   via `notifyOwner` (conversational GreenAPI instance), but in production this section is **merged into
-  the 08:00 morning digest** (§5.4). `call_events` are pruned older than 48h **only after a successful
-  send**.
+  the 08:00 morning digest** (§5.4). `call_events` pruned older than 48h after a successful send.
 
 ### 5.2 Pillar 2 — Personal commitment reminders — `commitments/*`
 - **Scan (`scanRecentChats`).** Reads the op line's last-24h **incoming + outgoing** journals
@@ -308,12 +334,38 @@ as a send target. The email pillar (3) still sends via Gmail.
 
 ### 5.4 The merged 08:00 digest — `operations/morning-digest.service.ts`
 `sendMorningDigest` (cron `0 8 * * *`, Asia/Jerusalem) re-scans commitments (`refreshCommitments`), builds
-the **commitment morning section** and the **call-reminder section**, joins them (commitments first, blank
-line, then calls) into **one** Hebrew message and sends it **to Didi via `notifyOwner`** (conversational
-GreenAPI instance).
-The included commitments are marked `sent` **only when the send succeeds**; `call_events` are then pruned
-older than 48h. Still gated on `opCreds()` (scan line must be configured). If both sections are empty it
-sends nothing. The same cron tick also fires `runStaffEmailNotify` (Pillar 3).
+the **commitment morning section** and the **call-reminder section** in parallel, joins them (commitments
+first, blank line, then calls) into **one** Hebrew message and sends it **to Didi via `notifyOwner`**
+(conversational GreenAPI instance). If both sections are empty it returns early without sending anything.
+After the send attempt: commitment ids are marked `sent` **only if the send returned `true`**; then
+`pruneCallsOlderThan(48h)` runs **unconditionally** (regardless of send result, but only if there was
+something to send — the empty-check above returns before this point). Still gated on `opCreds()` (scan
+line must be configured). The same cron tick also fires `runStaffEmailNotify` (Pillar 3).
+
+### 5a. Zadarma call-webhook ingest — `domains/zadarma/`
+The sole source of missed-call data. Zadarma (SIM/VoIP telephony) pushes `NOTIFY_END` and `NOTIFY_OUT_END`
+events to `POST /api/zadarma/call-webhook`.
+
+- **Endpoint.** Mounted at `router.use("/zadarma", zadarmaRoutes)` in `routes/index.ts`; no auth
+  middleware (Zadarma sends no bearer token). Two routes: `GET /api/zadarma/call-webhook` (echo
+  handshake — returns `?zd_echo=<token>` as `text/plain`; open, no IP gate); `POST /api/zadarma/call-webhook`
+  (call events — IP-gated).
+- **IP gate.** The POST path resolves the real client IP from `x-real-ip` (nginx sets this; IPv4-mapped
+  `::ffff:` prefix is stripped) or falls back to the last entry of `x-forwarded-for`. Only IPs in
+  `185.45.152.40/30` (`.40`–`.43`) are accepted; others get `403`. A `?zd_echo` re-verification on the
+  POST path is still echoed before the IP gate (Zadarma sometimes re-verifies on POST).
+- **Event mapping (`zadarma.validator.ts`).** Only `NOTIFY_END` (inbound) and `NOTIFY_OUT_END` (outbound)
+  are processed; other events return `null` (ignored). Requires `pbx_call_id` (used as `id_message`).
+  Phone is taken from `caller_id` (inbound) or `destination`/`called_did` (outbound); normalised via
+  `normalizePhone` (strips non-digits, leading `00` → strip, leading `0` → `972` prefix). Blank phone →
+  skip. `disposition` mapping: `"answered"` (case/space-insensitive) → `accepted`; anything else → `missed`.
+  `called_at` = server **receipt time** (`receivedAt` captured at request entry) — TZ-proof because
+  `call_start` carries no timezone info. `id_instance` is the literal string `"zadarma"`.
+- **Storage.** `recordZadarmaCallEvent` (`call-events.service.ts`) upserts into `call_events`
+  `ON CONFLICT (id_message) DO UPDATE` — same table as always, so the existing `buildCallReminderSection`
+  / `getUnresolvedMissedSince` / `pruneCallsOlderThan` all work unchanged.
+- **Pending (requires owner action):** Zadarma account KYC completion, buy a number (`055` DID, ~$3/mo),
+  attach to PBX, configure GSM call-forwarding on Didi's phone → then real missed-call data flows in.
 
 ### 5.5 Manual triggers — `operations/operations.controller.ts` + `operations.routes.ts`
 Admin-only (`authenticate` + `authorize("admin")`) POST endpoints under `/api/operations` mirror the
@@ -380,7 +432,7 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   `assigned_to` / `assigned_handler_id` (handler preferred), `last_service_date`,
   `last_service_reminder_at` (date, nullable — biennial re-arm; set on a successful service-meeting
   reminder so it fires at most once per overdue cycle, §5.6), intake columns
-  (`intake_state`, `intake_current_slot` incl. `client_type`/`team_routing`, `id_photo_url`, `poa_doc_url`,
+  (`intake_state`, `intake_current_slot` — active values: `welcome`/`client_type`/`inquiry_type`/`issue`/`action_choice`/`full_name`/`email`/`id_photo`/`poa`/`done`; `team_routing` is a legacy value only, slot removed; `id_photo_url`, `poa_doc_url`,
   `id_validated`, `intake_completed_at`), and `mirrored_to_sheet_at` (column exists but is **not currently
   read/written by the lead-mirror code** — sheet idempotency is phone-based, see §10).
   `inquiry_type` CHECK includes the new fixed set (`home`, `life_health_pension`, `finance`, `other`) plus
@@ -393,8 +445,10 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 - `commitments`: `chat_id`, `direction`, `source_message_id` (synthetic, partial-unique), `commitment_text`
   (Hebrew), `counterparty`, `due_date`/`due_time`, `kind` (`timed`/`date_only`/`floating`), `fire_at`,
   `status` (`pending`/`sent`/`cancelled`), `sent_at`.
-- `call_events`: `id_message` (unique), `direction`, `counterpart_phone`, `status`
-  (`ringing`/`accepted`/`declined`/`missed`), `is_video`, `called_at`.
+- `call_events`: `id_message` (unique — `pbx_call_id` from Zadarma), `id_instance` (`"zadarma"` for all
+  new rows), `direction`, `counterpart_phone`, `status` (`accepted`/`missed` — `ringing`/`declined` are
+  legacy values no longer produced by the Zadarma ingest path), `is_video` (always `false` for Zadarma),
+  `called_at` (server receipt time).
 - `email_staff_mentions`: `gmail_message_id`, `staff_id`, `staff_email` (canonical delivery target),
   `detected_via` (`to_cc`/`body`), `subject`/`recipients`/`snippet`, `status` (`pending`/`sent`/`cancelled`),
   unique `(gmail_message_id, staff_id)`.
@@ -429,7 +483,8 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   **Finalize** → `clients` (completed, `pipeline_stage='meeting_scheduling'`, `complexity`) **+** `meetings`
   insert (`type='google_meet'`, `status='pending_booking'`) **+** `conversations.bot_paused=true`. **Bot
   replies** → `messages` (`sent_by='bot'`).
-- **Escalation** → `conversations` (pause 2h) + `messages` (no notification row).
+- **Old-client rep handoff** → `clients` (`intake_state='completed'`, `pipeline_stage='new_lead'`) +
+  `conversations` (`bot_paused=true`). No booking link, no `meetings` insert.
 - **Booking sync** → `system_settings.google_calendar_last_sync`; `meetings` (`calendar_event_id`,
   `scheduled_at`, `status='scheduled'`, `type=zoom|google_meet`); `clients` (email backfill,
   `pipeline_stage='meeting_scheduled'`); `messages` (confirmation incl. Zoom link). **Reminders** →
@@ -442,11 +497,12 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 - **Biennial service reminder** (§5.6) → on a successful client send: `clients`
   (`last_service_reminder_at = today`, `intake_state='collecting'`, `intake_current_slot='welcome'`) +
   `conversations` (`bot_paused=false`, `bot_paused_until=NULL`) + `messages` (the outreach). 
-- **Operational** → `call_events` (call webhooks, pruned > 48h **after a successful send**); `commitments`
-  (insert pending → `sent`/`cancelled`); `email_staff_mentions` (insert pending → `sent`); `system_settings`
-  (`op_self_chat_id`, `commitment_self_chat_id` — still written for self-chat **exclusion**, no longer a
-  send target). The Didi-facing reminders themselves go out over the **conversational GreenAPI instance**
-  (not stored as our `messages`).
+- **Operational** → `call_events` (Zadarma NOTIFY_END webhooks, pruned > 48h after digest runs);
+  `commitments` (insert pending → `sent`/`cancelled`); `email_staff_mentions` (insert pending → `sent`);
+  `system_settings` (`commitment_self_chat_id` — still written for self-chat **exclusion**, no longer a
+  send target; `op_self_chat_id` is no longer re-derived since the op-line call-webhook path was removed).
+  The Didi-facing reminders themselves go out over the **conversational GreenAPI instance** (not stored as
+  our `messages`).
 
 ---
 
@@ -463,9 +519,13 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   per-staff `GOOGLE_OAUTH_*` Gmail vars are **gone**.
 - **Timeless:** `TIMELESS_API_KEY`; `SUMMARY_RECIPIENT_PHONE` (owner line — the target for the post-meeting
   summary/staff-picker and the operational Didi-reminders via `notifyOwner`; also gates the
-  operational-only owner number in the webhook). **Currently BLANK (2026-06-29):** while unset, all
-  owner-facing sends (op Didi-reminders + post-meeting summary/staff-picker) **skip** — the feature code
-  is intact, only the recipient is unconfigured.
+  operational-only owner number in the webhook). **Set to `972547725826` (Didi) as of 2026-06-30.**
+  When unset, all owner-facing sends (op Didi-reminders + post-meeting summary/staff-picker) skip — the
+  feature code is intact, only the recipient is unconfigured.
+- **Department routing:** `DEPT_ELEMENTARY_PHONE` (vehicle/home/business ping target);
+  `DEPT_LIFE_FINANCE_PHONE` (life_health_pension/finance ping target). Both optional; missing → no ping.
+- **Zadarma:** no env vars (the webhook is unauthenticated; IP-locked to Zadarma's block in code).
+  Endpoint `POST /api/zadarma/call-webhook` is ready — requires Zadarma-side setup (DID + GSM forward).
 - **Leads mirror:** `LEADS_SPREADSHEET_ID`, `LEADS_SHEET_TAB`, `LEADS_SHEET_TAB_NEW`,
   `LEADS_DRIVE_FOLDER_ID`, `LEADS_MIRROR_ENABLED` — all have defaults in `env.ts`.
 - **Provider toggles:** `EMAIL_PROVIDER`, `WHATSAPP_PROVIDER` (`stub`/`live`); `STAFF_EMAIL_NOTIFY_MODE`
@@ -475,7 +535,7 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 
 ---
 
-## 9. Known issues / things to watch (as of 2026-06-29)
+## 9. Known issues / things to watch (as of 2026-07-01)
 
 - **Client summary email has no human review gate** (§4.2) — the client receives the AI summary
   (Hebrew-normalised) directly.
@@ -493,26 +553,30 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   both host `https://7107.api.greenapi.com`. Settings verified live via `getSettings`: both webhooks →
   `…/api/whatsapp/webhook`; **945** token = `GREENAPI_WEBHOOK_TOKEN` (`becf48…`), incoming + outgoing-msg ON,
   calls OFF; **944** token BLANK (OK — the op short-circuit at `whatsapp.controller.ts` runs *before* the token
-  gate, matched by `idInstance`), incoming + outgoing **calls ON**. Stale `commitment_self_chat_id` /
-  `op_self_chat_id` (old test number) were cleared → re-derive from 944. ⚠️ **No WhatsApp number connected yet
-  → bot OFFLINE**; outbound crons `502` harmlessly until the team scans the QR (**944 → Didi `972547725826`**;
-  **945 → a separate bot line**, ≠ Didi & ≠ 944). On scan it goes live automatically — no restart / no
-  `setSettings` needed. (Owner-facing sends were verified end-to-end on the test instances 2026-06-29.)
-- **`SUMMARY_RECIPIENT_PHONE` = `972547725826`** (Didi, `054-7725826`) **and `REPLY_ALLOWLIST` = `972547725826`**
-  (2026-06-30) — the **Didi-lock**: intake is closed to ALL clients (non-allowlisted senders get no reply); only
-  Didi's `assign_staff:` taps act (owner-guard runs *before* the allowlist gate). To reopen intake to clients,
-  blank `REPLY_ALLOWLIST`.
+  gate, matched by `idInstance`), calls ON (but irrelevant — op-line webhooks are now ACK'd and dropped).
+  ⚠️ **No WhatsApp number connected yet → bot OFFLINE**; outbound crons `502` harmlessly until the team
+  scans the QR (**944 → Didi `972547725826`**; **945 → a separate bot line**, ≠ Didi & ≠ 944). On scan it
+  goes live automatically — no restart / no `setSettings` needed.
+- **`SUMMARY_RECIPIENT_PHONE` = `972547725826`** (Didi, `054-7725826`); **`REPLY_ALLOWLIST` = `972547725826`**
+  — the **Didi-lock**: intake is closed to ALL clients (non-allowlisted senders get no reply); only Didi's
+  `assign_staff:` taps act (owner-guard runs *before* the allowlist gate). To reopen intake to clients, blank
+  `REPLY_ALLOWLIST`.
 - **`STAFF_EMAIL_NOTIFY_MODE` = `send` (turned ON 2026-06-30 — go-live)** — Pillar 3 now emails **real** staff:
   the **08:00 email-mentions** cron sends each mentioned staff a reminder (subject `תזכורת ממשרד שקד`), and the
   **staff-tap handoff** emails the assigned staff (subject `הקצאת לקוח חדשה — <client>`) once the conv bot is
   connected. Both send via the Gmail WS token; the 08:00 mentions cron is **independent of WhatsApp** (runs even
   before the numbers connect). Rows flip to `sent`, so re-runs don't re-notify.
-- **`team_routing` buttons are cosmetic (verify intent)** — the choice (Team Y/Z/Contact Didi/Stay) is
-  shown but never stored or acted on; routing is driven only by the new/old `client_type`.
+- **`team_routing` slot removed** — the 4-button team menu (`team_routing` slot) has been deleted from the
+  intake state machine. Routing is driven entirely by `inquiry_type` selection (dept ping) and the `client_type`
+  fork (new/old path).
+- **Zadarma telephony pending (owner action required):** `POST /api/zadarma/call-webhook` is deployed and
+  IP-locked. Missing steps: Zadarma KYC approval + DID number purchase (`055`, ~$3/mo) + attach to PBX +
+  GSM call-forwarding on Didi's phone. Until complete no real missed-call data is recorded.
 - **Auto-reply wiring (verify)** — confirm whether free-form `ai.orchestrator` auto-reply still runs after
   intake on the current inbound path (§3.2).
-- **Old-client sheet routing does not exist** — the lead mirror is new-clients-only (§10); there is no
-  `לקוח קיים` tab write despite the historical mention.
+- **Old-client sheet routing:** `mirrorLeadToSheet` is called in `finalizeRepresentative` as well as `finalize`,
+  but the function returns immediately if `client_type !== 'new'` (§10) — old-client rows are never mirrored.
+  There is no `לקוח קיים` tab write despite the task description mentioning it.
 - **PII:** intake ID/POA documents live in Google Drive as **anyone-with-link** (deliberate); the links
   sit in the CRM sheet + staff handoff (§10).
 
