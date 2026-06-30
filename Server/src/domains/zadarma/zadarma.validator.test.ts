@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { normalizePhone, mapZadarmaEvent } from "./zadarma.validator.js";
 
+const FIXED_TIME = new Date("2026-07-01T08:00:00.000Z");
+
 // ---------------------------------------------------------------------------
 // normalizePhone
 // ---------------------------------------------------------------------------
@@ -37,19 +39,19 @@ describe("normalizePhone", () => {
 
 describe("mapZadarmaEvent — ignored events", () => {
   it("returns null for NOTIFY_START", () => {
-    expect(mapZadarmaEvent({ event: "NOTIFY_START", pbx_call_id: "abc" })).toBeNull();
+    expect(mapZadarmaEvent({ event: "NOTIFY_START", pbx_call_id: "abc" }, FIXED_TIME)).toBeNull();
   });
 
   it("returns null for NOTIFY_INTERNAL", () => {
-    expect(mapZadarmaEvent({ event: "NOTIFY_INTERNAL", pbx_call_id: "abc" })).toBeNull();
+    expect(mapZadarmaEvent({ event: "NOTIFY_INTERNAL", pbx_call_id: "abc" }, FIXED_TIME)).toBeNull();
   });
 
   it("returns null when event is missing", () => {
-    expect(mapZadarmaEvent({ pbx_call_id: "abc" })).toBeNull();
+    expect(mapZadarmaEvent({ pbx_call_id: "abc" }, FIXED_TIME)).toBeNull();
   });
 
   it("returns null when pbx_call_id is missing on NOTIFY_END", () => {
-    expect(mapZadarmaEvent({ event: "NOTIFY_END", caller_id: "+972501234567" })).toBeNull();
+    expect(mapZadarmaEvent({ event: "NOTIFY_END", caller_id: "+972501234567" }, FIXED_TIME)).toBeNull();
   });
 });
 
@@ -64,7 +66,7 @@ describe("mapZadarmaEvent — direction", () => {
       pbx_call_id: "in_abc",
       caller_id: "+972501234567",
       disposition: "cancel",
-    });
+    }, FIXED_TIME);
     expect(row?.direction).toBe("incoming");
   });
 
@@ -74,7 +76,7 @@ describe("mapZadarmaEvent — direction", () => {
       pbx_call_id: "out_abc",
       destination: "+972509876543",
       disposition: "answered",
-    });
+    }, FIXED_TIME);
     expect(row?.direction).toBe("outgoing");
   });
 });
@@ -87,39 +89,39 @@ describe("mapZadarmaEvent — status from disposition", () => {
   const base = { event: "NOTIFY_END" as const, pbx_call_id: "x", caller_id: "+972501234567" };
 
   it("answered → accepted", () => {
-    expect(mapZadarmaEvent({ ...base, disposition: "answered" })?.status).toBe("accepted");
+    expect(mapZadarmaEvent({ ...base, disposition: "answered" }, FIXED_TIME)?.status).toBe("accepted");
   });
 
   it("cancel → missed", () => {
-    expect(mapZadarmaEvent({ ...base, disposition: "cancel" })?.status).toBe("missed");
+    expect(mapZadarmaEvent({ ...base, disposition: "cancel" }, FIXED_TIME)?.status).toBe("missed");
   });
 
   it("no answer → missed", () => {
-    expect(mapZadarmaEvent({ ...base, disposition: "no answer" })?.status).toBe("missed");
+    expect(mapZadarmaEvent({ ...base, disposition: "no answer" }, FIXED_TIME)?.status).toBe("missed");
   });
 
   it("busy → missed", () => {
-    expect(mapZadarmaEvent({ ...base, disposition: "busy" })?.status).toBe("missed");
+    expect(mapZadarmaEvent({ ...base, disposition: "busy" }, FIXED_TIME)?.status).toBe("missed");
   });
 
   it("failed → missed", () => {
-    expect(mapZadarmaEvent({ ...base, disposition: "failed" })?.status).toBe("missed");
+    expect(mapZadarmaEvent({ ...base, disposition: "failed" }, FIXED_TIME)?.status).toBe("missed");
   });
 
   it("no money → missed", () => {
-    expect(mapZadarmaEvent({ ...base, disposition: "no money" })?.status).toBe("missed");
+    expect(mapZadarmaEvent({ ...base, disposition: "no money" }, FIXED_TIME)?.status).toBe("missed");
   });
 
   it("unallocated number → missed", () => {
-    expect(mapZadarmaEvent({ ...base, disposition: "unallocated number" })?.status).toBe("missed");
+    expect(mapZadarmaEvent({ ...base, disposition: "unallocated number" }, FIXED_TIME)?.status).toBe("missed");
   });
 
   it("unknown disposition → missed (default)", () => {
-    expect(mapZadarmaEvent({ ...base, disposition: "something_new" })?.status).toBe("missed");
+    expect(mapZadarmaEvent({ ...base, disposition: "something_new" }, FIXED_TIME)?.status).toBe("missed");
   });
 
   it("missing disposition → missed", () => {
-    expect(mapZadarmaEvent({ ...base })?.status).toBe("missed");
+    expect(mapZadarmaEvent({ ...base }, FIXED_TIME)?.status).toBe("missed");
   });
 });
 
@@ -134,7 +136,7 @@ describe("mapZadarmaEvent — counterpart_phone normalisation", () => {
       pbx_call_id: "in_1",
       caller_id: "+972525628632",
       disposition: "cancel",
-    });
+    }, FIXED_TIME);
     expect(row?.counterpart_phone).toBe("972525628632");
   });
 
@@ -144,7 +146,7 @@ describe("mapZadarmaEvent — counterpart_phone normalisation", () => {
       pbx_call_id: "in_2",
       caller_id: "0525628632",
       disposition: "cancel",
-    });
+    }, FIXED_TIME);
     expect(row?.counterpart_phone).toBe("972525628632");
   });
 
@@ -155,7 +157,7 @@ describe("mapZadarmaEvent — counterpart_phone normalisation", () => {
       destination: "+972509876543",
       called_did: "972559397252",
       disposition: "answered",
-    });
+    }, FIXED_TIME);
     expect(row?.counterpart_phone).toBe("972509876543");
   });
 
@@ -165,13 +167,13 @@ describe("mapZadarmaEvent — counterpart_phone normalisation", () => {
       pbx_call_id: "out_2",
       called_did: "972559397252",
       disposition: "answered",
-    });
+    }, FIXED_TIME);
     expect(row?.counterpart_phone).toBe("972559397252");
   });
 });
 
 // ---------------------------------------------------------------------------
-// mapZadarmaEvent — fixed fields
+// mapZadarmaEvent — fixed fields and receivedAt
 // ---------------------------------------------------------------------------
 
 describe("mapZadarmaEvent — fixed fields", () => {
@@ -179,9 +181,8 @@ describe("mapZadarmaEvent — fixed fields", () => {
     event: "NOTIFY_END",
     pbx_call_id: "in_fixed",
     caller_id: "+972501234567",
-    call_start: "2026-06-30 15:26:41",
     disposition: "cancel",
-  });
+  }, FIXED_TIME);
 
   it("id_message = pbx_call_id", () => {
     expect(row?.id_message).toBe("in_fixed");
@@ -195,33 +196,70 @@ describe("mapZadarmaEvent — fixed fields", () => {
     expect(row?.is_video).toBe(false);
   });
 
-  it("parses call_start as UTC Date", () => {
-    expect(row?.called_at).toBeInstanceOf(Date);
-    expect(row?.called_at.toISOString()).toBe("2026-06-30T15:26:41.000Z");
+  it("called_at equals the receivedAt argument (TZ-proof: server receipt time, not call_start)", () => {
+    expect(row?.called_at).toBe(FIXED_TIME);
+    expect(row?.called_at.toISOString()).toBe("2026-07-01T08:00:00.000Z");
   });
 
-  it("falls back to now() when call_start is absent", () => {
-    const before = Date.now();
+  it("uses a different receivedAt when provided", () => {
+    const other = new Date("2026-07-01T12:34:56.000Z");
     const r = mapZadarmaEvent({
       event: "NOTIFY_END",
-      pbx_call_id: "in_no_start",
+      pbx_call_id: "in_other",
       caller_id: "+972501234567",
-    });
-    const after = Date.now();
-    expect(r?.called_at.getTime()).toBeGreaterThanOrEqual(before);
-    expect(r?.called_at.getTime()).toBeLessThanOrEqual(after);
+    }, other);
+    expect(r?.called_at).toBe(other);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 2 — mapZadarmaEvent returns null when counterpart_phone is empty
+// ---------------------------------------------------------------------------
+
+describe("mapZadarmaEvent — null when no usable phone (Fix 2)", () => {
+  it("returns null for NOTIFY_END with missing caller_id", () => {
+    expect(
+      mapZadarmaEvent({ event: "NOTIFY_END", pbx_call_id: "no_phone_1" }, FIXED_TIME)
+    ).toBeNull();
   });
 
-  it("falls back to now() when call_start is invalid", () => {
-    const before = Date.now();
-    const r = mapZadarmaEvent({
-      event: "NOTIFY_END",
-      pbx_call_id: "in_bad_start",
-      caller_id: "+972501234567",
-      call_start: "not-a-date",
-    });
-    const after = Date.now();
-    expect(r?.called_at.getTime()).toBeGreaterThanOrEqual(before);
-    expect(r?.called_at.getTime()).toBeLessThanOrEqual(after);
+  it("returns null for NOTIFY_END with empty-string caller_id", () => {
+    expect(
+      mapZadarmaEvent({ event: "NOTIFY_END", pbx_call_id: "no_phone_2", caller_id: "" }, FIXED_TIME)
+    ).toBeNull();
+  });
+
+  it("returns null for NOTIFY_OUT_END with missing destination and called_did", () => {
+    expect(
+      mapZadarmaEvent({ event: "NOTIFY_OUT_END", pbx_call_id: "no_phone_3" }, FIXED_TIME)
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 3 — mapDisposition is case/space-insensitive
+// ---------------------------------------------------------------------------
+
+describe("mapZadarmaEvent — case/space-insensitive 'answered' (Fix 3)", () => {
+  const base = { event: "NOTIFY_END" as const, pbx_call_id: "x", caller_id: "+972501234567" };
+
+  it("'Answered' (title case) → accepted", () => {
+    expect(mapZadarmaEvent({ ...base, disposition: "Answered" }, FIXED_TIME)?.status).toBe("accepted");
+  });
+
+  it("' answered ' (padded spaces) → accepted", () => {
+    expect(mapZadarmaEvent({ ...base, disposition: " answered " }, FIXED_TIME)?.status).toBe("accepted");
+  });
+
+  it("'ANSWERED' (upper case) → accepted", () => {
+    expect(mapZadarmaEvent({ ...base, disposition: "ANSWERED" }, FIXED_TIME)?.status).toBe("accepted");
+  });
+
+  it("'cancel' → missed (unchanged)", () => {
+    expect(mapZadarmaEvent({ ...base, disposition: "cancel" }, FIXED_TIME)?.status).toBe("missed");
+  });
+
+  it("missing disposition → missed (unchanged)", () => {
+    expect(mapZadarmaEvent({ ...base }, FIXED_TIME)?.status).toBe("missed");
   });
 });

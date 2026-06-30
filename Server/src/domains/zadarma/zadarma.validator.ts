@@ -46,15 +46,19 @@ export function normalizePhone(raw: string): string {
 }
 
 function mapDisposition(disposition: string | undefined): "accepted" | "missed" {
-  return disposition === "answered" ? "accepted" : "missed";
+  return disposition?.trim().toLowerCase() === "answered" ? "accepted" : "missed";
 }
 
 /**
  * Maps a parsed Zadarma end-event body to a call_events row.
  * Returns null when the event should be ignored (not an end-event, or missing pbx_call_id).
+ *
+ * `receivedAt` is the server-side timestamp captured when the HTTP request arrived.
+ * We use it instead of `call_start` because NOTIFY_END fires in real time (at call end)
+ * and call_start carries no timezone — using receipt time is TZ-proof.
  */
-export function mapZadarmaEvent(body: ZadarmaWebhookBody): ZadarmaCallRow | null {
-  const { event, pbx_call_id, caller_id, called_did, destination, call_start, disposition } = body;
+export function mapZadarmaEvent(body: ZadarmaWebhookBody, receivedAt: Date): ZadarmaCallRow | null {
+  const { event, pbx_call_id, caller_id, called_did, destination, disposition } = body;
 
   if (event !== "NOTIFY_END" && event !== "NOTIFY_OUT_END") {
     return null;
@@ -73,18 +77,11 @@ export function mapZadarmaEvent(body: ZadarmaWebhookBody): ZadarmaCallRow | null
 
   const counterpart_phone = normalizePhone(rawPhone);
 
-  const status = mapDisposition(disposition);
-
-  // TODO(zadarma): The Zadarma account timezone is unconfirmed — treating call_start as UTC
-  // for now. Verify the account's configured timezone in the Zadarma panel and adjust the
-  // offset accordingly before going to production.
-  let called_at: Date;
-  if (call_start) {
-    const parsed = new Date(call_start.replace(" ", "T") + "Z");
-    called_at = isNaN(parsed.getTime()) ? new Date() : parsed;
-  } else {
-    called_at = new Date();
+  if (!counterpart_phone) {
+    return null;
   }
+
+  const status = mapDisposition(disposition);
 
   return {
     id_message: pbx_call_id,
@@ -93,6 +90,6 @@ export function mapZadarmaEvent(body: ZadarmaWebhookBody): ZadarmaCallRow | null
     counterpart_phone,
     status,
     is_video: false,
-    called_at,
+    called_at: receivedAt,
   };
 }
