@@ -4,6 +4,7 @@ import calendarRoutes from "../domains/calendar/calendar.routes.js";
 import timelessRoutes from "../domains/integrations/timeless/timeless.routes.js";
 import googleRoutes from "../domains/integrations/google/google.routes.js";
 import operationsRoutes from "../domains/operations/operations.routes.js";
+import zadarmaRoutes from "../domains/zadarma/zadarma.routes.js";
 
 const router = express.Router();
 
@@ -12,6 +13,7 @@ router.use("/calendar", calendarRoutes);
 router.use("/integrations/timeless", timelessRoutes);
 router.use("/integrations/google", googleRoutes);
 router.use("/operations", operationsRoutes);
+router.use("/zadarma", zadarmaRoutes);
 
 // Future domain routes:
 // router.use("/policies", policyRoutes);
