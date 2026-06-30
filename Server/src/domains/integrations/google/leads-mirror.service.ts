@@ -10,7 +10,7 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
   try {
     const { data: client } = await supabaseAdmin
       .from("clients")
-      .select("full_name, phone, email, inquiry_type, id_number, id_photo_url, poa_doc_url, client_type")
+      .select("full_name, phone, email, inquiry_type, id_number, id_photo_url, poa_doc_url, client_type, issue_description")
       .eq("id", clientId)
       .maybeSingle();
 
@@ -28,32 +28,42 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
       id_photo_url?: string | null;
       poa_doc_url?: string | null;
       client_type?: string | null;
+      issue_description?: string | null;
     };
 
-    if (c.client_type !== "new") {
-      logger.debug({ clientId, client_type: c.client_type }, "leads-mirror: not a new client — skipping");
+    if (c.client_type !== "new" && c.client_type !== "old") {
+      logger.debug({ clientId, client_type: c.client_type }, "leads-mirror: unknown client_type — skipping");
       return;
     }
 
-    const targetTab = env.LEADS_SHEET_TAB_NEW;
-
-    // Only show a real, chosen inquiry type (one of the button ids). The client row
-    // is created with a placeholder inquiry_type='general' before the user picks one,
-    // so anything not in the Hebrew map renders blank until they actually choose.
     const inquiryHe = INQUIRY_TYPE_HE[c.inquiry_type ?? ""] ?? "";
 
-    const row = [
-      String(c.phone ?? ""),
-      String(c.full_name ?? ""),
-      String(c.email ?? ""),
-      inquiryHe,
-      String(c.id_photo_url ?? ""),
-      String(c.poa_doc_url ?? ""),
-      String(c.id_number ?? ""),
-      "",
-    ];
-
-    await upsertLeadRow(row, targetTab);
+    if (c.client_type === "new") {
+      const row = [
+        String(c.phone ?? ""),
+        String(c.full_name ?? ""),
+        String(c.email ?? ""),
+        inquiryHe,
+        String(c.id_photo_url ?? ""),
+        String(c.poa_doc_url ?? ""),
+        String(c.id_number ?? ""),
+        "",
+      ];
+      await upsertLeadRow(row, env.LEADS_SHEET_TAB_NEW);
+    } else {
+      const row = [
+        String(c.phone ?? ""),
+        String(c.full_name ?? ""),
+        String(c.email ?? ""),
+        inquiryHe,
+        "",
+        "",
+        "",
+        "",
+        String(c.issue_description ?? ""),
+      ];
+      await upsertLeadRow(row, env.LEADS_SHEET_TAB_EXISTING);
+    }
   } catch (err) {
     logger.error({ err, clientId }, "leads-mirror: unexpected error");
   }

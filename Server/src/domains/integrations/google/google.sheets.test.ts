@@ -295,3 +295,50 @@ describe("upsertLeadRow — explicit tabTitle param", () => {
     expect(newKey).not.toBe(oldKey);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Variable-width upsert — end column derived from values.length
+// ---------------------------------------------------------------------------
+
+describe("upsertLeadRow — variable-width end column", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAuthenticatedClient.mockResolvedValue({});
+    setupCachedTab("לקוח קיים");
+  });
+
+  it("8-col row (new client) → range ends at H", async () => {
+    mockSheetsGet.mockResolvedValue({ data: { values: null } });
+    mockSheetsAppend.mockResolvedValue({});
+
+    const row = ["972501234567", "Name", "email@x.com", "ביטוח רכב", "", "", "", ""];
+    await upsertLeadRow(row, "לקוח קיים");
+
+    const appendArg = mockSheetsAppend.mock.calls[0]?.[0] as { range: string };
+    expect(appendArg.range).toBe("לקוח קיים!A:H");
+  });
+
+  it("9-col row (old client with issue) → range ends at I", async () => {
+    mockSheetsGet.mockResolvedValue({ data: { values: null } });
+    mockSheetsAppend.mockResolvedValue({});
+
+    const row = ["972509876543", "Name", "", "ביטוח דירה", "", "", "", "", "הבעיה שלי"];
+    await upsertLeadRow(row, "לקוח קיים");
+
+    const appendArg = mockSheetsAppend.mock.calls[0]?.[0] as { range: string };
+    expect(appendArg.range).toBe("לקוח קיים!A:I");
+  });
+
+  it("9-col row — update path also ends at I{N}", async () => {
+    mockSheetsGet.mockResolvedValue({
+      data: { values: [["972509876543"]] },
+    });
+    mockSheetsUpdate.mockResolvedValue({});
+
+    const row = ["972509876543", "Name", "", "ביטוח דירה", "", "", "", "", "בעיה"];
+    await upsertLeadRow(row, "לקוח קיים");
+
+    const updateArg = mockSheetsUpdate.mock.calls[0]?.[0] as { range: string };
+    expect(updateArg.range).toBe("לקוח קיים!A1:I1");
+  });
+});

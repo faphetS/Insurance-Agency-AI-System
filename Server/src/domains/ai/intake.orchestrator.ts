@@ -14,6 +14,7 @@ import { validateIdPhoto, classifyComplexity, classifyIntakeResponse } from "./a
 import { fetchRemoteFile } from "../../lib/storage.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
+import { notifyDepartmentForInquiry } from "../whatsapp/department-routing.js";
 
 // ---------------------------------------------------------------------------
 // Type helpers — the DB types file predates the migration; cast as needed
@@ -34,6 +35,7 @@ interface ClientIntakeUpdate {
   pipeline_stage?: string | null;
   complexity?: string | null;
   client_type?: string | null;
+  issue_description?: string | null;
 }
 
 function updateClient(id: string, values: ClientIntakeUpdate) {
@@ -73,8 +75,8 @@ async function sendTextPrompt(
   chatId: string,
   slot: Exclude<IntakeSlot, "welcome">,
 ): Promise<void> {
-  const prompt = INTAKE_PROMPTS[slot];
-  const text = prompt.text;
+  const prompt = INTAKE_PROMPTS[slot as keyof typeof INTAKE_PROMPTS];
+  const text = (prompt as { text: string }).text;
   try {
     const { idMessage } = await sendMessageWithTyping(chatId, text);
     await persistOutbound(conversationId, text, idMessage);
@@ -87,7 +89,7 @@ async function sendTextPrompt(
 async function sendButtonPrompt(
   conversationId: string,
   chatId: string,
-  slot: "client_type" | "team_routing" | "inquiry_type",
+  slot: "client_type" | "inquiry_type" | "action_choice",
 ): Promise<void> {
   const prompt = INTAKE_PROMPTS[slot];
   const footer = "footer" in prompt ? (prompt as { footer: string }).footer : undefined;
@@ -155,8 +157,8 @@ async function advanceTo(
   }
 
   const prompt = INTAKE_PROMPTS[next as keyof typeof INTAKE_PROMPTS];
-  if ("buttons" in prompt) {
-    await sendButtonPrompt(conversationId, chatId, next as "client_type" | "team_routing" | "inquiry_type");
+  if (prompt && "buttons" in prompt) {
+    await sendButtonPrompt(conversationId, chatId, next as "client_type" | "inquiry_type" | "action_choice");
   } else {
     await sendTextPrompt(conversationId, chatId, next as Exclude<IntakeSlot, "welcome">);
   }
@@ -253,6 +255,40 @@ async function finalize(
   logger.info({ conversationId, clientId }, "intake: completed");
 }
 
+/** Mark intake complete as a representative hand-off (no meeting row, no booking link). */
+async function finalizeRepresentative(
+  conversationId: string,
+  clientId: string,
+): Promise<void> {
+  const { error } = await updateClient(clientId, {
+    intake_state: "completed",
+    intake_current_slot: "done",
+    intake_completed_at: new Date().toISOString(),
+    pipeline_stage: "new_lead",
+  });
+
+  if (error) {
+    logger.error(
+      { conversationId, clientId, error },
+      "intake: finalizeRepresentative failed to update client",
+    );
+    return;
+  }
+
+  await supabaseAdmin
+    .from("conversations")
+    .update({ bot_paused: true })
+    .eq("id", conversationId);
+
+  try {
+    await mirrorLeadToSheet(clientId);
+  } catch (err) {
+    logger.error({ err, clientId }, "finalizeRepresentative: lead sheet mirror failed");
+  }
+
+  logger.info({ conversationId, clientId }, "intake: representative hand-off completed");
+}
+
 
 // ---------------------------------------------------------------------------
 // Per-slot handlers
@@ -272,35 +308,112 @@ async function handleClientType(
   clientId: string,
   payload: MessagePayload,
 ): Promise<void> {
-  // Map button tap to 'new' or 'old'. GreenAPI delivers the buttonId; anything matching /old/i → 'old'.
-  const client_type: string =
-    payload.kind === "text" && /old/i.test(payload.text) ? "old" : "new";
+  // Map button tap to 'new' or 'old'.
+  // /old/i catches the button id `old_client`; קיים catches the Hebrew label "אני לקוח/ה קיים/ת".
+  const t = payload.kind === "text" ? payload.text : "";
+  const client_type: string = (/old/i.test(t) || t.includes("קיים")) ? "old" : "new";
 
   await updateClient(clientId, { client_type });
-  await advanceTo(conversationId, chatId, clientId, "team_routing");
+  await advanceTo(conversationId, chatId, clientId, "inquiry_type");
 }
 
-async function handleTeamRouting(
+async function handleInquiryType(
   conversationId: string,
   chatId: string,
   clientId: string,
-  _payload: MessagePayload,
+  payload: MessagePayload,
 ): Promise<void> {
-  // Old/existing clients skip data collection and go straight to the booking link.
+  if (payload.kind !== "text") {
+    await sendButtonPrompt(conversationId, chatId, "inquiry_type");
+    return;
+  }
+
+  const val = payload.text.trim();
+  const buttons = INTAKE_PROMPTS.inquiry_type.buttons;
+  const matched = buttons.find((b) => b.buttonId === val || b.buttonText === val);
+
+  if (!matched) {
+    await sendButtonPrompt(conversationId, chatId, "inquiry_type");
+    return;
+  }
+
+  const { error: updateErr } = await updateClient(clientId, { inquiry_type: matched.buttonId });
+  if (updateErr) {
+    logger.error({ conversationId, clientId, updateErr }, "intake: failed to save inquiry_type");
+    return;
+  }
+
+  // Load client_type and phone for dept notification and routing
   const { data: clientRow } = await supabaseAdmin
     .from("clients")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select("client_type" as any)
+    .select("client_type, phone" as any)
     .eq("id", clientId)
     .maybeSingle();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ct = (clientRow as any as { client_type?: string | null } | null)?.client_type;
+  const cr = clientRow as any as { client_type?: string | null; phone?: string | null } | null;
+  const clientType = cr?.client_type ?? null;
+  const phone = cr?.phone ?? "";
 
-  if (ct === "old") {
-    await advanceTo(conversationId, chatId, clientId, "done");
+  // Fire dept ping best-effort; never blocks intake
+  notifyDepartmentForInquiry(matched.buttonId, { phone, clientType }).catch((err: unknown) => {
+    logger.warn({ err, inquiryId: matched.buttonId }, "intake: dept notify failed (fire-and-forget)");
+  });
+
+  if (clientType === "old") {
+    await advanceTo(conversationId, chatId, clientId, "issue");
   } else {
     await advanceTo(conversationId, chatId, clientId, "full_name");
   }
+}
+
+async function handleIssue(
+  conversationId: string,
+  chatId: string,
+  clientId: string,
+  payload: MessagePayload,
+): Promise<void> {
+  if (payload.kind !== "text" || payload.text.trim().length === 0) {
+    await sendTextPrompt(conversationId, chatId, "issue");
+    return;
+  }
+
+  await updateClient(clientId, { issue_description: payload.text.trim() });
+
+  await advanceTo(conversationId, chatId, clientId, "action_choice");
+}
+
+async function handleActionChoice(
+  conversationId: string,
+  chatId: string,
+  clientId: string,
+  payload: MessagePayload,
+): Promise<void> {
+  if (payload.kind !== "text") {
+    await sendButtonPrompt(conversationId, chatId, "action_choice");
+    return;
+  }
+
+  const val = payload.text.trim();
+
+  if (val === "move_to_rep" || val === "מעבר לנציג/ה") {
+    const repAckText = INTAKE_PROMPTS.rep_ack.text;
+    try {
+      const { idMessage } = await sendMessageWithTyping(chatId, repAckText);
+      await persistOutbound(conversationId, repAckText, idMessage);
+    } catch (err) {
+      logger.error({ conversationId, err }, "intake: failed to send rep_ack");
+    }
+    await finalizeRepresentative(conversationId, clientId);
+    return;
+  }
+
+  if (val === "schedule_meeting" || val === "קביעת פגישה") {
+    await advanceTo(conversationId, chatId, clientId, "done");
+    return;
+  }
+
+  await sendButtonPrompt(conversationId, chatId, "action_choice");
 }
 
 async function handleFullName(
@@ -346,7 +459,7 @@ async function handleEmail(
   // Fast path: valid email regex — no need for LLM
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
     await updateClient(clientId, { email: raw });
-    await advanceTo(conversationId, chatId, clientId, "inquiry_type");
+    await advanceTo(conversationId, chatId, clientId, "id_photo");
     return;
   }
 
@@ -363,30 +476,6 @@ async function handleEmail(
   }
 
   await updateClient(clientId, { email: result.extracted });
-  await advanceTo(conversationId, chatId, clientId, "inquiry_type");
-}
-
-async function handleInquiryType(
-  conversationId: string,
-  chatId: string,
-  clientId: string,
-  payload: MessagePayload,
-): Promise<void> {
-  if (payload.kind !== "text") {
-    await sendButtonPrompt(conversationId, chatId, "inquiry_type");
-    return;
-  }
-
-  const val = payload.text.trim();
-  const buttons = INTAKE_PROMPTS.inquiry_type.buttons;
-  const matched = buttons.find((b) => b.buttonId === val || b.buttonText === val);
-
-  if (!matched) {
-    await sendButtonPrompt(conversationId, chatId, "inquiry_type");
-    return;
-  }
-
-  await updateClient(clientId, { inquiry_type: matched.buttonId });
   await advanceTo(conversationId, chatId, clientId, "id_photo");
 }
 
@@ -657,17 +746,20 @@ export async function handleIntake(
     case "client_type":
       await handleClientType(conversationId, chatId, clientId, payload);
       break;
-    case "team_routing":
-      await handleTeamRouting(conversationId, chatId, clientId, payload);
+    case "inquiry_type":
+      await handleInquiryType(conversationId, chatId, clientId, payload);
+      break;
+    case "issue":
+      await handleIssue(conversationId, chatId, clientId, payload);
+      break;
+    case "action_choice":
+      await handleActionChoice(conversationId, chatId, clientId, payload);
       break;
     case "full_name":
       await handleFullName(conversationId, chatId, clientId, payload);
       break;
     case "email":
       await handleEmail(conversationId, chatId, clientId, payload);
-      break;
-    case "inquiry_type":
-      await handleInquiryType(conversationId, chatId, clientId, payload);
       break;
     case "id_photo":
       await handleIdPhoto(conversationId, chatId, clientId, payload);

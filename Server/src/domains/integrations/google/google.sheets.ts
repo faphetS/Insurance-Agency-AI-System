@@ -2,7 +2,16 @@ import { google } from "googleapis";
 import { supabaseAdmin } from "../../../config/supabase.js";
 import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
+import { AppError } from "../../../lib/errors.js";
 import { getAuthenticatedClient } from "./google.auth.js";
+
+// 1–26 only (A–Z); throws immediately rather than producing a silent bad range.
+function colLetter(n: number): string {
+  if (n < 1 || n > 26) {
+    throw new AppError(500, `colLetter: n=${n} out of range 1–26`, "SHEETS_COL_OVERFLOW");
+  }
+  return String.fromCharCode(64 + n);
+}
 
 export async function resolveLeadsTabTitle(tabTitle?: string): Promise<string | null> {
   const requestedTab = (tabTitle ?? env.LEADS_SHEET_TAB).trim();
@@ -125,17 +134,19 @@ export async function upsertLeadRow(values: string[], tabTitle?: string): Promis
       }
     }
 
+    const endCol = colLetter(values.length);
+
     if (foundRow !== null) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: env.LEADS_SPREADSHEET_ID,
-        range: `${title}!A${foundRow}:H${foundRow}`,
+        range: `${title}!A${foundRow}:${endCol}${foundRow}`,
         valueInputOption: "RAW",
         requestBody: { values: [values] },
       });
     } else {
       await sheets.spreadsheets.values.append({
         spreadsheetId: env.LEADS_SPREADSHEET_ID,
-        range: `${title}!A:H`,
+        range: `${title}!A:${endCol}`,
         valueInputOption: "RAW",
         insertDataOption: "INSERT_ROWS",
         requestBody: { values: [values] },

@@ -85,8 +85,8 @@ CREATE TABLE public.clients (
                        CHECK (intake_state IN ('collecting', 'completed', 'skipped')),
   intake_current_slot  text        DEFAULT 'welcome'
                        CHECK (intake_current_slot IN (
-                         'welcome', 'client_type', 'team_routing', 'full_name', 'email', 'inquiry_type',
-                         'id_photo', 'poa', 'done'
+                         'welcome', 'client_type', 'inquiry_type', 'issue', 'action_choice',
+                         'full_name', 'email', 'id_photo', 'poa', 'done'
                        )),
   intake_completed_at  timestamptz,
   mirrored_to_sheet_at timestamptz,                                    -- set once when the lead has been appended to the Google leads sheet (idempotency)
@@ -108,7 +108,11 @@ CREATE TABLE public.clients (
 
   -- New/Old client choice from the first intake button step; routes the lead
   -- to the matching Google Sheets tab (new → לידים חדשים, old → לקוח קיים).
-  client_type          text        CHECK (client_type IN ('new', 'old'))
+  client_type          text        CHECK (client_type IN ('new', 'old')),
+
+  -- Free-text issue description collected from existing clients before the
+  -- representative/meeting choice. Stored in column I of the לקוח קיים sheet.
+  issue_description    text
 );
 
 -- ============================================================

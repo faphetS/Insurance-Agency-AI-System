@@ -4,7 +4,6 @@ import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
 import { assignStaffToMeeting } from "../meetings/meeting-handoff.service.js";
-import { recordCallEvent } from "../operations/call-events.service.js";
 import * as whatsappService from "./whatsapp.service.js";
 import {
   incomingMessageSchema,
@@ -13,7 +12,6 @@ import {
   extractPayload,
 } from "./whatsapp.validator.js";
 import { isStaffChat, extractButtonId, toChatId } from "./whatsapp.util.js";
-import { wantsHuman, handleHumanEscalation } from "./whatsapp.escalation.js";
 
 export const whatsappController = {
   /**
@@ -25,18 +23,11 @@ export const whatsappController = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawBody = req.body as Record<string, any>;
 
-    // Operational-instance short-circuit: call/state webhooks from the op line (GREENAPI_OP_*)
-    // are handled immediately and never enter the conversational pipeline.
+    // Operational-instance short-circuit: any webhook from the op line (GREENAPI_OP_*)
+    // is acknowledged and ignored — it never enters the conversational pipeline.
+    // (SIM/cellular missed calls are captured via the separate Zadarma webhook.)
     const opIdInstance = rawBody.instanceData?.idInstance;
     if (opIdInstance !== undefined && env.GREENAPI_OP_ID_INSTANCE && String(opIdInstance) === env.GREENAPI_OP_ID_INSTANCE) {
-      const tw = rawBody.typeWebhook;
-      if (tw === "incomingCall" || tw === "outgoingCall") {
-        await recordCallEvent(rawBody);
-        const wid = rawBody.instanceData?.wid;
-        if (typeof wid === "string" && wid) {
-          await supabaseAdmin.from("system_settings").upsert({ key: "op_self_chat_id", value: wid }, { onConflict: "key" });
-        }
-      }
       res.status(200).json({ ok: true });
       return;
     }
@@ -372,15 +363,8 @@ export const whatsappController = {
     // Render's 30s request timeout (LLM classification can take 15s+).
     res.status(200).json({ ok: true });
 
-    const textForAi = payload.kind === "text" ? payload.text : "";
-
     setImmediate(async () => {
       try {
-        if (textForAi && wantsHuman(textForAi)) {
-          await handleHumanEscalation(conversationId, chatId);
-          return;
-        }
-
         if (linkedClientId) {
           await handleIntake(
             conversationId,

@@ -9,16 +9,12 @@ const {
   mockAssignStaffToMeeting,
   mockSendMessageWithTyping,
   mockIsStaffChat,
-  mockWantsHuman,
-  mockHandleHumanEscalation,
   mockFromImpl,
 } = vi.hoisted(() => ({
   mockHandleIntake: vi.fn().mockResolvedValue({ consumed: false }),
   mockAssignStaffToMeeting: vi.fn().mockResolvedValue(undefined),
   mockSendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "out1" }),
   mockIsStaffChat: vi.fn().mockResolvedValue(null),
-  mockWantsHuman: vi.fn().mockReturnValue(false),
-  mockHandleHumanEscalation: vi.fn().mockResolvedValue(undefined),
   mockFromImpl: vi.fn(),
 }));
 
@@ -78,15 +74,6 @@ vi.mock("./whatsapp.util.js", async () => {
     isStaffChat: mockIsStaffChat,
   };
 });
-
-vi.mock("./whatsapp.escalation.js", () => ({
-  wantsHuman: mockWantsHuman,
-  handleHumanEscalation: mockHandleHumanEscalation,
-}));
-
-vi.mock("../operations/call-events.service.js", () => ({
-  recordCallEvent: vi.fn().mockResolvedValue(undefined),
-}));
 
 // Use REAL whatsapp.validator — do NOT mock
 
@@ -202,7 +189,6 @@ describe("whatsappController.handleWebhook — owner operational-only routing", 
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsStaffChat.mockResolvedValue(null);
-    mockWantsHuman.mockReturnValue(false);
     mockHandleIntake.mockResolvedValue({ consumed: false });
     mockAssignStaffToMeeting.mockResolvedValue(undefined);
   });
@@ -281,6 +267,23 @@ describe("whatsappController.handleWebhook — owner operational-only routing", 
 
     expect(mockHandleIntake).not.toHaveBeenCalled();
   });
+
+  it("keyword 'נציג' no longer escalates — handleIntake is called normally", async () => {
+    const convUpsertBuilder = makeBuilder({ data: { id: "conv-esc" }, error: null });
+    const msgInsertBuilder = makeBuilder({ data: { id: "msg-esc" }, error: null });
+    const convSelectBuilder = makeBuilder({ data: { id: "conv-esc", client_id: "client-esc" }, error: null });
+
+    setupFrom([convUpsertBuilder, msgInsertBuilder, convSelectBuilder]);
+
+    const body = makeTextBody(LEAD_CHAT_ID, "אני רוצה לדבר עם נציג");
+    const req = makeReq(body);
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(mockHandleIntake).toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -341,7 +344,6 @@ describe("whatsappController.handleWebhook — templateButtonsReplyMessage norma
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsStaffChat.mockResolvedValue(null);
-    mockWantsHuman.mockReturnValue(false);
     mockHandleIntake.mockResolvedValue({ consumed: true });
   });
 
@@ -392,7 +394,6 @@ describe("whatsappController.handleWebhook — reply allowlist", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsStaffChat.mockResolvedValue(null);
-    mockWantsHuman.mockReturnValue(false);
     mockHandleIntake.mockResolvedValue({ consumed: true });
     envMock.REPLY_ALLOWLIST = [ALLOWED_PHONE];
   });

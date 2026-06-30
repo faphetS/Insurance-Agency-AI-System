@@ -4,25 +4,16 @@ export const INTAKE_PROMPTS = {
     text2: "מהו השם המלא?",
   },
   client_type: {
-    text: "שלום, תודה שפנית אלינו 🙏",
+    text: "היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. נשמח לעזור לך! כדי שנוכל להפנות אותך לגורם המתאים, אנא בחר/י:",
     buttons: [
-      { buttonId: "new_client", buttonText: "New client" },
-      { buttonId: "old_client", buttonText: "Old client" },
-    ],
-  },
-  team_routing: {
-    text: "פנית לצוות שלנו — כיצד נוכל לעזור לך?",
-    buttons: [
-      { buttonId: "team_y", buttonText: "Team Y" },
-      { buttonId: "team_z", buttonText: "Team Z" },
-      { buttonId: "contact_didi", buttonText: "Contact Didi" },
-      { buttonId: "stay", buttonText: "Stay" },
+      { buttonId: "old_client", buttonText: "אני לקוח/ה קיים/ת" },
+      { buttonId: "new_client", buttonText: "אני עדיין לא לקוח/ה (מתעניין/ת)" },
     ],
   },
   full_name: { text: "מהו השם המלא?" },
   email: { text: "מהי כתובת האימייל?" },
   inquiry_type: {
-    text: "באיזה סוג ביטוח יש עניין?",
+    text: "כדי שנוכל לתת לך את המענה המדויק ביותר, באיזה נושא נוכל לעזור לך היום? אנא בחר/י מהרשימה",
     buttons: [
       { buttonId: "vehicle", buttonText: "ביטוח רכב" },
       { buttonId: "home", buttonText: "ביטוח דירה" },
@@ -32,6 +23,19 @@ export const INTAKE_PROMPTS = {
       { buttonId: "finance", buttonText: "פיננסים" },
       { buttonId: "other", buttonText: "אחר" },
     ],
+  },
+  issue: {
+    text: "אנא ספר/י לנו מהי הבעיה או הנושא שבו תרצה/י שנעזור לך.",
+  },
+  action_choice: {
+    text: "מה תרצה/י לעשות?",
+    buttons: [
+      { buttonId: "move_to_rep", buttonText: "מעבר לנציג/ה" },
+      { buttonId: "schedule_meeting", buttonText: "קביעת פגישה" },
+    ],
+  },
+  rep_ack: {
+    text: "מצוין, העברנו את הפרטים לנציג/ה הרלוונטי/ת — ניצור איתך קשר בהקדם. תודה! 🙏",
   },
   id_photo: {
     text: "נא לשלוח תמונה ברורה של תעודת הזהות (הצד הקדמי). חשוב שהטקסט יהיה קריא.",
@@ -72,16 +76,21 @@ export const INQUIRY_TYPE_HE: Record<string, string> = {
   other: "אחר",
 };
 
+// Linear new-client slot order. `issue` and `action_choice` are old-client
+// branch-only terminals resolved via INTAKE_PROMPTS lookup in advanceTo —
+// they are intentionally absent from this array.
 export const SLOT_ORDER = [
   "welcome",
   "client_type",
-  "team_routing",
+  "inquiry_type",
   "full_name",
   "email",
-  "inquiry_type",
   "id_photo",
   "poa",
   "done",
 ] as const;
 
-export type IntakeSlot = (typeof SLOT_ORDER)[number];
+export type IntakeSlot =
+  | (typeof SLOT_ORDER)[number]
+  | "issue"
+  | "action_choice";
