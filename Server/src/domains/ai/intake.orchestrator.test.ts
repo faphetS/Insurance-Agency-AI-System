@@ -325,6 +325,9 @@ describe("handleActionChoice — move_to_rep finalizes without meeting; schedule
     const convPauseFn = convPause["update"] as ReturnType<typeof vi.fn>;
     expect(convPauseFn).toHaveBeenCalledWith({ bot_paused: true });
 
+    expect(mockMirrorLeadToSheet).toHaveBeenCalledOnce();
+    expect(mockMirrorLeadToSheet.mock.calls[0]?.[0]).toBe("client-ac");
+
     expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
   });
 
@@ -433,7 +436,7 @@ describe("sendButtonPrompt — fallback to plain text on button send failure", (
     expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
     const fallbackText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
     expect(fallbackText).toContain("אני לקוח/ה קיים/ת");
-    expect(fallbackText).toContain("מתעניין");
+    expect(fallbackText).toContain("אני עדיין לא לקוח/ה");
   });
 
   it("inquiry_type: falls back to plain text list when interactive buttons throw", async () => {
