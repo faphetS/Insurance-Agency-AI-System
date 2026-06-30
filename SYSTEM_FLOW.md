@@ -574,9 +574,9 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   GSM call-forwarding on Didi's phone. Until complete no real missed-call data is recorded.
 - **Auto-reply wiring (verify)** — confirm whether free-form `ai.orchestrator` auto-reply still runs after
   intake on the current inbound path (§3.2).
-- **Old-client sheet routing:** `mirrorLeadToSheet` is called in `finalizeRepresentative` as well as `finalize`,
-  but the function returns immediately if `client_type !== 'new'` (§10) — old-client rows are never mirrored.
-  There is no `לקוח קיים` tab write despite the task description mentioning it.
+- **Old-client sheet routing:** `mirrorLeadToSheet` runs in both `finalize` (new) and `finalizeRepresentative`
+  (existing); new clients write to `לידים חדשים`, existing clients to the `לקוח קיים` tab with
+  `issue_description` (§10). Only an unknown/null `client_type` is skipped.
 - **PII:** intake ID/POA documents live in Google Drive as **anyone-with-link** (deliberate); the links
   sit in the CRM sheet + staff handoff (§10).
 
@@ -599,13 +599,15 @@ Refresh token in `system_settings.google_ws_refresh_token`. Routes
 
 **Lead row mirror — `mirrorLeadToSheet(clientId)`** (called on each slot advance + at finalize,
 best-effort, never blocks intake):
-- **New clients only.** If `client_type !== 'new'` it returns immediately — **old/existing clients are
-  never mirrored**, and there is no existing-client tab in code.
-- Appends/updates one row on the **`לידים חדשים`** tab (`LEADS_SHEET_TAB_NEW`) of the CRM spreadsheet
-  (`LEADS_SPREADSHEET_ID`). The tab title is resolved against live sheet metadata (trim-match, handling a
+- **Both client types are mirrored** — only an unknown/null `client_type` is skipped.
+- **New clients** → one row on the **`לידים חדשים`** tab (`LEADS_SHEET_TAB_NEW`); **existing clients** →
+  one row on the **`לקוח קיים`** tab (`LEADS_SHEET_TAB_EXISTING`) of the CRM spreadsheet
+  (`LEADS_SPREADSHEET_ID`). Tab titles are resolved against live sheet metadata (trim-match, handling a
   trailing space) and cached in `system_settings.leads_sheet_tab_resolved:<tab>`.
-- **Columns A→H:** phone, full_name, email, inquiry_type (Hebrew via `INQUIRY_TYPE_HE`, blank until a real
-  button is chosen), ID-photo Drive URL, POA Drive URL, id_number, blank.
+- **New-client columns A→H:** phone, full_name, email, inquiry_type (Hebrew via `INQUIRY_TYPE_HE`, blank
+  until a real button is chosen), ID-photo Drive URL, POA Drive URL, id_number, blank.
+- **Existing-client columns A→I:** phone, full_name, email, inquiry_type (Hebrew), four blanks, then
+  `issue_description` (col I).
 - **Idempotency is phone-based:** `upsertLeadRow` finds the row whose column-A phone (digit-normalised)
   matches and updates it in place, else appends. (The `clients.mirrored_to_sheet_at` column is **not**
   used by this code.)
