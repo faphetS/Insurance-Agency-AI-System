@@ -4,6 +4,7 @@ import { logger } from "../../config/logger.js";
 import {
   sendMessageWithTyping,
   sendInteractiveButtonsWithTyping,
+  sendFileByUrl,
 } from "../whatsapp/whatsapp.service.js";
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
 import {
@@ -294,12 +295,31 @@ async function finalizeRepresentative(
 // Per-slot handlers
 // ---------------------------------------------------------------------------
 
+/** Fire-and-forget: send the brand image ~3-5s after the opening message. */
+function sendWelcomeImage(conversationId: string, chatId: string): void {
+  const imageUrl = env.WELCOME_IMAGE_URL ?? `${env.BACKEND_URL}/assets/brand.jpeg`;
+  if (!imageUrl) return;
+
+  const delayMs = 3000 + Math.floor(Math.random() * 2000);
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { idMessage } = await sendFileByUrl(chatId, imageUrl, "brand.jpeg");
+        await persistOutbound(conversationId, "[image] brand", idMessage);
+      } catch (err) {
+        logger.warn({ conversationId, chatId, err }, "intake: welcome image send failed");
+      }
+    })();
+  }, delayMs);
+}
+
 async function handleWelcome(
   conversationId: string,
   chatId: string,
   clientId: string,
 ): Promise<void> {
   await advanceTo(conversationId, chatId, clientId, "client_type");
+  sendWelcomeImage(conversationId, chatId);
 }
 
 async function handleClientType(

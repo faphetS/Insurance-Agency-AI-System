@@ -82,6 +82,25 @@ export async function sendMessage(
   });
 }
 
+export async function sendFileByUrl(
+  chatId: string,
+  urlFile: string,
+  fileName: string,
+  caption?: string,
+): Promise<{ idMessage: string }> {
+  const creds = envCreds();
+  if (!creds) {
+    logger.warn({ chatId }, "sendFileByUrl: conversational GreenAPI creds not set — skipping");
+    return { idMessage: `noop:${Date.now()}` };
+  }
+  return requestWith<{ idMessage: string }>(creds, "POST", "sendFileByUrl", {
+    chatId,
+    urlFile,
+    fileName,
+    ...(caption ? { caption } : {}),
+  });
+}
+
 export async function getState(): Promise<{ stateInstance: string }> {
   return request<{ stateInstance: string }>("GET", "getStateInstance");
 }

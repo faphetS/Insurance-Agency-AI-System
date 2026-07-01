@@ -115,6 +115,10 @@ const envSchema = z.object({
   // Staff email notification mode for the daily sent-Gmail mention scan.
   // "log" = dry-run (compose to pm2 logs, no send); "send" = actually email staff.
   STAFF_EMAIL_NOTIFY_MODE: z.enum(["log", "send"]).default("log"),
+
+  // Welcome-image URL sent as a second bubble after the opening intake message.
+  // Blank string disables the feature; unset falls back to <BACKEND_URL>/assets/brand.jpeg.
+  WELCOME_IMAGE_URL: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

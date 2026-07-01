@@ -13,6 +13,8 @@ import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import { checkServiceMeetingEligibility } from "./domains/calendar/service-meeting.service.js";
 import helmet from "helmet";
 import hpp from "hpp";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Options, HttpLogger } from "pino-http";
 import pinoHttpImport from "pino-http";
@@ -27,6 +29,8 @@ import filesRouter from "./domains/files/files.routes.js";
 import rateLimit from "express-rate-limit";
 
 const app = express();
+
+const assetsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../assets");
 
 // Trust the first reverse proxy (Render / Vercel) so req.ip + rate-limit key work.
 app.set("trust proxy", 1);
@@ -111,6 +115,7 @@ app.get("/health", (_req: Request, res: Response) => {
 
 app.use("/api", apiRoutes);
 app.use("/files", filesRouter);
+app.use("/assets", express.static(assetsDir));
 
 // --- 404 handler for unmatched routes ---
 app.use((_req: Request, _res: Response) => {
