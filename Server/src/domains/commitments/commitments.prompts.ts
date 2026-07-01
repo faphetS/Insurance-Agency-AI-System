@@ -18,7 +18,7 @@ Return ONLY JSON in this exact shape:
 
 Rules:
 - "who" is always "Didi" (we only track Didi's own commitments).
-- Write "what" in HEBREW, even when the conversation is in another language (English, Tagalog, etc.) — translate it.
+- Write "what" in SIMPLE, natural, everyday spoken HEBREW — short (about 2–4 words) — plainly naming whatever the action is (a callback, a meeting, sending a document, a payment, a quote, a follow-up, etc.). Use the most natural short phrase for that action; avoid stiff or literal translations (e.g. NOT "להתקשר לצד השני" — prefer "שיחה חוזרת"). Do NOT put the contact's name or number inside "what" — it is appended to the reminder line separately. Translate from any language.
 - Resolve relative dates (tomorrow, next week, Sunday, "25/07" DD/MM format) relative to the conversation date provided in Asia/Jerusalem timezone.
 - Return {"commitments":[]} if nothing qualifies.
 - Never include explanations outside the JSON object.`;
