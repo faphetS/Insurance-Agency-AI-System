@@ -342,3 +342,59 @@ describe("upsertLeadRow — variable-width end column", () => {
     expect(updateArg.range).toBe("לקוח קיים!A1:I1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// setOnceColumns — preserve creation-date (col G) on update, write-once
+// ---------------------------------------------------------------------------
+
+describe("upsertLeadRow — setOnceColumns", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAuthenticatedClient.mockResolvedValue({});
+    setupCachedTab("לידים חדשים");
+  });
+
+  it("preserves a non-empty set-once column on update; other columns overwritten", async () => {
+    mockSheetsGet
+      .mockResolvedValueOnce({ data: { values: [["972501234567"]] } }) // A:A lookup — found row 1
+      .mockResolvedValueOnce({
+        data: { values: [["972501234567", "old name", "", "", "", "", "01/01/2026 09:00"]] },
+      }); // existing row read
+    mockSheetsUpdate.mockResolvedValue({});
+
+    const row = ["972501234567", "new name", "ביטוח רכב", "", "", "", "09/07/2026 12:00"];
+    await upsertLeadRow(row, "לידים חדשים", { setOnceColumns: [6] });
+
+    expect(mockSheetsGet).toHaveBeenCalledTimes(2);
+    const updateArg = mockSheetsUpdate.mock.calls[0]?.[0] as { requestBody: { values: string[][] } };
+    expect(updateArg.requestBody.values[0]![6]).toBe("01/01/2026 09:00"); // preserved original
+    expect(updateArg.requestBody.values[0]![1]).toBe("new name"); // B overwritten
+    expect(updateArg.requestBody.values[0]![2]).toBe("ביטוח רכב"); // C overwritten
+  });
+
+  it("overwrites an EMPTY set-once column on update with the new value", async () => {
+    mockSheetsGet
+      .mockResolvedValueOnce({ data: { values: [["972501234567"]] } })
+      .mockResolvedValueOnce({ data: { values: [["972501234567", "old", "", "", "", "", ""]] } }); // G empty
+    mockSheetsUpdate.mockResolvedValue({});
+
+    const row = ["972501234567", "n", "", "", "", "", "09/07/2026 12:00"];
+    await upsertLeadRow(row, "לידים חדשים", { setOnceColumns: [6] });
+
+    const updateArg = mockSheetsUpdate.mock.calls[0]?.[0] as { requestBody: { values: string[][] } };
+    expect(updateArg.requestBody.values[0]![6]).toBe("09/07/2026 12:00");
+  });
+
+  it("append path writes values as-given and does not read the existing row", async () => {
+    mockSheetsGet.mockResolvedValueOnce({ data: { values: null } }); // A:A — not found
+    mockSheetsAppend.mockResolvedValue({});
+
+    const row = ["972509999999", "n", "", "", "", "", "09/07/2026 12:00"];
+    await upsertLeadRow(row, "לידים חדשים", { setOnceColumns: [6] });
+
+    expect(mockSheetsAppend).toHaveBeenCalledOnce();
+    const appendArg = mockSheetsAppend.mock.calls[0]?.[0] as { requestBody: { values: string[][] } };
+    expect(appendArg.requestBody.values[0]).toEqual(row);
+    expect(mockSheetsGet).toHaveBeenCalledOnce(); // only the A:A lookup
+  });
+});

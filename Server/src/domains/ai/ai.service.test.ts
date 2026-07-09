@@ -167,3 +167,50 @@ describe("validateIdPhoto — idNumber extraction and normalization", () => {
     expect(result.valid).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// validateIdPhoto — fullName extraction
+// ---------------------------------------------------------------------------
+
+describe("validateIdPhoto — fullName extraction", () => {
+  it("returns the printed full name (collapses whitespace, trims)", async () => {
+    mockCreate.mockResolvedValue(
+      makeCompletion(
+        JSON.stringify({ valid: true, reason: "תקין", idNumber: "123456789", fullName: "  יעל   כהן  " }),
+      ),
+    );
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.fullName).toBe("יעל כהן");
+  });
+
+  it("returns null when the model omits fullName", async () => {
+    mockCreate.mockResolvedValue(
+      makeCompletion(JSON.stringify({ valid: true, reason: "תקין", idNumber: "123456789" })),
+    );
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.fullName).toBeNull();
+  });
+
+  it("returns null when fullName is null", async () => {
+    mockCreate.mockResolvedValue(
+      makeCompletion(JSON.stringify({ valid: true, reason: "ok", idNumber: "123456789", fullName: null })),
+    );
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.fullName).toBeNull();
+  });
+
+  it("returns null when fullName is under 2 chars", async () => {
+    mockCreate.mockResolvedValue(
+      makeCompletion(JSON.stringify({ valid: true, reason: "ok", idNumber: "123456789", fullName: "א" })),
+    );
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.fullName).toBeNull();
+  });
+
+  it("returns null fullName on malformed JSON (catch fallback)", async () => {
+    mockCreate.mockResolvedValue(makeCompletion("not json"));
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.valid).toBe(false);
+    expect(result.fullName).toBeNull();
+  });
+});

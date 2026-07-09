@@ -100,15 +100,6 @@ const envSchema = z.object({
   GREENAPI_OP_ID_INSTANCE: z.string().optional(),
   GREENAPI_OP_API_TOKEN: z.string().optional(),
 
-  // Department WhatsApp routing — optional; blank = feature dormant
-  // Elementary (vehicle/home/business): 055-9762838 (Merav / Hodaya / Giti)
-  // Life/finance (life_health_pension/finance): 053-3228285 (Rivka / Tzivia / Ruth / Yafa)
-  DEPT_ELEMENTARY_PHONE: z.string().optional(),
-  DEPT_LIFE_FINANCE_PHONE: z.string().optional(),
-
-  // Google Workspace — existing-client leads sheet tab
-  LEADS_SHEET_TAB_EXISTING: z.string().default("לקוח קיים"),
-
   // Provider toggles — set to "stub" to disable live API calls
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
 

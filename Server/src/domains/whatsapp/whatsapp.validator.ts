@@ -103,7 +103,7 @@ export type IncomingMessagePayload = z.infer<typeof incomingMessageSchema>;
 // ---------------------------------------------------------------------------
 
 export type MessagePayload =
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; isButtonReply?: true }
   | {
       kind: "image" | "document";
       // GreenAPI delivers a remote download URL.
@@ -185,7 +185,7 @@ export function extractPayload(
     "";
 
   if (buttonText) {
-    return { kind: "text", text: String(buttonText) };
+    return { kind: "text", text: String(buttonText), isButtonReply: true };
   }
 
   const text =

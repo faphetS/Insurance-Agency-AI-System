@@ -58,7 +58,9 @@ CREATE TABLE public.clients (
                          'liability', 'business', 'pension', 'travel',
                          'mortgage', 'general',
                          -- new fixed button set (2026-06-26)
-                         'home', 'life_health_pension', 'finance', 'other'
+                         'home', 'life_health_pension', 'finance', 'other',
+                         -- v4 menu routes (2026-07-09): button 8 callback, button 9 meeting
+                         'callback', 'meeting'
                        )),
   status               text        NOT NULL DEFAULT 'new'
                        CHECK (status IN ('new', 'active', 'completed')),
@@ -83,13 +85,19 @@ CREATE TABLE public.clients (
   -- Default amended to 'welcome' by 20260429120000_intake_welcome_slot
   intake_state         text        NOT NULL DEFAULT 'collecting'
                        CHECK (intake_state IN ('collecting', 'completed', 'skipped')),
+  -- Slot list replaced by 20260709120000_intake_v4 (v4 9-button menu flow)
   intake_current_slot  text        DEFAULT 'welcome'
                        CHECK (intake_current_slot IN (
-                         'welcome', 'client_type', 'inquiry_type', 'issue', 'action_choice',
-                         'full_name', 'email', 'id_photo', 'poa', 'done'
+                         'welcome', 'menu', 'meeting_type', 'consent', 'id_photo', 'done'
                        )),
   intake_completed_at  timestamptz,
   mirrored_to_sheet_at timestamptz,                                    -- set once when the lead has been appended to the Google leads sheet (idempotency)
+
+  -- Added by 20260709120000_intake_v4 — stall watcher for the consent/id_photo steps.
+  -- consent_prompted_at set when the consent prompt is sent; stall_notified_at set
+  -- after the 3h stall alert to Didi is attempted (at-most-once flag).
+  consent_prompted_at  timestamptz,
+  stall_notified_at    timestamptz,
 
   -- Added by 20260519100000_bafi_extend_clients — KEPT (staff routing)
   assigned_handler_id  uuid        REFERENCES public.staff(id) ON DELETE SET NULL,

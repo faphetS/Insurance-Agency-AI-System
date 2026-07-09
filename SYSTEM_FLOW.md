@@ -1,6 +1,8 @@
 # SYSTEM_FLOW.md — End-to-End Behavioral Reference
 
-> Canonical description of **how the system behaves**, re-traced from source on **2026-07-01**.
+> Canonical description of **how the system behaves**, re-traced from source on **2026-07-01**,
+> updated **2026-07-09** for the **conversational bot v4** redesign (9-button menu; see §3 and
+> `.claude/CONVERSATIONAL_BOT.md` for the full bot reference).
 > Complements `CLAUDE.md` (architecture + conventions). BAFI is fully dropped (decision 2026-06-24);
 > its reference assets live in `temp-files/` and no BAFI code remains.
 > **When code and this doc disagree, the code wins — update this doc.** Items that could not be fully
@@ -39,7 +41,12 @@ fire-once re-arm via `clients.last_service_reminder_at`, trimmed message, reopen
 GreenAPI op-line call-event recording removed; intake v3 — `team_routing` slot dropped, `inquiry_type`
 now immediately follows `client_type`; old-client branch adds `issue`→`action_choice` slots; human
 escalation (`whatsapp.escalation.ts`) deleted; department-routing WhatsApp ping on inquiry-type
-selection added.**
+selection added. **2026-07-09: conversational bot v4** — the linear intake is replaced by a 9-button
+menu (7 insurance types → staff **email**; callback → Didi WA alert; meeting → existing/new split with
+tap-only consent + lenient ID OCR); department-routing pings removed; terminals now pause 24h (cooldown,
+fresh menu on return); 3h stall watcher alerts Didi; calendar booking-sync + 24h/1h reminders + Timeless
+run-loops **disabled** (code kept, server.ts registrations commented out); biennial service-meeting cron
+deleted (service kept dormant); lead mirror rewritten to a 7-column single-tab progressive upsert.**
 
 ---
 
@@ -123,59 +130,71 @@ are checked in order against both the Zod-parsed payload and the raw body).
 
 ## 3. Conversational bot
 
-### 3.1 Intake state machine — `ai/intake.orchestrator.ts`, prompts in `ai/intake.prompts.ts`
+### 3.1 Intake state machine (v4, 2026-07-09) — `ai/intake.orchestrator.ts`, prompts in `ai/intake.prompts.ts`
 
-**Slot order (`SLOT_ORDER`):**
-`welcome → client_type → inquiry_type → full_name → email → id_photo → poa → done`.
-Two branch-only slots exist outside `SLOT_ORDER` for the existing-client path: `issue` and `action_choice`.
-All prompts in Hebrew. Gated by `bot_settings.enabled` (singleton id=1) and the per-conversation pause
-(auto-resumes when `bot_paused_until` lapses). New `clients` rows default `intake_current_slot='welcome'`.
+**Slot order (`SLOT_ORDER`, DB CHECK enforces exactly these six):**
+`welcome → menu → meeting_type → consent → id_photo → done`.
+All prompts in Hebrew, masculine-generic (Didi's style), no emojis in client messages. Gated by
+`bot_settings.enabled` (singleton id=1) and the per-conversation pause (auto-resumes when
+`bot_paused_until` lapses). `intake_state='skipped'` is an operator escape hatch (bot ignores the chat).
 
-- **welcome** — no message of its own; `handleWelcome` immediately advances to `client_type`. (The
-  `welcome.text1/text2` strings in `intake.prompts.ts` are dead — never sent.)
-- **client_type** — first thing the lead sees:
-  `"היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. נשמח לעזור לך! כדי שנוכל להפנות אותך לגורם המתאים, אנא בחר/י:"`
-  with two buttons: `old_client` "אני לקוח/ה קיים/ת" / `new_client` "אני עדיין לא לקוח/ה".
-  Any reply matching `/old/i` or containing `קיים` → `client_type='old'`; otherwise `'new'`. Both paths
-  then advance to **inquiry_type**.
-  (`team_routing` slot and its 4-button cosmetic menu have been **removed**.)
-- **inquiry_type** — interactive buttons, **fixed 7-button set** (button-only; free text must match a
-  button id or label or it re-prompts):
-  `vehicle` "ביטוח רכב", `home` "ביטוח דירה", `business` "ביטוח עסקים",
-  `life_health_pension` "ביטוח חיים/בריאות/פנסיה", `travel` 'ביטוח נסיעות לחו"ל', `finance` "פיננסים",
-  `other` "אחר". On selection: (1) **department-routing ping** fires fire-and-forget (see below);
-  (2) **path forks by `client_type`**: `old` → advance to `issue`; `new` → advance to `full_name`.
-- **issue (old-client branch only)** — free-text description of the problem; stored as
-  `clients.issue_description`. Advances to `action_choice`.
-- **action_choice (old-client branch only)** — two buttons: `move_to_rep` "מעבר לנציג/ה" →
-  sends ack `"העברנו את הפרטים לנציג/ה הרלוונטי/ת — ניצור איתך קשר בהקדם"` then calls
-  `finalizeRepresentative` (no booking link, `pipeline_stage='new_lead'`); `schedule_meeting`
-  "קביעת פגישה" → advances to `done` (standard booking flow).
-- **full_name / email (new-client path)** — text only. Email has a regex fast-path; otherwise both go
-  through the LLM validator `classifyIntakeResponse` (invalid/off-topic → re-prompt, not stored).
-- **id_photo (new-client path)** — image only. One combined vision pass `validateIdPhoto()` confirms a
-  readable ID **and** extracts the 9-digit Israeli ID number (`id_number`); foreign IDs are handled by
-  the same OCR. On success the bytes (fetched from the GreenAPI `downloadUrl`) are uploaded to **Google
-  Drive** (see §10) and a `documents` row + `clients.id_photo_url`/`id_number`/`id_validated=true` are
-  written. OCR/upload failure → re-prompt a resend (no data loss).
-- **poa (new-client path)** — optional. Reply "דלג"/skip/לא/אין → advance; an image/document → uploaded
-  to Drive + `documents` row + `clients.poa_doc_url`.
-- **finalize (`done`)** — `classifyComplexity()` (skipped for old clients → `simple`) sets
-  `clients.complexity`; flips `intake_state='completed'`, `pipeline_stage='meeting_scheduling'`; inserts a
-  `meetings` row (`type='google_meet'`, `status='pending_booking'`) so booking-sync can match later; sends
-  the **Calendly booking link** (`GOOGLE_CALENDAR_BOOKING_URL`); **pauses the bot** (`bot_paused=true`).
-  Old vs new clients get slightly different done copy (`done_existing` vs `done`).
-  `finalizeRepresentative` (old-client → rep path) sets `pipeline_stage='new_lead'`, no booking link, and
-  also pauses the bot and calls `mirrorLeadToSheet`.
+- **welcome** — no message of its own; advances to `menu` (which sends the opening), then schedules the
+  **brand-image 2nd bubble** ~3–5s later (`WELCOME_IMAGE_URL`, default `<BACKEND_URL>/assets/brand.jpeg`).
+- **menu** — the opening message (Didi's flowchart text verbatim,
+  `"היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. …אנא בחר מתפריט:"`) + **9 buttons**:
+  the 7 insurance types (`vehicle`/`home`/`business`/`life_health_pension`/`travel`/`finance`/`other`)
+  + `callback_didi` "מבקש שדידי יחזור אליי" + `meeting_didi` "בקשת תיאום פגישה עם דידי".
+  - **Buttons 1-7** → save `inquiry_type` → **staff EMAIL** via `intake-notify.service.ts`
+    (vehicle→merav@, home→hodaya@, business→giti@, life_health_pension/finance→ rivka+tzivia+ruth+yafa@
+    shaked-ins.com in ONE email; **travel/other → nobody, deliberate**), gated by
+    `STAFF_EMAIL_NOTIFY_MODE` (`log`=dry-run) → thank-you → `endFlow('new_lead')`.
+  - **Button 8** (`callback_didi`) → `inquiry_type='callback'` → **📞 WhatsApp alert to Didi**
+    (`notifyOwner` → `SUMMARY_RECIPIENT_PHONE`) → thank-you → `endFlow('new_lead')`.
+  - **Button 9** (`meeting_didi`) → `inquiry_type='meeting'` → advance to `meeting_type`.
+  - Free text / media → text-only re-prompt `"אנא בחר אחת מהאפשרויות בתפריט למעלה"` (nobody notified).
+- **meeting_type** — buttons `existing_client` "לקוח קיים" / `new_client` "לקוח חדש".
+  **Existing** → `client_type='old'` → booking-link message (`GOOGLE_CALENDAR_BOOKING_URL`) →
+  `endFlow('meeting_scheduling')` — **no notification** (the calendar booking is the signal).
+  **New** → `client_type='new'` → advance to `consent`, stamp `clients.consent_prompted_at`
+  (starts the 3h stall clock, §3.6) and clear `stall_notified_at`.
+- **consent** — single button `consent_approve` "מאשר" (data-pull consent: מסלקה פנסיונית + הר הביטוח).
+  Advances **only on a real button TAP** (`payload.isButtonReply` set by `extractPayload`'s
+  button-response branch); typed "מאשר" or anything else → re-prompt
+  `'כדי להמשיך, יש ללחוץ על כפתור "מאשר"'`. If the buttons-send fell back to a text list, tapping is
+  impossible → the stall alert is the designed safety net.
+- **id_photo** — image only. `validateIdPhoto()` is **lenient**: any readable government ID passes
+  (the ספח is requested in the prompt but its absence never invalidates); extracts `idNumber` +
+  **`fullName` as printed on the ID**. On success: bytes fetched from the GreenAPI `downloadUrl` →
+  **Google Drive** upload named `"<OCR name> - ID"` (fallback: phone digits) → `documents` row +
+  `clients.id_photo_url`/`id_number`/`id_validated=true`, and `full_name` is **upgraded to the OCR
+  name**. Then booking-link terminal → `endFlow('meeting_scheduling')` — **silent completion** (the
+  Sheet row + Drive file are the record). Invalid/unreadable → Hebrew `{reason}` re-prompt.
+- **`endFlow(pipelineStage)`** (replaces the old finalize/finalizeRepresentative) — sets
+  `intake_state='completed'`, slot `done`, `intake_completed_at`, `pipeline_stage` (`new_lead` for
+  buttons 1-8, `meeting_scheduling` for the button-9 terminals), mirrors the lead, and pauses the
+  conversation for a **24h cooldown** (`bot_paused=true`, `bot_paused_until=now+24h`) — NOT permanent.
+- **Fresh restart:** a message from a completed client after the cooldown expired (or after a manual
+  unpause) resets intake (`collecting`/`welcome`, clears consent/stall/completed stamps) and re-runs
+  the menu in the same call. No meetings row and no complexity classification exist anymore.
 
-**Department-routing ping (`whatsapp/department-routing.ts`):** fires on inquiry-type selection,
-fire-and-forget, never blocks intake. Elementary types (`vehicle`/`home`/`business`) ping
-`DEPT_ELEMENTARY_PHONE`; life/finance types (`life_health_pension`/`finance`) ping
-`DEPT_LIFE_FINANCE_PHONE`. Travel and other → no ping. Message sent via the conversational
-`sendMessage`: `"📩 פנייה חדשה מהבוט\nסוג הביטוח: <label>\nטלפון הלקוח: <phone>\nסוג לקוח: מתעניין|לקוח קיים"`.
+**Removed in v4:** slots `client_type`/`inquiry_type`(as a slot)/`issue`/`action_choice`/`full_name`/
+`email`/`poa`; the department-routing WhatsApp ping (`department-routing.ts` deleted —
+`DEPT_ELEMENTARY_PHONE`/`DEPT_LIFE_FINANCE_PHONE` env keys removed; replaced by the staff emails);
+`classifyComplexity` + `classifyIntakeResponse`; the pending-booking `meetings` insert.
 
 **Sheet mirror during intake:** `mirrorLeadToSheet(clientId)` is called on every slot advance and at
-finalize (see §10) — best-effort, never blocks intake.
+`endFlow` (see §10) — best-effort, never blocks intake.
+
+### 3.1a Staff notify + stall watcher (v4) — `ai/intake-notify.service.ts`, `ai/intake-stall.service.ts`
+- **Staff lead email:** subject `"פנייה חדשה מהבוט — <type HE>"`, Didi-style Hebrew body (greeting by
+  first name, or plain `היי,` for the 4-person team; fields: insurance type, client phone in
+  `05X-XXXXXXX` local format via `toLocalPhone`, WhatsApp name with `לא צוין` fallback via
+  `displayName`). Sent as didi@ddins.net via `sendOwnerEmail`; **hard-gated by
+  `STAFF_EMAIL_NOTIFY_MODE`** (`log` = compose to pm2 logs only).
+- **Stall watcher:** every **10 min** (server.ts interval, `isPublicWebhook` only) — clients
+  `collecting` at `consent`/`id_photo` with `consent_prompted_at` ≥ 3h old and `stall_notified_at`
+  null → **⚠️ WhatsApp alert to Didi** (phone, WA name, stopped-at step) via `notifyOwner`, then
+  `stall_notified_at` stamped (at-most-once, after the attempt).
 
 ### 3.2 Free-form auto-reply — `ai/ai.orchestrator.ts`
 Replies via OpenRouter using recent history, gated by `bot_settings.enabled` + `auto_reply` + pause.
@@ -190,29 +209,28 @@ machine (§3.1) is the current replacement for routing an existing client to a r
 
 ### 3.4 Pause / cooldown system
 - Manual human send (GreenAPI `outgoingMessageReceived`, or `POST /api/whatsapp/send`) → **1h**.
-- Intake completion → indefinite (`bot_paused=true`).
-- `finalizeRepresentative` (old-client → rep path) → indefinite (`bot_paused=true`).
+- Intake terminal (`endFlow`, any branch) → **24h cooldown** (`bot_paused_until=now+24h`); after expiry
+  the next message triggers a **fresh menu restart** (§3.1). Known quirk: a manual send after a terminal
+  overwrites the 24h cooldown with now+1h.
 - All timed pauses auto-expire via `bot_paused_until` and auto-resume. Global kill switch: `bot_settings`.
   (The 2h escalation pause is **gone** — human escalation was removed, §3.3.)
 
-### 3.5 Booking → confirmation → reminders — `calendar/booking-sync.service.ts`, `calendar/reminder.service.ts`
-Booking is via the **Calendly link** sent at finalize; the booked **Google Calendar** event carries a
-**Zoom** link.
-1. **booking-sync** (every 3 min, first run +30s) fetches recent calendar events since
-   `system_settings.google_calendar_last_sync` and matches event→client in 3 tiers: (1) attendee **email**;
-   (2) **unique name** among clients in `meeting_scheduling`; (3) **time-proximity** to a `pending_booking`
-   meeting (closest by event-created time). On match it extracts the **Zoom link** (`extractZoomLink` scans
-   location / conferenceData entry points / description), sets the meeting `scheduled`
-   (`type = zoom` if a Zoom link was found, else `google_meet`), backfills client email, flips
-   `pipeline_stage='meeting_scheduled'`, and sends the Hebrew **confirmation** — including the Zoom link
-   line when present.
-2. **24h** then **1h** reminders (`checkAndSendReminders`, every 10 min) with quiet-hours clamping
-   (07:00–21:00 Asia/Jerusalem, DST-correct via `israelWallTimeInstant`/`clampedSendTime`); flags
-   `reminder_24h_sent` / `reminder_1h_sent`.
+### 3.5 Booking → confirmation → reminders — **DISABLED in v4** (`calendar/booking-sync.service.ts`, `calendar/reminder.service.ts`)
+Booking is still via the **Calendly link** sent at the button-9 terminals, and the booked Google
+Calendar event carries the Zoom link — but the backend no longer reacts to it: the **booking-sync
+(every 3 min) and 24h/1h reminder (every 10 min) run-loops are commented out in `server.ts`**
+(`// v4: disabled`; services + tests kept dormant, no confirmation message is sent). The booking
+simply appears in Didi's calendar. Re-enable by un-commenting the registrations.
 
 ---
 
-## 4. Post-meeting flow (Timeless) — `integrations/timeless/*`, `meetings/meeting-handoff.service.ts`
+## 4. Post-meeting flow (Timeless) — **DISABLED in v4** — `integrations/timeless/*`, `meetings/meeting-handoff.service.ts`
+
+> **v4 (2026-07-09):** the Timeless run-loops are **commented out in `server.ts`** — no webhook
+> re-registration at boot and no hourly poll. The HMAC-verified webhook **route stays mounted**
+> (`POST /api/integrations/timeless/webhook`), so a webhook subscription that already exists on the
+> Timeless side can still deliver events and trigger the ingest below. All service code is intact;
+> the description below is the dormant behavior.
 
 Timeless.day records meetings + produces a summary. Delivered via **webhook**
 (`meeting.transcript_ready` / `meeting.initial_summary_ready`, subscribed in `ensureWebhookRegistered`,
@@ -371,9 +389,10 @@ events to `POST /api/zadarma/call-webhook`.
 Admin-only (`authenticate` + `authorize("admin")`) POST endpoints under `/api/operations` mirror the
 scheduled jobs: `/call-reminder/run`, `/commitments/run`, `/morning-digest/run`, `/email-mentions/run`.
 
-### 5.6 Biennial service meetings — `calendar/service-meeting.service.ts`
-`checkServiceMeetingEligibility` (reworked 2026-06-29) runs on a **cron at 08:10 Asia/Jerusalem**
-(`server.ts`, staggered after the 08:00 digest — no longer a boot-tied 24h `setInterval`). It finds
+### 5.6 Biennial service meetings — **REMOVED from the schedule in v4** — `calendar/service-meeting.service.ts`
+**v4 (2026-07-09): the 08:10 cron block and its import were deleted from `server.ts`** (owner: "we
+won't need the biennial message"). `service-meeting.service.ts` + its test are kept dormant in the
+repo. The dormant behavior, for the record: `checkServiceMeetingEligibility` finds
 **`status='active'`** clients whose **`last_service_date` is non-null and `<= today − 2 years`** (the null
 case is now **excluded** — that was a bug that messaged brand-new clients) **and** that have not already
 been reminded for this overdue cycle (`last_service_reminder_at IS NULL OR last_service_reminder_at <
@@ -404,17 +423,19 @@ of the old operational layer that was rebuilt.
 ## 6. Scheduled jobs — cadence summary (`server.ts`)
 
 All schedulers are gated to **public production only** (`isPublicWebhook`: HTTPS `BACKEND_URL`, not
-localhost) so dev boots never touch live lines or prod data. Timeless cron additionally requires
-`TIMELESS_API_KEY`.
+localhost) so dev boots never touch live lines or prod data.
+
+**Active after v4 (2026-07-09):**
 
 | Job | Trigger | Cadence | Source |
 |---|---|---|---|
-| Calendar booking sync | `setTimeout` + `setInterval` | first +30 s, then every 3 min | `booking-sync.service.ts` |
-| Appointment reminders (24h/1h) | `setInterval` | every 10 min | `reminder.service.ts` |
-| Service-meeting eligibility (biennial) | `cron` | `10 8 * * *` Asia/Jerusalem | `service-meeting.service.ts` |
 | Commitment timed reminders | `setInterval` (`startCommitmentCrons`) | every 15 min | `commitments.reminders.ts` |
 | Morning digest (commitments + calls) **and** email staff-mentions | `cron` | `0 8 * * *` Asia/Jerusalem | `morning-digest.service.ts` + `email-mentions.service.ts` |
-| Timeless meeting poll (backstop) | `cron` | `0 * * * *` (hourly) | `timeless.poll.ts` |
+| **Intake stall watcher (v4)** | `setInterval` | every 10 min | `ai/intake-stall.service.ts` |
+
+**Disabled/removed in v4** (registrations commented out or deleted in `server.ts`; service code kept):
+calendar booking-sync (was +30s / 3 min), appointment 24h/1h reminders (was 10 min), biennial
+service-meeting cron (was `10 8 * * *` — **deleted**), Timeless hourly poll + webhook registration.
 
 Note: the **call reminder** is not independently scheduled — it ships inside the 08:00 digest. There is
 **no** SLA / unanswered-scan / milestone-task cron anymore.
@@ -428,15 +449,16 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 `call_events`, `email_staff_mentions`. **No `tasks`, `notifications`, `gmail_integrations`, or
 `v_client_pipeline`.**
 
-- `clients`: `pipeline_stage`, `complexity`, `id_number`, `policy_number`, `client_type` (`new`/`old`),
-  `assigned_to` / `assigned_handler_id` (handler preferred), `last_service_date`,
-  `last_service_reminder_at` (date, nullable — biennial re-arm; set on a successful service-meeting
-  reminder so it fires at most once per overdue cycle, §5.6), intake columns
-  (`intake_state`, `intake_current_slot` — active values: `welcome`/`client_type`/`inquiry_type`/`issue`/`action_choice`/`full_name`/`email`/`id_photo`/`poa`/`done`; `team_routing` is a legacy value only, slot removed; `id_photo_url`, `poa_doc_url`,
-  `id_validated`, `intake_completed_at`), and `mirrored_to_sheet_at` (column exists but is **not currently
-  read/written by the lead-mirror code** — sheet idempotency is phone-based, see §10).
-  `inquiry_type` CHECK includes the new fixed set (`home`, `life_health_pension`, `finance`, `other`) plus
-  legacy keys for old rows.
+- `clients`: `pipeline_stage`, `complexity` (dormant since v4), `id_number`, `policy_number`,
+  `client_type` (`new`/`old`), `assigned_to` / `assigned_handler_id` (handler preferred),
+  `last_service_date`, `last_service_reminder_at` (biennial re-arm — dormant, cron removed §5.6),
+  intake columns (`intake_state`, `intake_current_slot` — **v4 CHECK allows exactly:
+  `welcome`/`menu`/`meeting_type`/`consent`/`id_photo`/`done`** (migration `20260709120000_intake_v4`);
+  `id_photo_url`, `poa_doc_url` (dormant), `id_validated`, `intake_completed_at`),
+  **v4 stall-watcher columns `consent_prompted_at` + `stall_notified_at`** (timestamptz), and
+  `mirrored_to_sheet_at` (column exists but is **not read/written by the lead-mirror code** — sheet
+  idempotency is phone-based, see §10). `inquiry_type` CHECK includes the fixed button set plus **v4
+  values `callback` (button 8) and `meeting` (button 9)** plus legacy keys for old rows.
 - `meetings`: `type` (`zoom`/`phone`/`in_person`/`google_meet`), `status`
   (`pending_booking → scheduled → confirmed → done → cancelled`), `summary_draft`/`summary_final`,
   `summary_status` (`draft`→`sent`; `approved` unused), `client_confirmed` (vestigial),
@@ -475,16 +497,16 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   **Conversation** upsert → `conversations` (by `whatsapp_chat_id`; `last_message_at`). **Client**
   create/link → `clients`. **Pauses** → `conversations.bot_paused` / `bot_paused_until`. Settings read
   → `bot_settings` (id=1).
-- **Intake answers** → `clients` (`intake_state`, `intake_current_slot`, `client_type`, `full_name`,
-  `email`, `inquiry_type`, `id_number`, `id_validated`, `complexity`, `pipeline_stage`,
-  `intake_completed_at`). On each advance + finalize → **Google Sheet** row (new clients only, §10).
-- **ID photo / POA file** → **Google Drive** (anyone-with-link) **+** `documents` row
-  (`file_url`=webViewLink) **+** `clients.id_photo_url`/`poa_doc_url` (and `id_number` for the ID).
-  **Finalize** → `clients` (completed, `pipeline_stage='meeting_scheduling'`, `complexity`) **+** `meetings`
-  insert (`type='google_meet'`, `status='pending_booking'`) **+** `conversations.bot_paused=true`. **Bot
-  replies** → `messages` (`sent_by='bot'`).
-- **Old-client rep handoff** → `clients` (`intake_state='completed'`, `pipeline_stage='new_lead'`) +
-  `conversations` (`bot_paused=true`). No booking link, no `meetings` insert.
+- **Intake answers (v4)** → `clients` (`intake_state`, `intake_current_slot`, `client_type`,
+  `inquiry_type` incl. `callback`/`meeting`, `consent_prompted_at`/`stall_notified_at`, `id_number`,
+  `id_validated`, `full_name` upgraded to the OCR name, `pipeline_stage`, `intake_completed_at`).
+  On each advance + at `endFlow` → **Google Sheet** row (every branch, single tab, §10).
+- **ID photo** → **Google Drive** (anyone-with-link, `"<OCR name> - ID"`) **+** `documents` row
+  (`file_url`=webViewLink) **+** `clients.id_photo_url`/`id_number`. **`endFlow`** → `clients`
+  (completed, `pipeline_stage='new_lead'|'meeting_scheduling'`) **+** `conversations.bot_paused=true` /
+  `bot_paused_until=now+24h`. No `meetings` insert, no POA path anymore. **Bot replies** → `messages`
+  (`sent_by='bot'`). **Staff lead email** (buttons 1-7) → Gmail (or pm2 log in `log` mode); **callback/
+  stall alerts** → Didi's WhatsApp (not stored as our `messages`).
 - **Booking sync** → `system_settings.google_calendar_last_sync`; `meetings` (`calendar_event_id`,
   `scheduled_at`, `status='scheduled'`, `type=zoom|google_meet`); `clients` (email backfill,
   `pipeline_stage='meeting_scheduled'`); `messages` (confirmation incl. Zoom link). **Reminders** →
@@ -522,8 +544,9 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   operational-only owner number in the webhook). **Set to `972547725826` (Didi) as of 2026-06-30.**
   When unset, all owner-facing sends (op Didi-reminders + post-meeting summary/staff-picker) skip — the
   feature code is intact, only the recipient is unconfigured.
-- **Department routing:** `DEPT_ELEMENTARY_PHONE` (vehicle/home/business ping target);
-  `DEPT_LIFE_FINANCE_PHONE` (life_health_pension/finance ping target). Both optional; missing → no ping.
+- **Department routing:** **REMOVED in v4** — `DEPT_ELEMENTARY_PHONE` / `DEPT_LIFE_FINANCE_PHONE` no
+  longer exist in `env.ts` (stale lines in a VPS `.env` are ignored). Staff routing is now by email
+  (§3.1a), gated by `STAFF_EMAIL_NOTIFY_MODE`.
 - **Zadarma:** no env vars (the webhook is unauthenticated; IP-locked to Zadarma's block in code).
   Endpoint `POST /api/zadarma/call-webhook` is ready — requires Zadarma-side setup (DID + GSM forward).
 - **Leads mirror:** `LEADS_SPREADSHEET_ID`, `LEADS_SHEET_TAB`, `LEADS_SHEET_TAB_NEW`,
@@ -557,28 +580,24 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   ⚠️ **No WhatsApp number connected yet → bot OFFLINE**; outbound crons `502` harmlessly until the team
   scans the QR (**944 → Didi `972547725826`**; **945 → a separate bot line**, ≠ Didi & ≠ 944). On scan it
   goes live automatically — no restart / no `setSettings` needed.
-- **`SUMMARY_RECIPIENT_PHONE` = `972547725826`** (Didi, `054-7725826`); **`REPLY_ALLOWLIST` = `972547725826`**
-  — the **Didi-lock**: intake is closed to ALL clients (non-allowlisted senders get no reply); only Didi's
-  `assign_staff:` taps act (owner-guard runs *before* the allowlist gate). To reopen intake to clients, blank
-  `REPLY_ALLOWLIST`.
-- **`STAFF_EMAIL_NOTIFY_MODE` = `send` (turned ON 2026-06-30 — go-live)** — Pillar 3 now emails **real** staff:
-  the **08:00 email-mentions** cron sends each mentioned staff a reminder (subject `תזכורת ממשרד שקד`), and the
-  **staff-tap handoff** emails the assigned staff (subject `הקצאת לקוח חדשה — <client>`) once the conv bot is
-  connected. Both send via the Gmail WS token; the 08:00 mentions cron is **independent of WhatsApp** (runs even
-  before the numbers connect). Rows flip to `sent`, so re-runs don't re-notify.
-- **`team_routing` slot removed** — the 4-button team menu (`team_routing` slot) has been deleted from the
-  intake state machine. Routing is driven entirely by `inquiry_type` selection (dept ping) and the `client_type`
-  fork (new/old path).
+- **TEST config in production (as of the v4 deploy, 2026-07-09):** `SUMMARY_RECIPIENT_PHONE` and
+  `REPLY_ALLOWLIST` point at **test numbers, not Didi** — only the allowlisted test phone can trigger
+  intake, and all owner alerts (callback/stall/digest) go to the test summary number. **Go-live restore:**
+  set both to Didi's real number, and flip `STAFF_EMAIL_NOTIFY_MODE` from `log` (dry-run — the current
+  value; staff lead emails + mention reminders + handoff emails all compose to pm2 logs only) to `send`.
+- **v4 removed the department pings and the old slots** — routing is the 9-button menu (§3.1); the
+  `client_type` fork survives only inside the button-9 meeting flow.
 - **Zadarma telephony pending (owner action required):** `POST /api/zadarma/call-webhook` is deployed and
   IP-locked. Missing steps: Zadarma KYC approval + DID number purchase (`055`, ~$3/mo) + attach to PBX +
   GSM call-forwarding on Didi's phone. Until complete no real missed-call data is recorded.
 - **Auto-reply wiring (verify)** — confirm whether free-form `ai.orchestrator` auto-reply still runs after
   intake on the current inbound path (§3.2).
-- **Old-client sheet routing:** `mirrorLeadToSheet` runs in both `finalize` (new) and `finalizeRepresentative`
-  (existing); new clients write to `לידים חדשים`, existing clients to the `לקוח קיים` tab with
-  `issue_description` (§10). Only an unknown/null `client_type` is skipped.
-- **PII:** intake ID/POA documents live in Google Drive as **anyone-with-link** (deliberate); the links
-  sit in the CRM sheet + staff handoff (§10).
+- **Timeless webhook route still mounted** (§4) — the run-loops are disabled, but a webhook subscription
+  that already exists on the Timeless side can still deliver events; with a test DB the ingest parks
+  unmatched (nothing sent), but be aware the client-summary email path inside it is NOT gated by
+  `STAFF_EMAIL_NOTIFY_MODE`.
+- **PII:** intake ID documents live in Google Drive as **anyone-with-link** (deliberate); the links
+  sit in the CRM sheet (§10).
 
 ---
 
@@ -591,25 +610,27 @@ Refresh token in `system_settings.google_ws_refresh_token`. Routes
 `getAuthenticatedClient()` in `integrations/google/google.auth.ts`. This account also powers
 `sendOwnerEmail` (the client-summary and staff-mention emails) and the Gmail sent-mail scan.
 
-**During intake (the Drive upload path in §3.1):**
-- **ID photo** (only after OCR passes) and **POA** (if provided) are uploaded to Drive folder
-  `LEADS_DRIVE_FOLDER_ID` as `"<full name> - ID"` / `"<full name> - POA"`, set **anyone-with-link**
-  reader. The Drive `webViewLink` is stored in `clients.id_photo_url`/`poa_doc_url` **and**
-  `documents.file_url`. On Drive/fetch failure the bot re-prompts a resend (no data loss).
+**During intake (the Drive upload path in §3.1, v4):**
+- **ID photo** (only after the lenient OCR passes) is uploaded to Drive folder `LEADS_DRIVE_FOLDER_ID`
+  as `"<OCR name> - ID"` (fallback: phone digits), set **anyone-with-link** reader. The Drive
+  `webViewLink` is stored in `clients.id_photo_url` **and** `documents.file_url`. On Drive/fetch
+  failure the bot re-prompts a resend (no data loss). The POA upload path is gone with the `poa` slot.
 
-**Lead row mirror — `mirrorLeadToSheet(clientId)`** (called on each slot advance + at finalize,
-best-effort, never blocks intake):
-- **Both client types are mirrored** — only an unknown/null `client_type` is skipped.
-- **New clients** → one row on the **`לידים חדשים`** tab (`LEADS_SHEET_TAB_NEW`); **existing clients** →
-  one row on the **`לקוח קיים`** tab (`LEADS_SHEET_TAB_EXISTING`) of the CRM spreadsheet
-  (`LEADS_SPREADSHEET_ID`). Tab titles are resolved against live sheet metadata (trim-match, handling a
-  trailing space) and cached in `system_settings.leads_sheet_tab_resolved:<tab>`.
-- **New-client columns A→H:** phone, full_name, email, inquiry_type (Hebrew via `INQUIRY_TYPE_HE`, blank
-  until a real button is chosen), ID-photo Drive URL, POA Drive URL, id_number, blank.
-- **Existing-client columns A→I:** phone, full_name, email, inquiry_type (Hebrew), four blanks, then
-  `issue_description` (col I).
+**Lead row mirror — `mirrorLeadToSheet(clientId)`** (v4 rewrite; called on each slot advance + at
+`endFlow`, EVERY branch, best-effort, never blocks intake):
+- **ONE tab only:** the **`לידים חדשים `** tab (`LEADS_SHEET_TAB_NEW`, trailing space, sheetId 0) of the
+  CRM spreadsheet. The `לקוח קיים ` and `לא רלוונטי` tabs are **manual triage** — the bot never writes
+  them. Tab titles resolved against live metadata (trim-match) and cached in
+  `system_settings.leads_sheet_tab_resolved:<tab>`.
+- **7 columns A→G:** phone · name (`displayName` — blank if the WA name is just the phone) · inquiry
+  type (1-7 → Hebrew via `INQUIRY_TYPE_HE`; `callback` → `בקשת שיחה חוזרת`; `meeting` →
+  `תיאום פגישה — לקוח קיים/חדש` per `client_type`; `general` → blank) · ID-photo Drive URL · ID number ·
+  רלוונטיות (always blank — manual) · creation date `DD/MM/YYYY HH:mm` Asia/Jerusalem (**set-once** —
+  preserved on updates via `upsertLeadRow`'s `setOnceColumns: [6]`).
 - **Idempotency is phone-based:** `upsertLeadRow` finds the row whose column-A phone (digit-normalised)
-  matches and updates it in place, else appends. (The `clients.mirrored_to_sheet_at` column is **not**
-  used by this code.)
+  matches and updates it in place (overwriting B-F on return visits), else appends. (The
+  `clients.mirrored_to_sheet_at` column is **not** used by this code.)
+- One-time restructure script (7 headers on all 3 tabs + test-row wipe):
+  `scripts/oneoff/restructure-crm-sheet.mjs` (run on the VPS).
 
 **Modules:** `integrations/google/{google.auth,google.gmail,google.drive,google.sheets,leads-mirror.service}.ts`.

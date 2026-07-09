@@ -2,7 +2,33 @@ import { supabaseAdmin } from "../../../config/supabase.js";
 import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { INQUIRY_TYPE_HE } from "../../ai/intake.prompts.js";
+import { displayName } from "../../whatsapp/whatsapp.util.js";
 import { upsertLeadRow } from "./google.sheets.js";
+
+// Human-readable Israel-local timestamp: DD/MM/YYYY HH:mm (Asia/Jerusalem).
+function nowIsraelString(): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jerusalem",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date());
+  return parts.replace(",", "");
+}
+
+// Sheet column C label from inquiry_type + client_type.
+function inquiryColumn(inquiryType: string | null | undefined, clientType: string | null | undefined): string {
+  if (inquiryType === "callback") return "בקשת שיחה חוזרת";
+  if (inquiryType === "meeting") {
+    if (clientType === "old") return "תיאום פגישה — לקוח קיים";
+    if (clientType === "new") return "תיאום פגישה — לקוח חדש";
+    return "תיאום פגישה";
+  }
+  return INQUIRY_TYPE_HE[inquiryType ?? ""] ?? "";
+}
 
 export async function mirrorLeadToSheet(clientId: string): Promise<void> {
   if (!env.LEADS_MIRROR_ENABLED) return;
@@ -10,7 +36,7 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
   try {
     const { data: client } = await supabaseAdmin
       .from("clients")
-      .select("full_name, phone, email, inquiry_type, id_number, id_photo_url, poa_doc_url, client_type, issue_description")
+      .select("phone, full_name, inquiry_type, client_type, id_photo_url, id_number")
       .eq("id", clientId)
       .maybeSingle();
 
@@ -20,50 +46,34 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
     }
 
     const c = client as {
-      full_name?: string | null;
       phone?: string | null;
-      email?: string | null;
+      full_name?: string | null;
       inquiry_type?: string | null;
-      id_number?: string | null;
-      id_photo_url?: string | null;
-      poa_doc_url?: string | null;
       client_type?: string | null;
-      issue_description?: string | null;
+      id_photo_url?: string | null;
+      id_number?: string | null;
     };
 
-    if (c.client_type !== "new" && c.client_type !== "old") {
-      logger.debug({ clientId, client_type: c.client_type }, "leads-mirror: unknown client_type — skipping");
+    if (!c.phone) {
+      logger.debug({ clientId }, "leads-mirror: no phone — skipping");
       return;
     }
 
-    const inquiryHe = INQUIRY_TYPE_HE[c.inquiry_type ?? ""] ?? "";
+    const name = displayName(c.full_name, c.phone) ?? "";
+    const inquiryHe = inquiryColumn(c.inquiry_type, c.client_type);
 
-    if (c.client_type === "new") {
-      const row = [
-        String(c.phone ?? ""),
-        String(c.full_name ?? ""),
-        String(c.email ?? ""),
-        inquiryHe,
-        String(c.id_photo_url ?? ""),
-        String(c.poa_doc_url ?? ""),
-        String(c.id_number ?? ""),
-        "",
-      ];
-      await upsertLeadRow(row, env.LEADS_SHEET_TAB_NEW);
-    } else {
-      const row = [
-        String(c.phone ?? ""),
-        String(c.full_name ?? ""),
-        String(c.email ?? ""),
-        inquiryHe,
-        "",
-        "",
-        "",
-        "",
-        String(c.issue_description ?? ""),
-      ];
-      await upsertLeadRow(row, env.LEADS_SHEET_TAB_EXISTING);
-    }
+    // A phone · B name · C inquiry · D ID photo link · E ID number · F relevance (manual) · G creation date
+    const row = [
+      String(c.phone),
+      name,
+      inquiryHe,
+      String(c.id_photo_url ?? ""),
+      String(c.id_number ?? ""),
+      "",
+      nowIsraelString(),
+    ];
+
+    await upsertLeadRow(row, env.LEADS_SHEET_TAB_NEW, { setOnceColumns: [6] });
   } catch (err) {
     logger.error({ err, clientId }, "leads-mirror: unexpected error");
   }

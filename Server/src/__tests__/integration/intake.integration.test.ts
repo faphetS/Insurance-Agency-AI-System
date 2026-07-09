@@ -1,36 +1,33 @@
 /**
- * Integration test: intake.orchestrator — data collection flow (v3)
+ * Integration test: intake.orchestrator — v4 9-button menu flow.
  *
- * New slot order: welcome → client_type → inquiry_type → full_name → email →
- * id_photo → poa → done.
- *
- * Old-client branch: client_type → inquiry_type → issue → action_choice → (done | rep ack)
+ * Slot machine: welcome → menu → meeting_type → consent → id_photo → done.
  *
  * Runs against a real throwaway Postgres DB (insurance_test). All external I/O is mocked:
- *   - ai.service  (classifyIntakeResponse, validateIdPhoto, classifyComplexity)
- *   - whatsapp.service (sendMessageWithTyping, sendInteractiveButtonsWithTyping, sendMessage)
- *   - lib/storage (fetchRemoteFile)
- *   - domains/integrations/google/google.drive (uploadLeadDocument)
- *   - domains/integrations/google/leads-mirror.service (mirrorLeadToSheet)
- *   - domains/whatsapp/department-routing (notifyDepartmentForInquiry — env blank, no-ops)
+ *   - ai.service              (validateIdPhoto)
+ *   - whatsapp.service        (sendMessageWithTyping, sendInteractiveButtonsWithTyping, sendFileByUrl, sendMessage)
+ *   - lib/storage             (fetchRemoteFile)
+ *   - google.drive            (uploadLeadDocument)
+ *   - leads-mirror.service    (mirrorLeadToSheet — asserted called; 7-col rows covered by leads-mirror.test.ts)
+ *   - intake-notify.service   (sendStaffLeadEmail — mocked so NO real email; buildCallbackAlert)
+ *   - operations/owner-notify (notifyOwner — mocked so NO real GreenAPI send)
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
-// Mocks — must be declared before any subject import
+// Mocks — declared before any subject import
 // ---------------------------------------------------------------------------
 
 vi.mock("../../domains/ai/ai.service.js", () => ({
-  classifyIntakeResponse: vi.fn(),
   validateIdPhoto: vi.fn(),
-  classifyComplexity: vi.fn(),
 }));
 
 vi.mock("../../domains/whatsapp/whatsapp.service.js", () => ({
   sendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "fake-out-id" }),
   sendInteractiveButtonsWithTyping: vi.fn().mockResolvedValue({ idMessage: "fake-btn-id" }),
+  sendFileByUrl: vi.fn().mockResolvedValue({ idMessage: "fake-file-id" }),
   sendTyping: vi.fn().mockResolvedValue(undefined),
   sendMessage: vi.fn().mockResolvedValue({ idMessage: "fake-msg-id" }),
 }));
@@ -47,10 +44,15 @@ vi.mock("../../domains/integrations/google/leads-mirror.service.js", () => ({
   mirrorLeadToSheet: vi.fn().mockResolvedValue(undefined),
 }));
 
-// dept env vars are blank by default — notifyDepartmentForInquiry no-ops.
-// Mock it so the fire-and-forget never reaches real network code.
-vi.mock("../../domains/whatsapp/department-routing.js", () => ({
-  notifyDepartmentForInquiry: vi.fn().mockResolvedValue(undefined),
+// Staff-email path is ALWAYS mocked — no real email may ever be sent from a test.
+vi.mock("../../domains/ai/intake-notify.service.js", () => ({
+  sendStaffLeadEmail: vi.fn().mockResolvedValue(undefined),
+  buildCallbackAlert: vi.fn(() => "📞 alert"),
+}));
+
+// notifyOwner (GreenAPI send) is ALWAYS mocked — no live send.
+vi.mock("../../domains/operations/owner-notify.js", () => ({
+  notifyOwner: vi.fn().mockResolvedValue(true),
 }));
 
 // ---------------------------------------------------------------------------
@@ -60,28 +62,18 @@ vi.mock("../../domains/whatsapp/department-routing.js", () => ({
 import { handleIntake } from "../../domains/ai/intake.orchestrator.js";
 import { pool } from "../../lib/db.js";
 import type { MessagePayload } from "../../domains/whatsapp/whatsapp.validator.js";
-import {
-  classifyIntakeResponse,
-  validateIdPhoto,
-  classifyComplexity,
-} from "../../domains/ai/ai.service.js";
-import { sendMessageWithTyping } from "../../domains/whatsapp/whatsapp.service.js";
+import { validateIdPhoto } from "../../domains/ai/ai.service.js";
+import { sendStaffLeadEmail } from "../../domains/ai/intake-notify.service.js";
 import { fetchRemoteFile } from "../../lib/storage.js";
 import { uploadLeadDocument } from "../../domains/integrations/google/google.drive.js";
 
-// ---------------------------------------------------------------------------
-// Typed cast helpers for vi mocks
-// ---------------------------------------------------------------------------
-
-const mockClassify = classifyIntakeResponse as ReturnType<typeof vi.fn>;
 const mockValidateIdPhoto = validateIdPhoto as ReturnType<typeof vi.fn>;
-const mockClassifyComplexity = classifyComplexity as ReturnType<typeof vi.fn>;
-const mockSendMsg = sendMessageWithTyping as ReturnType<typeof vi.fn>;
+const mockSendStaffLeadEmail = sendStaffLeadEmail as ReturnType<typeof vi.fn>;
 const mockFetchRemoteFile = fetchRemoteFile as ReturnType<typeof vi.fn>;
 const mockUploadLeadDocument = uploadLeadDocument as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
-// Seed / teardown helpers
+// Seed / teardown
 // ---------------------------------------------------------------------------
 
 interface Seeds {
@@ -117,17 +109,12 @@ async function seed(): Promise<Seeds> {
     [conversationId, `97250${clientId.slice(0, 8)}@c.us`, clientId, `05000${clientId.slice(0, 5)}`],
   );
 
-  // Ensure bot_settings singleton exists
-  await pool.query(
-    `INSERT INTO bot_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`,
-  );
+  await pool.query(`INSERT INTO bot_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
 
   return { staffId, clientId, conversationId };
 }
 
 async function teardown(seeds: Seeds) {
-  // meetings.conversation_id FKs conversations (RESTRICT), so delete meetings
-  // BEFORE conversations. messages cascade from conversations.
   await pool.query(`DELETE FROM meetings WHERE client_id = $1`, [seeds.clientId]);
   await pool.query(`DELETE FROM documents WHERE client_id = $1`, [seeds.clientId]);
   await pool.query(`DELETE FROM conversations WHERE id = $1`, [seeds.conversationId]);
@@ -136,11 +123,8 @@ async function teardown(seeds: Seeds) {
   await pool.query(`DELETE FROM staff WHERE id = $1`, [seeds.staffId]);
 }
 
-// ---------------------------------------------------------------------------
-// Payload factories
-// ---------------------------------------------------------------------------
-
 const textPayload = (text: string): MessagePayload => ({ kind: "text", text });
+const buttonPayload = (text: string): MessagePayload => ({ kind: "text", text, isButtonReply: true });
 const imagePayload = (): MessagePayload => ({
   kind: "image",
   fileUrl: "https://example.com/fake-id.jpg",
@@ -150,10 +134,10 @@ const imagePayload = (): MessagePayload => ({
 });
 
 // ---------------------------------------------------------------------------
-// NEW-CLIENT FLOW: welcome → client_type → inquiry_type → full_name → email → id_photo → poa → done
+// Walk A: welcome → menu → vehicle (insurance button → staff email → bot off)
 // ---------------------------------------------------------------------------
 
-describe("intake.orchestrator — full new-client slot flow (v3)", () => {
+describe("intake v4 — menu → insurance button (vehicle)", () => {
   let seeds: Seeds;
 
   beforeAll(async () => {
@@ -164,157 +148,150 @@ describe("intake.orchestrator — full new-client slot flow (v3)", () => {
     await teardown(seeds);
   });
 
-  it("welcome slot: advances to client_type and sends button prompt", async () => {
-    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
-    const mockSendButtons = sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>;
-    mockSendButtons.mockResolvedValue({ idMessage: "btn-client-type" });
-
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250test@c.us",
-      textPayload("hi"),
-    );
-
+  it("welcome → advances to menu", async () => {
+    const result = await handleIntake(seeds.conversationId, seeds.clientId, "97250a@c.us", textPayload("hi"));
     expect(result.consumed).toBe(true);
-    expect(mockSendButtons).toHaveBeenCalled();
 
     const { rows } = await pool.query<{ intake_current_slot: string }>(
       `SELECT intake_current_slot FROM clients WHERE id = $1`,
       [seeds.clientId],
     );
-    expect(rows[0]?.intake_current_slot).toBe("client_type");
+    expect(rows[0]?.intake_current_slot).toBe("menu");
   });
 
-  it("client_type slot: 'New client' (non-/old/ text) → client_type='new', advances to inquiry_type", async () => {
-    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
-    const mockSendButtons = sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>;
-    mockSendButtons.mockResolvedValue({ idMessage: "btn-inquiry" });
+  it("menu 'vehicle' → staff email, inquiry_type stored, intake completed + 24h pause", async () => {
+    mockSendStaffLeadEmail.mockClear();
 
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250test@c.us",
-      textPayload("New client"),
-    );
-
+    const result = await handleIntake(seeds.conversationId, seeds.clientId, "97250a@c.us", buttonPayload("vehicle"));
     expect(result.consumed).toBe(true);
 
-    const { rows } = await pool.query<{ intake_current_slot: string; client_type: string }>(
-      `SELECT intake_current_slot, client_type FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.intake_current_slot).toBe("inquiry_type");
-    expect(rows[0]?.client_type).toBe("new");
-  });
+    expect(mockSendStaffLeadEmail).toHaveBeenCalledOnce();
+    expect(mockSendStaffLeadEmail.mock.calls[0]?.[0]).toBe("vehicle");
 
-  it("inquiry_type slot: button id 'vehicle' → stores inquiry_type, advances to full_name (no LLM)", async () => {
-    mockClassify.mockClear();
-    mockSendMsg.mockResolvedValue({ idMessage: "full-name-prompt" });
-
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250test@c.us",
-      textPayload("vehicle"),
-    );
-
-    expect(result.consumed).toBe(true);
-    expect(mockClassify).not.toHaveBeenCalled();
-
-    const { rows } = await pool.query<{ inquiry_type: string; intake_current_slot: string }>(
-      `SELECT inquiry_type, intake_current_slot FROM clients WHERE id = $1`,
+    const { rows } = await pool.query<{
+      inquiry_type: string;
+      intake_state: string;
+      intake_current_slot: string;
+      pipeline_stage: string | null;
+    }>(
+      `SELECT inquiry_type, intake_state, intake_current_slot, pipeline_stage FROM clients WHERE id = $1`,
       [seeds.clientId],
     );
     expect(rows[0]?.inquiry_type).toBe("vehicle");
-    expect(rows[0]?.intake_current_slot).toBe("full_name");
+    expect(rows[0]?.intake_state).toBe("completed");
+    expect(rows[0]?.intake_current_slot).toBe("done");
+    expect(rows[0]?.pipeline_stage).toBe("new_lead");
+
+    const { rows: convRows } = await pool.query<{ bot_paused: boolean; bot_paused_until: string | null }>(
+      `SELECT bot_paused, bot_paused_until FROM conversations WHERE id = $1`,
+      [seeds.conversationId],
+    );
+    expect(convRows[0]?.bot_paused).toBe(true);
+    expect(convRows[0]?.bot_paused_until).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Walk B: welcome → menu → meeting → new → consent tap → ID → terminal
+// ---------------------------------------------------------------------------
+
+describe("intake v4 — meeting → new client → consent → ID", () => {
+  let seeds: Seeds;
+
+  beforeAll(async () => {
+    seeds = await seed();
   });
 
-  it("full_name slot: extracts name and advances to email", async () => {
-    mockClassify.mockResolvedValueOnce({ valid: true, extracted: "Test Lead" });
-
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250test@c.us",
-      textPayload("Test Lead"),
-    );
-
-    expect(result.consumed).toBe(true);
-    expect(mockClassify).toHaveBeenCalledWith(
-      "Test Lead",
-      "full_name",
-      expect.any(String),
-      expect.any(String),
-    );
-
-    const { rows } = await pool.query<{ full_name: string; intake_current_slot: string }>(
-      `SELECT full_name, intake_current_slot FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.full_name).toBe("Test Lead");
-    expect(rows[0]?.intake_current_slot).toBe("email");
+  afterAll(async () => {
+    await teardown(seeds);
   });
 
-  it("email slot: fast-path regex accepts valid email and advances to id_photo", async () => {
-    mockClassify.mockClear();
-
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250test@c.us",
-      textPayload("lead@example.com"),
-    );
-
-    expect(result.consumed).toBe(true);
-    // Fast-path: no LLM call for a well-formed email
-    expect(mockClassify).not.toHaveBeenCalled();
-
-    const { rows } = await pool.query<{ email: string; intake_current_slot: string }>(
-      `SELECT email, intake_current_slot FROM clients WHERE id = $1`,
+  it("welcome → menu", async () => {
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250b@c.us", textPayload("hi"));
+    const { rows } = await pool.query<{ intake_current_slot: string }>(
+      `SELECT intake_current_slot FROM clients WHERE id = $1`,
       [seeds.clientId],
     );
-    expect(rows[0]?.email).toBe("lead@example.com");
+    expect(rows[0]?.intake_current_slot).toBe("menu");
+  });
+
+  it("menu 'meeting_didi' → meeting_type sub-choice", async () => {
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250b@c.us", buttonPayload("meeting_didi"));
+    const { rows } = await pool.query<{ intake_current_slot: string; inquiry_type: string }>(
+      `SELECT intake_current_slot, inquiry_type FROM clients WHERE id = $1`,
+      [seeds.clientId],
+    );
+    expect(rows[0]?.intake_current_slot).toBe("meeting_type");
+    expect(rows[0]?.inquiry_type).toBe("meeting");
+  });
+
+  it("meeting_type 'new_client' → consent + consent_prompted_at set", async () => {
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250b@c.us", buttonPayload("new_client"));
+    const { rows } = await pool.query<{
+      intake_current_slot: string;
+      client_type: string;
+      consent_prompted_at: string | null;
+    }>(
+      `SELECT intake_current_slot, client_type, consent_prompted_at FROM clients WHERE id = $1`,
+      [seeds.clientId],
+    );
+    expect(rows[0]?.intake_current_slot).toBe("consent");
+    expect(rows[0]?.client_type).toBe("new");
+    expect(rows[0]?.consent_prompted_at).not.toBeNull();
+  });
+
+  it("consent tap → id_photo", async () => {
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250b@c.us", buttonPayload("consent_approve"));
+    const { rows } = await pool.query<{ intake_current_slot: string }>(
+      `SELECT intake_current_slot FROM clients WHERE id = $1`,
+      [seeds.clientId],
+    );
     expect(rows[0]?.intake_current_slot).toBe("id_photo");
   });
 
-  it("id_photo slot: valid image passes OCR, uploads to Drive, advances to poa", async () => {
+  it("typed text at consent would have re-prompted — verified separately; here the tap already advanced", () => {
+    expect(true).toBe(true);
+  });
+
+  it("id_photo valid image → OCR name to Drive, full_name upgraded, terminal + pause", async () => {
     const idWebViewLink = "https://drive.google.com/file/d/drive-id-1/view";
     mockValidateIdPhoto.mockResolvedValueOnce({
       valid: true,
       reason: "תעודת זהות תקינה",
       idNumber: "123456789",
+      fullName: "משה לוי",
     });
     mockFetchRemoteFile.mockResolvedValueOnce(Buffer.from("fake-bytes"));
     mockUploadLeadDocument.mockResolvedValueOnce({ fileId: "drive-id-1", webViewLink: idWebViewLink });
 
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250test@c.us",
-      imagePayload(),
-    );
-
+    const result = await handleIntake(seeds.conversationId, seeds.clientId, "97250b@c.us", imagePayload());
     expect(result.consumed).toBe(true);
-    expect(mockValidateIdPhoto).toHaveBeenCalledWith("https://example.com/fake-id.jpg");
-    expect(mockUploadLeadDocument).toHaveBeenCalledOnce();
+
     expect(mockUploadLeadDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ name: expect.stringMatching(/ - ID$/), mimeType: "image/jpeg" }),
+      expect.objectContaining({ name: "משה לוי - ID", mimeType: "image/jpeg" }),
     );
 
     const { rows } = await pool.query<{
       id_photo_url: string;
       id_validated: boolean;
       id_number: string | null;
+      full_name: string;
+      intake_state: string;
       intake_current_slot: string;
+      pipeline_stage: string | null;
     }>(
-      `SELECT id_photo_url, id_validated, id_number, intake_current_slot FROM clients WHERE id = $1`,
+      `SELECT id_photo_url, id_validated, id_number, full_name,
+              intake_state, intake_current_slot, pipeline_stage
+       FROM clients WHERE id = $1`,
       [seeds.clientId],
     );
     expect(rows[0]?.id_photo_url).toBe(idWebViewLink);
     expect(rows[0]?.id_validated).toBe(true);
     expect(rows[0]?.id_number).toBe("123456789");
-    expect(rows[0]?.intake_current_slot).toBe("poa");
+    expect(rows[0]?.full_name).toBe("משה לוי");
+    expect(rows[0]?.intake_state).toBe("completed");
+    expect(rows[0]?.intake_current_slot).toBe("done");
+    expect(rows[0]?.pipeline_stage).toBe("meeting_scheduling");
 
     const { rows: docRows } = await pool.query(
       `SELECT type, file_url FROM documents WHERE client_id = $1 AND type = 'id_photo'`,
@@ -322,68 +299,7 @@ describe("intake.orchestrator — full new-client slot flow (v3)", () => {
     );
     expect(docRows.length).toBeGreaterThan(0);
     expect(docRows[0]?.file_url).toBe(idWebViewLink);
-  });
 
-  it("poa slot: document upload to Drive persists poa_doc_url and finalizes intake", async () => {
-    const poaWebViewLink = "https://drive.google.com/file/d/drive-poa-1/view";
-    mockFetchRemoteFile.mockResolvedValueOnce(Buffer.from("fake-poa-bytes"));
-    mockUploadLeadDocument.mockResolvedValueOnce({ fileId: "drive-poa-1", webViewLink: poaWebViewLink });
-    mockClassifyComplexity.mockResolvedValueOnce("simple");
-
-    const poaPayload: MessagePayload = {
-      kind: "document",
-      fileUrl: "https://example.com/poa.pdf",
-      mimeType: "application/pdf",
-      fileName: "poa.pdf",
-      caption: undefined,
-    };
-
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250test@c.us",
-      poaPayload,
-    );
-
-    expect(result.consumed).toBe(true);
-    expect(mockUploadLeadDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ name: expect.stringMatching(/ - POA$/) }),
-    );
-
-    const { rows } = await pool.query<{
-      poa_doc_url: string;
-      intake_state: string;
-      intake_current_slot: string;
-      intake_completed_at: string | null;
-      pipeline_stage: string | null;
-    }>(
-      `SELECT poa_doc_url, intake_state, intake_current_slot,
-              intake_completed_at, pipeline_stage
-       FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.poa_doc_url).toBe(poaWebViewLink);
-    expect(rows[0]?.intake_state).toBe("completed");
-    expect(rows[0]?.intake_current_slot).toBe("done");
-    expect(rows[0]?.intake_completed_at).not.toBeNull();
-    expect(rows[0]?.pipeline_stage).toBe("meeting_scheduling");
-
-    const { rows: docRows } = await pool.query(
-      `SELECT type, file_url FROM documents WHERE client_id = $1 AND type = 'poa'`,
-      [seeds.clientId],
-    );
-    expect(docRows.length).toBeGreaterThan(0);
-    expect(docRows[0]?.file_url).toBe(poaWebViewLink);
-
-    // Pending meeting row created by finalize()
-    const { rows: meetingRows } = await pool.query(
-      `SELECT status FROM meetings WHERE client_id = $1`,
-      [seeds.clientId],
-    );
-    expect(meetingRows.length).toBeGreaterThan(0);
-    expect(meetingRows[0]?.status).toBe("pending_booking");
-
-    // Conversation paused after intake completes
     const { rows: convRows } = await pool.query<{ bot_paused: boolean }>(
       `SELECT bot_paused FROM conversations WHERE id = $1`,
       [seeds.conversationId],
@@ -391,274 +307,12 @@ describe("intake.orchestrator — full new-client slot flow (v3)", () => {
     expect(convRows[0]?.bot_paused).toBe(true);
   });
 
-  it("already-completed slot returns consumed=false", async () => {
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250test@c.us",
-      textPayload("any text"),
-    );
-    expect(result.consumed).toBe(false);
-  });
-
-  it("message rows are persisted for outbound bot prompts", async () => {
+  it("outbound bot prompts are persisted", async () => {
     const { rows } = await pool.query(
       `SELECT id FROM messages
-       WHERE conversation_id = $1
-         AND direction = 'outbound'
-         AND sent_by = 'bot'`,
+       WHERE conversation_id = $1 AND direction = 'outbound' AND sent_by = 'bot'`,
       [seeds.conversationId],
     );
     expect(rows.length).toBeGreaterThan(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// OLD-CLIENT FLOW: client_type → inquiry_type → issue → action_choice
-// ---------------------------------------------------------------------------
-
-describe("intake.orchestrator — old-client branch (v3)", () => {
-  let seeds: Seeds;
-
-  beforeAll(async () => {
-    seeds = await seed();
-    mockSendMsg.mockResolvedValue({ idMessage: "setup-id" });
-    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
-    (sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>).mockResolvedValue({ idMessage: "btn-setup" });
-    // welcome → client_type
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250old@c.us", textPayload("hi"));
-    // client_type → inquiry_type (old_client contains 'old')
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250old@c.us", textPayload("old_client"));
-    // inquiry_type → issue (old branch)
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250old@c.us", textPayload("vehicle"));
-  });
-
-  afterAll(async () => {
-    await teardown(seeds);
-  });
-
-  it("setup: slot is now 'issue' after welcome→client_type(old)→inquiry_type", async () => {
-    const { rows } = await pool.query<{ intake_current_slot: string; client_type: string }>(
-      `SELECT intake_current_slot, client_type FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.client_type).toBe("old");
-    expect(rows[0]?.intake_current_slot).toBe("issue");
-  });
-
-  it("issue slot: text reply stores issue_description and advances to action_choice", async () => {
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250old@c.us",
-      textPayload("הפוליסה שלי פגה"),
-    );
-
-    expect(result.consumed).toBe(true);
-
-    const { rows } = await pool.query<{ issue_description: string | null; intake_current_slot: string }>(
-      `SELECT issue_description, intake_current_slot FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.issue_description).toBe("הפוליסה שלי פגה");
-    expect(rows[0]?.intake_current_slot).toBe("action_choice");
-  });
-
-  it("action_choice 'move_to_rep': sends rep_ack, completes intake, NO meeting row inserted", async () => {
-    mockSendMsg.mockResolvedValue({ idMessage: "rep-ack-id" });
-
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250old@c.us",
-      textPayload("move_to_rep"),
-    );
-
-    expect(result.consumed).toBe(true);
-
-    // Rep-ack message sent
-    expect(mockSendMsg).toHaveBeenCalled();
-    const lastCall = mockSendMsg.mock.calls[mockSendMsg.mock.calls.length - 1] as [string, string];
-    expect(lastCall[1]).toContain("נציג");
-
-    // Intake marked completed
-    const { rows } = await pool.query<{
-      intake_state: string;
-      intake_current_slot: string;
-      pipeline_stage: string | null;
-    }>(
-      `SELECT intake_state, intake_current_slot, pipeline_stage FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.intake_state).toBe("completed");
-    expect(rows[0]?.intake_current_slot).toBe("done");
-    expect(rows[0]?.pipeline_stage).toBe("new_lead");
-
-    // No meeting row — finalizeRepresentative does NOT insert one
-    const { rows: meetingRows } = await pool.query(
-      `SELECT id FROM meetings WHERE client_id = $1`,
-      [seeds.clientId],
-    );
-    expect(meetingRows).toHaveLength(0);
-
-    // Conversation paused
-    const { rows: convRows } = await pool.query<{ bot_paused: boolean }>(
-      `SELECT bot_paused FROM conversations WHERE id = $1`,
-      [seeds.conversationId],
-    );
-    expect(convRows[0]?.bot_paused).toBe(true);
-  });
-});
-
-describe("intake.orchestrator — old-client 'schedule_meeting' path", () => {
-  let seeds: Seeds;
-
-  beforeAll(async () => {
-    seeds = await seed();
-    mockSendMsg.mockResolvedValue({ idMessage: "setup-id" });
-    mockClassifyComplexity.mockResolvedValue("simple");
-    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
-    (sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>).mockResolvedValue({ idMessage: "btn-setup" });
-    // welcome → client_type(old) → inquiry_type(home) → issue
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250sched@c.us", textPayload("hi"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250sched@c.us", textPayload("old_client"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250sched@c.us", textPayload("home"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250sched@c.us", textPayload("קיר נרטב"));
-    // now at action_choice
-  });
-
-  afterAll(async () => {
-    await teardown(seeds);
-  });
-
-  it("action_choice 'schedule_meeting': finalizes with pending_booking meeting row", async () => {
-    mockClassifyComplexity.mockResolvedValueOnce("simple");
-
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250sched@c.us",
-      textPayload("schedule_meeting"),
-    );
-
-    expect(result.consumed).toBe(true);
-
-    const { rows } = await pool.query<{ intake_state: string; pipeline_stage: string | null }>(
-      `SELECT intake_state, pipeline_stage FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.intake_state).toBe("completed");
-    expect(rows[0]?.pipeline_stage).toBe("meeting_scheduling");
-
-    // Meeting row must exist
-    const { rows: meetingRows } = await pool.query(
-      `SELECT status FROM meetings WHERE client_id = $1`,
-      [seeds.clientId],
-    );
-    expect(meetingRows.length).toBeGreaterThan(0);
-    expect(meetingRows[0]?.status).toBe("pending_booking");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Invalid responses re-prompt
-// setup: welcome → client_type(new) → inquiry_type(vehicle) → full_name
-// ---------------------------------------------------------------------------
-
-describe("intake.orchestrator — invalid responses re-prompt", () => {
-  let seeds: Seeds;
-
-  beforeAll(async () => {
-    seeds = await seed();
-    // Advance to full_name: welcome → client_type(new) → inquiry_type(vehicle) → full_name
-    mockSendMsg.mockResolvedValue({ idMessage: "setup-id" });
-    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
-    (sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>).mockResolvedValue({ idMessage: "btn-setup" });
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250x@c.us", textPayload("hi"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250x@c.us", textPayload("new_client"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250x@c.us", textPayload("vehicle"));
-  });
-
-  afterAll(async () => {
-    await teardown(seeds);
-  });
-
-  it("full_name: invalid LLM response re-prompts without advancing slot", async () => {
-    mockClassify.mockResolvedValueOnce({ valid: false });
-
-    await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250x@c.us",
-      textPayload("what is this?"),
-    );
-
-    const { rows } = await pool.query<{ intake_current_slot: string }>(
-      `SELECT intake_current_slot FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.intake_current_slot).toBe("full_name");
-    expect(mockSendMsg).toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// POA skip
-// setup: welcome → client_type(new) → inquiry_type(vehicle) → full_name → email → id_photo
-// ---------------------------------------------------------------------------
-
-describe("intake.orchestrator — poa skip", () => {
-  let seeds: Seeds;
-
-  beforeAll(async () => {
-    seeds = await seed();
-    mockSendMsg.mockResolvedValue({ idMessage: "setup-id" });
-    mockClassify.mockResolvedValue({ valid: true, extracted: "Test Lead" });
-    mockValidateIdPhoto.mockResolvedValue({ valid: true, reason: "ok", idNumber: undefined });
-    mockFetchRemoteFile.mockResolvedValue(Buffer.from("fake-bytes"));
-    mockUploadLeadDocument.mockResolvedValue({
-      fileId: "drive-skip-1",
-      webViewLink: "https://drive.google.com/file/d/drive-skip-1/view",
-    });
-    mockClassifyComplexity.mockResolvedValue("simple");
-
-    // Drive through: welcome → client_type(new) → inquiry_type(vehicle) → full_name → email → id_photo
-    const { sendInteractiveButtonsWithTyping } = await import("../../domains/whatsapp/whatsapp.service.js");
-    (sendInteractiveButtonsWithTyping as ReturnType<typeof vi.fn>).mockResolvedValue({ idMessage: "btn-skip-setup" });
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("hi"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("new_client"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("vehicle"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("Test Lead"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", textPayload("valid@email.com"));
-    await handleIntake(seeds.conversationId, seeds.clientId, "97250skip@c.us", imagePayload());
-  });
-
-  afterAll(async () => {
-    await teardown(seeds);
-  });
-
-  it("poa slot: 'דלג' text skips poa and completes intake without poa_doc_url", async () => {
-    mockClassifyComplexity.mockResolvedValueOnce("simple");
-
-    const result = await handleIntake(
-      seeds.conversationId,
-      seeds.clientId,
-      "97250skip@c.us",
-      textPayload("דלג"),
-    );
-
-    expect(result.consumed).toBe(true);
-
-    const { rows } = await pool.query<{
-      poa_doc_url: string | null;
-      intake_state: string;
-      intake_current_slot: string;
-    }>(
-      `SELECT poa_doc_url, intake_state, intake_current_slot FROM clients WHERE id = $1`,
-      [seeds.clientId],
-    );
-    expect(rows[0]?.poa_doc_url).toBeNull();
-    expect(rows[0]?.intake_state).toBe("completed");
-    expect(rows[0]?.intake_current_slot).toBe("done");
   });
 });

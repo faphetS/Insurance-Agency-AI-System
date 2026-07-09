@@ -1,59 +1,3 @@
-export const INTAKE_PROMPTS = {
-  welcome: {
-    text1: "שלום! לפני קביעת הפגישה, נדרשים מספר פרטים ומסמכים. בואו נתחיל",
-    text2: "מהו השם המלא?",
-  },
-  client_type: {
-    text: "היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. נשמח לעזור לך! כדי שנוכל להפנות אותך לגורם המתאים, אנא בחר/י:",
-    buttons: [
-      { buttonId: "old_client", buttonText: "אני לקוח/ה קיים/ת" },
-      { buttonId: "new_client", buttonText: "אני עדיין לא לקוח/ה" },
-    ],
-  },
-  full_name: { text: "מהו השם המלא?" },
-  email: { text: "מהי כתובת האימייל?" },
-  inquiry_type: {
-    text: "כדי שנוכל לתת לך את המענה המדויק ביותר, באיזה נושא נוכל לעזור לך היום? אנא בחר/י מהרשימה",
-    buttons: [
-      { buttonId: "vehicle", buttonText: "ביטוח רכב" },
-      { buttonId: "home", buttonText: "ביטוח דירה" },
-      { buttonId: "business", buttonText: "ביטוח עסקים" },
-      { buttonId: "life_health_pension", buttonText: 'ביטוח חיים/בריאות/פנסיה' },
-      { buttonId: "travel", buttonText: 'ביטוח נסיעות לחו"ל' },
-      { buttonId: "finance", buttonText: "פיננסים" },
-      { buttonId: "other", buttonText: "אחר" },
-    ],
-  },
-  issue: {
-    text: "אנא ספר/י לנו מהי הבעיה או הנושא שבו תרצה/י שנעזור לך.",
-  },
-  action_choice: {
-    text: "מה תרצה/י לעשות?",
-    buttons: [
-      { buttonId: "move_to_rep", buttonText: "מעבר לנציג/ה" },
-      { buttonId: "schedule_meeting", buttonText: "קביעת פגישה" },
-    ],
-  },
-  rep_ack: {
-    text: "מצוין, העברנו את הפרטים לנציג/ה הרלוונטי/ת — ניצור איתך קשר בהקדם. תודה! 🙏",
-  },
-  id_photo: {
-    text: "נא לשלוח תמונה ברורה של תעודת הזהות (הצד הקדמי). חשוב שהטקסט יהיה קריא.",
-  },
-  id_photo_invalid: {
-    text: "לא ניתן לאמת את תמונת תעודת הזהות — {reason}. נא לשלוח תמונה נוספת וברורה של תעודת הזהות.",
-  },
-  poa: {
-    text: 'במידה ויש מסמך ייפוי כוח, נא לשלוח אותו כעת. אחרת, יש להשיב "דלג".',
-  },
-  done: {
-    text: "תודה! התקבלו כל הפרטים הנדרשים. ייווצר קשר בהקדם לקביעת הפגישה.",
-  },
-  done_existing: {
-    text: "לקביעת פגישה, ניתן לבחור מועד נוח בקישור הבא:",
-  },
-} as const;
-
 export const INQUIRY_TYPES = [
   "vehicle",
   "home",
@@ -76,21 +20,74 @@ export const INQUIRY_TYPE_HE: Record<string, string> = {
   other: "אחר",
 };
 
-// Linear new-client slot order. `issue` and `action_choice` are old-client
-// branch-only terminals resolved via INTAKE_PROMPTS lookup in advanceTo —
-// they are intentionally absent from this array.
+const INQUIRY_BUTTONS = [
+  { buttonId: "vehicle", buttonText: "ביטוח רכב" },
+  { buttonId: "home", buttonText: "ביטוח דירה" },
+  { buttonId: "business", buttonText: "ביטוח עסקים" },
+  { buttonId: "life_health_pension", buttonText: "ביטוח חיים/בריאות/פנסיה" },
+  { buttonId: "travel", buttonText: 'ביטוח נסיעות לחו"ל' },
+  { buttonId: "finance", buttonText: "פיננסים" },
+  { buttonId: "other", buttonText: "אחר" },
+] as const;
+
+export const INTAKE_PROMPTS = {
+  // Opening menu — Didi's flowchart text verbatim + 9 buttons (brand image sent as a 2nd bubble).
+  menu: {
+    text:
+      "היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. אנו שמחים שפנית אלינו באפשרותך לבצע מספר פעולות או להשאיר הודעה ונחזור אליך בהקדם אנא בחר מתפריט:",
+    buttons: [
+      ...INQUIRY_BUTTONS,
+      { buttonId: "callback_didi", buttonText: "מבקש שדידי יחזור אליי" },
+      { buttonId: "meeting_didi", buttonText: "בקשת תיאום פגישה עם דידי" },
+    ],
+  },
+  // Button 9 sub-choice: existing vs new client.
+  meeting_type: {
+    text: "כדי שנוכל לסייע לך בצורה הטובה ביותר בתיאום ייעוץ מקצועי, אנא בחר:",
+    buttons: [
+      { buttonId: "existing_client", buttonText: "לקוח קיים" },
+      { buttonId: "new_client", buttonText: "לקוח חדש" },
+    ],
+  },
+  // Consent step (new client) — single מאשר button; only the TAP advances.
+  consent: {
+    text:
+      "רגע לפני תיאום הפגישה, כדי שנהיה מוכנים היטב לקראת פגישתנו אנו זקוקים לאישורך להזמנת נתונים ממסלקה פנסיונית והר הביטוח.",
+    buttons: [{ buttonId: "consent_approve", buttonText: "מאשר" }],
+  },
+  consent_reprompt: {
+    text: 'כדי להמשיך, יש ללחוץ על כפתור "מאשר"',
+  },
+  menu_reprompt: {
+    text: "אנא בחר אחת מהאפשרויות בתפריט למעלה",
+  },
+  id_photo: {
+    text: "תודה, לצורך הזמנת הנתונים נשמח לקבל צילום תעודת הזהות שלך (כולל ספח)",
+  },
+  id_photo_invalid: {
+    text: "לא ניתן לאמת את תמונת תעודת הזהות — {reason}. נא לשלוח תמונה נוספת וברורה של תעודת הזהות.",
+  },
+  thanks_menu: {
+    text: "תודה על פנייתך! קיבלנו את הפרטים וניצור איתך קשר בהקדם.",
+  },
+  thanks_callback: {
+    text: "תודה! הפרטים הועברו לדידי והוא יחזור אליך בהקדם.",
+  },
+  done_existing: {
+    text: "לקביעת פגישה, ניתן לבחור מועד נוח בקישור הבא:",
+  },
+  done_new: {
+    text: "תודה רבה! קיבלנו את כל הפרטים. לקביעת הפגישה, ניתן לבחור מועד נוח בקישור הבא:",
+  },
+} as const;
+
 export const SLOT_ORDER = [
   "welcome",
-  "client_type",
-  "inquiry_type",
-  "full_name",
-  "email",
+  "menu",
+  "meeting_type",
+  "consent",
   "id_photo",
-  "poa",
   "done",
 ] as const;
 
-export type IntakeSlot =
-  | (typeof SLOT_ORDER)[number]
-  | "issue"
-  | "action_choice";
+export type IntakeSlot = (typeof SLOT_ORDER)[number];

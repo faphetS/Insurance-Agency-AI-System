@@ -98,7 +98,11 @@ export async function appendLeadRow(values: string[], tabTitle?: string): Promis
   }
 }
 
-export async function upsertLeadRow(values: string[], tabTitle?: string): Promise<boolean> {
+export async function upsertLeadRow(
+  values: string[],
+  tabTitle?: string,
+  opts?: { setOnceColumns?: number[] },
+): Promise<boolean> {
   const phone = String(values[0] ?? "").replace(/\D/g, "");
 
   const title = await resolveLeadsTabTitle(tabTitle);
@@ -137,11 +141,29 @@ export async function upsertLeadRow(values: string[], tabTitle?: string): Promis
     const endCol = colLetter(values.length);
 
     if (foundRow !== null) {
+      const outValues = [...values];
+
+      // Preserve set-once columns (e.g. creation date) that already hold a value.
+      const setOnce = opts?.setOnceColumns;
+      if (setOnce && setOnce.length > 0) {
+        const existingRes = await sheets.spreadsheets.values.get({
+          spreadsheetId: env.LEADS_SPREADSHEET_ID,
+          range: `${title}!A${foundRow}:${endCol}${foundRow}`,
+        });
+        const existing = ((existingRes.data.values as string[][] | null | undefined) ?? [])[0] ?? [];
+        for (const idx of setOnce) {
+          const prev = existing[idx];
+          if (typeof prev === "string" && prev.trim() !== "") {
+            outValues[idx] = prev;
+          }
+        }
+      }
+
       await sheets.spreadsheets.values.update({
         spreadsheetId: env.LEADS_SPREADSHEET_ID,
         range: `${title}!A${foundRow}:${endCol}${foundRow}`,
         valueInputOption: "RAW",
-        requestBody: { values: [values] },
+        requestBody: { values: [outValues] },
       });
     } else {
       await sheets.spreadsheets.values.append({

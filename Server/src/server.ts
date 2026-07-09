@@ -3,14 +3,16 @@ import cors from "cors";
 import cron from "node-cron";
 import express, { type Request, type Response } from "express";
 import { ensureClientDocumentsBucket } from "./lib/storage.js";
-import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeless.service.js";
-import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
+// v4: disabled — calendar/timeless machinery gated off (services kept dormant).
+// import { ensureWebhookRegistered } from "./domains/integrations/timeless/timeless.service.js";
+// import { startTimelessPollCron } from "./domains/integrations/timeless/timeless.poll.js";
 import { startCommitmentCrons } from "./domains/commitments/commitments.service.js";
 import { sendMorningDigest } from "./domains/operations/morning-digest.service.js";
 import { runStaffEmailNotify } from "./domains/operations/email-mentions.service.js";
-import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
-import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
-import { checkServiceMeetingEligibility } from "./domains/calendar/service-meeting.service.js";
+// v4: disabled — booking-sync + calendar reminders gated off (services kept dormant).
+// import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
+// import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
+import { checkIntakeStalls } from "./domains/ai/intake-stall.service.js";
 import helmet from "helmet";
 import hpp from "hpp";
 import { fileURLToPath } from "node:url";
@@ -140,20 +142,21 @@ const server = app.listen(env.PORT, () => {
     webhookUrl.startsWith("https://") &&
     !/(localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(webhookUrl);
 
-  // Timeless webhook registration + hourly poll cron — skipped in dev (same guard as WhatsApp above)
-  if (isPublicWebhook && env.TIMELESS_API_KEY) {
-    ensureWebhookRegistered()
-      .then(() => logger.info("Timeless webhook registered"))
-      .catch((err: unknown) =>
-        logger.warn({ err }, "Timeless webhook registration failed — continuing"),
-      );
-    startTimelessPollCron();
-  } else {
-    logger.info(
-      { nodeEnv: env.NODE_ENV },
-      "Skipping Timeless webhook/cron — BACKEND_URL is not public or TIMELESS_API_KEY is not set",
-    );
-  }
+  // v4: disabled — Timeless webhook registration + hourly poll cron (post-meeting flow gated off).
+  // The Timeless webhook route stays registered (HMAC-verified, dormant); only these run-loops are off.
+  // if (isPublicWebhook && env.TIMELESS_API_KEY) {
+  //   ensureWebhookRegistered()
+  //     .then(() => logger.info("Timeless webhook registered"))
+  //     .catch((err: unknown) =>
+  //       logger.warn({ err }, "Timeless webhook registration failed — continuing"),
+  //     );
+  //   startTimelessPollCron();
+  // } else {
+  //   logger.info(
+  //     { nodeEnv: env.NODE_ENV },
+  //     "Skipping Timeless webhook/cron — BACKEND_URL is not public or TIMELESS_API_KEY is not set",
+  //   );
+  // }
 
   // All schedulers — public deployments only (guard prevents dev boots from sending
   // live WhatsApp messages, mutating prod data, or overwriting production webhooks)
@@ -173,35 +176,31 @@ const server = app.listen(env.PORT, () => {
       { timezone: "Asia/Jerusalem" },
     );
 
-    // Calendar sync: initial run after 30s, then every 3 minutes
-    setTimeout(() => {
-      syncNewBookings().catch((err: unknown) =>
-        logger.error({ err }, "booking-sync: initial run failed"),
-      );
-    }, 30_000);
-    setInterval(() => {
-      syncNewBookings().catch((err: unknown) =>
-        logger.error({ err }, "booking-sync: scheduled run failed"),
-      );
-    }, 3 * 60 * 1000);
+    // v4: disabled — calendar booking-sync (services kept dormant).
+    // setTimeout(() => {
+    //   syncNewBookings().catch((err: unknown) =>
+    //     logger.error({ err }, "booking-sync: initial run failed"),
+    //   );
+    // }, 30_000);
+    // setInterval(() => {
+    //   syncNewBookings().catch((err: unknown) =>
+    //     logger.error({ err }, "booking-sync: scheduled run failed"),
+    //   );
+    // }, 3 * 60 * 1000);
 
-    // Reminder check: every 10 minutes
+    // v4: disabled — calendar 24h/1h reminder check (services kept dormant).
+    // setInterval(() => {
+    //   checkAndSendReminders().catch((err: unknown) =>
+    //     logger.error({ err }, "reminder: scheduled check failed"),
+    //   );
+    // }, 10 * 60 * 1000);
+
+    // Intake stall watcher — every 10 minutes, alert Didi when the consent/ID step stalls 3h+.
     setInterval(() => {
-      checkAndSendReminders().catch((err: unknown) =>
-        logger.error({ err }, "reminder: scheduled check failed"),
+      checkIntakeStalls().catch((err: unknown) =>
+        logger.error({ err }, "intake-stall: scheduled check failed"),
       );
     }, 10 * 60 * 1000);
-
-    // Service meeting eligibility — daily at 08:10 Jerusalem (staggered after the 08:00 digest)
-    cron.schedule(
-      "10 8 * * *",
-      () => {
-        checkServiceMeetingEligibility().catch((err: unknown) =>
-          logger.error({ err }, "service-meeting: eligibility check failed"),
-        );
-      },
-      { timezone: "Asia/Jerusalem" },
-    );
   } else {
     logger.info("Skipping booking/reminder schedulers — BACKEND_URL not public");
   }

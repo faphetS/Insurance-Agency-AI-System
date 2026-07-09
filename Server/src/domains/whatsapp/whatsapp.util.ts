@@ -12,6 +12,20 @@ export function extractButtonId(reqBody: unknown): string {
   );
 }
 
+export function toLocalPhone(raw: string | null | undefined): string {
+  const d = (raw ?? "").replace(/\D/g, "");
+  const local = d.startsWith("972") ? "0" + d.slice(3) : d;
+  return /^0\d{9}$/.test(local) ? local.slice(0, 3) + "-" + local.slice(3) : local;
+}
+
+export function displayName(fullName: string | null | undefined, phone: string | null | undefined): string | null {
+  const n = (fullName ?? "").trim();
+  if (!n) return null;
+  const nd = n.replace(/\D/g, "");
+  const pd = (phone ?? "").replace(/\D/g, "");
+  return pd && nd === pd ? null : n; // full_name that is just the phone => treated as missing
+}
+
 export function toChatId(raw: string | null | undefined): string | null {
   if (!raw) return null;
 

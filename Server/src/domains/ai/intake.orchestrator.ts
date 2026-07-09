@@ -9,13 +9,18 @@ import {
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
 import {
   INTAKE_PROMPTS,
+  INQUIRY_TYPES,
   type IntakeSlot,
 } from "./intake.prompts.js";
-import { validateIdPhoto, classifyComplexity, classifyIntakeResponse } from "./ai.service.js";
+import { validateIdPhoto } from "./ai.service.js";
 import { fetchRemoteFile } from "../../lib/storage.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
-import { notifyDepartmentForInquiry } from "../whatsapp/department-routing.js";
+import { notifyOwner } from "../operations/owner-notify.js";
+import { sendStaffLeadEmail, buildCallbackAlert } from "./intake-notify.service.js";
+import { displayName } from "../whatsapp/whatsapp.util.js";
+
+const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Type helpers — the DB types file predates the migration; cast as needed
@@ -24,24 +29,35 @@ import { notifyDepartmentForInquiry } from "../whatsapp/department-routing.js";
 /** Extended client update shape that includes the new intake columns. */
 interface ClientIntakeUpdate {
   full_name?: string;
-  email?: string | null;
   inquiry_type?: string;
   id_photo_url?: string;
   id_validated?: boolean;
   id_number?: string | null;
-  poa_doc_url?: string;
   intake_state?: string;
   intake_current_slot?: string;
   intake_completed_at?: string | null;
   pipeline_stage?: string | null;
-  complexity?: string | null;
   client_type?: string | null;
-  issue_description?: string | null;
+  consent_prompted_at?: string | null;
+  stall_notified_at?: string | null;
 }
 
 function updateClient(id: string, values: ClientIntakeUpdate) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return supabaseAdmin.from("clients").update(values as any).eq("id", id);
+}
+
+/** Load the phone + WhatsApp display name for a client. */
+async function loadContact(clientId: string): Promise<{ phone: string; fullName: string | null }> {
+  const { data } = await supabaseAdmin
+    .from("clients")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select("full_name, phone" as any)
+    .eq("id", clientId)
+    .maybeSingle();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const row = data as any as { full_name?: string | null; phone?: string | null } | null;
+  return { phone: row?.phone ?? "", fullName: row?.full_name ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -70,52 +86,53 @@ async function persistOutbound(
   }
 }
 
-/** Send the plain-text prompt for a given slot and persist it. */
-async function sendTextPrompt(
+/** Send an arbitrary plain-text message and persist it. */
+async function sendText(
   conversationId: string,
   chatId: string,
-  slot: Exclude<IntakeSlot, "welcome">,
+  text: string,
 ): Promise<void> {
-  const prompt = INTAKE_PROMPTS[slot as keyof typeof INTAKE_PROMPTS];
-  const text = (prompt as { text: string }).text;
   try {
     const { idMessage } = await sendMessageWithTyping(chatId, text);
     await persistOutbound(conversationId, text, idMessage);
   } catch (err) {
-    logger.error({ conversationId, slot, err }, "intake: sendTextPrompt failed");
+    logger.error({ conversationId, err }, "intake: sendText failed");
   }
+}
+
+/** Send the plain-text prompt for a given slot key and persist it. */
+async function sendTextPrompt(
+  conversationId: string,
+  chatId: string,
+  slot: keyof typeof INTAKE_PROMPTS,
+): Promise<void> {
+  const prompt = INTAKE_PROMPTS[slot] as { text: string };
+  await sendText(conversationId, chatId, prompt.text);
 }
 
 /** Send an interactive-buttons prompt for any button-bearing slot and persist it. */
 async function sendButtonPrompt(
   conversationId: string,
   chatId: string,
-  slot: "client_type" | "inquiry_type" | "action_choice",
+  slot: "menu" | "meeting_type" | "consent",
 ): Promise<void> {
   const prompt = INTAKE_PROMPTS[slot];
-  const footer = "footer" in prompt ? (prompt as { footer: string }).footer : undefined;
-  const fullText = footer ? `${prompt.text}\n${footer}` : prompt.text;
 
   try {
     const { idMessage } = await sendInteractiveButtonsWithTyping(
       chatId,
       prompt.text,
       [...prompt.buttons],
-      footer,
     );
-    await persistOutbound(conversationId, fullText, idMessage);
+    await persistOutbound(conversationId, prompt.text, idMessage);
   } catch (err) {
     logger.warn(
       { conversationId, slot, err },
       "intake: interactive buttons failed — falling back to plain text",
     );
     try {
-      const buttonList = prompt.buttons
-        .map((b) => `• ${b.buttonText}`)
-        .join("\n");
-      const fallback = footer
-        ? `${prompt.text}\n\n${buttonList}\n\n${footer}`
-        : `${prompt.text}\n\n${buttonList}`;
+      const buttonList = prompt.buttons.map((b) => `• ${b.buttonText}`).join("\n");
+      const fallback = `${prompt.text}\n\n${buttonList}`;
       const { idMessage } = await sendMessageWithTyping(chatId, fallback);
       await persistOutbound(conversationId, fallback, idMessage);
     } catch (fallbackErr) {
@@ -127,16 +144,14 @@ async function sendButtonPrompt(
   }
 }
 
-/** Advance intake_current_slot to next and send the corresponding question. */
+/** Advance intake_current_slot to next and send the corresponding prompt. */
 async function advanceTo(
   conversationId: string,
   chatId: string,
   clientId: string,
   next: IntakeSlot,
 ): Promise<void> {
-  const { error } = await updateClient(clientId, {
-    intake_current_slot: next,
-  });
+  const { error } = await updateClient(clientId, { intake_current_slot: next });
 
   if (error) {
     logger.error(
@@ -152,144 +167,41 @@ async function advanceTo(
     logger.warn({ err, clientId }, "intake: advanceTo lead sheet sync failed");
   }
 
-  if (next === "done") {
-    await finalize(conversationId, chatId, clientId);
-    return;
-  }
-
   const prompt = INTAKE_PROMPTS[next as keyof typeof INTAKE_PROMPTS];
   if (prompt && "buttons" in prompt) {
-    await sendButtonPrompt(conversationId, chatId, next as "client_type" | "inquiry_type" | "action_choice");
+    await sendButtonPrompt(conversationId, chatId, next as "menu" | "meeting_type" | "consent");
   } else {
-    await sendTextPrompt(conversationId, chatId, next as Exclude<IntakeSlot, "welcome">);
+    await sendTextPrompt(conversationId, chatId, next as keyof typeof INTAKE_PROMPTS);
   }
 }
 
-/** Mark intake complete, flip pipeline_stage, send done message. */
-async function finalize(
+/** Terminal: mark intake complete, flip pipeline_stage, 24h cooldown pause, mirror. */
+async function endFlow(
   conversationId: string,
-  chatId: string,
   clientId: string,
+  pipelineStage: "new_lead" | "meeting_scheduling",
 ): Promise<void> {
-  // Load client data needed for complexity classification and message branching.
-  const { data: clientForComplexity } = await supabaseAdmin
-    .from("clients")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select("inquiry_type, poa_doc_url, email, client_type" as any)
-    .eq("id", clientId)
-    .maybeSingle();
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const clientRow = clientForComplexity as any as {
-    inquiry_type?: string | null;
-    poa_doc_url?: string | null;
-    email?: string | null;
-    client_type?: string | null;
-  } | null;
-
-  const isOld = clientRow?.client_type === "old";
-
-  // Old clients have no inquiry/poa to classify — skip the LLM call.
-  const complexity = isOld
-    ? "simple"
-    : await classifyComplexity(
-        clientRow?.inquiry_type ?? "unknown",
-        { poa_doc_url: clientRow?.poa_doc_url, email: clientRow?.email },
-      );
-
-  const { error } = await updateClient(clientId, {
+  await updateClient(clientId, {
     intake_state: "completed",
     intake_current_slot: "done",
     intake_completed_at: new Date().toISOString(),
-    pipeline_stage: "meeting_scheduling",
-    complexity,
+    pipeline_stage: pipelineStage,
   });
-
-  if (error) {
-    logger.error(
-      { conversationId, clientId, error },
-      "intake: failed to finalize",
-    );
-    return;
-  }
-
-  if (complexity === "complex") {
-    logger.info({ clientId, complexity }, "intake: complex case flagged");
-  }
-
-  // Insert pending meeting row so booking-sync can match it when the event arrives
-  const now = new Date().toISOString();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (supabaseAdmin as any)
-    .from("meetings")
-    .insert({
-      client_id: clientId,
-      conversation_id: conversationId,
-      type: "google_meet",
-      scheduled_at: now,
-      status: "pending_booking",
-      created_at: now,
-      updated_at: now,
-    });
-
-  const doneText = isOld
-    ? `${INTAKE_PROMPTS.done_existing.text}\n\n${env.GOOGLE_CALENDAR_BOOKING_URL}`
-    : `${INTAKE_PROMPTS.done.text}\n\nלקביעת הפגישה: ${env.GOOGLE_CALENDAR_BOOKING_URL}`;
-  try {
-    const { idMessage } = await sendMessageWithTyping(chatId, doneText);
-    await persistOutbound(conversationId, doneText, idMessage);
-  } catch (err) {
-    logger.error({ conversationId, err }, "intake: failed to send done message");
-  }
-
-  try {
-    await mirrorLeadToSheet(clientId);
-  } catch (err) {
-    logger.error({ err, clientId }, "finalize: lead sheet mirror failed");
-  }
 
   await supabaseAdmin
     .from("conversations")
-    .update({ bot_paused: true })
-    .eq("id", conversationId);
-
-  logger.info({ conversationId, clientId }, "intake: completed");
-}
-
-/** Mark intake complete as a representative hand-off (no meeting row, no booking link). */
-async function finalizeRepresentative(
-  conversationId: string,
-  clientId: string,
-): Promise<void> {
-  const { error } = await updateClient(clientId, {
-    intake_state: "completed",
-    intake_current_slot: "done",
-    intake_completed_at: new Date().toISOString(),
-    pipeline_stage: "new_lead",
-  });
-
-  if (error) {
-    logger.error(
-      { conversationId, clientId, error },
-      "intake: finalizeRepresentative failed to update client",
-    );
-    return;
-  }
-
-  await supabaseAdmin
-    .from("conversations")
-    .update({ bot_paused: true })
+    .update({
+      bot_paused: true,
+      bot_paused_until: new Date(Date.now() + COOLDOWN_MS).toISOString(),
+    })
     .eq("id", conversationId);
 
   try {
     await mirrorLeadToSheet(clientId);
   } catch (err) {
-    logger.error({ err, clientId }, "finalizeRepresentative: lead sheet mirror failed");
+    logger.warn({ err, clientId }, "endFlow: mirror failed");
   }
-
-  logger.info({ conversationId, clientId }, "intake: representative hand-off completed");
 }
-
 
 // ---------------------------------------------------------------------------
 // Per-slot handlers
@@ -318,185 +230,126 @@ async function handleWelcome(
   chatId: string,
   clientId: string,
 ): Promise<void> {
-  await advanceTo(conversationId, chatId, clientId, "client_type");
+  await advanceTo(conversationId, chatId, clientId, "menu");
   sendWelcomeImage(conversationId, chatId);
 }
 
-async function handleClientType(
-  conversationId: string,
-  chatId: string,
-  clientId: string,
-  payload: MessagePayload,
-): Promise<void> {
-  // Map button tap to 'new' or 'old'.
-  // /old/i catches the button id `old_client`; קיים catches the Hebrew label "אני לקוח/ה קיים/ת".
-  const t = payload.kind === "text" ? payload.text : "";
-  const client_type: string = (/old/i.test(t) || t.includes("קיים")) ? "old" : "new";
-
-  await updateClient(clientId, { client_type });
-  await advanceTo(conversationId, chatId, clientId, "inquiry_type");
-}
-
-async function handleInquiryType(
+async function handleMenu(
   conversationId: string,
   chatId: string,
   clientId: string,
   payload: MessagePayload,
 ): Promise<void> {
   if (payload.kind !== "text") {
-    await sendButtonPrompt(conversationId, chatId, "inquiry_type");
+    await sendTextPrompt(conversationId, chatId, "menu_reprompt");
     return;
   }
 
   const val = payload.text.trim();
-  const buttons = INTAKE_PROMPTS.inquiry_type.buttons;
-  const matched = buttons.find((b) => b.buttonId === val || b.buttonText === val);
-
-  if (!matched) {
-    await sendButtonPrompt(conversationId, chatId, "inquiry_type");
-    return;
-  }
-
-  const { error: updateErr } = await updateClient(clientId, { inquiry_type: matched.buttonId });
-  if (updateErr) {
-    logger.error({ conversationId, clientId, updateErr }, "intake: failed to save inquiry_type");
-    return;
-  }
-
-  // Load client_type and phone for dept notification and routing
-  const { data: clientRow } = await supabaseAdmin
-    .from("clients")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select("client_type, phone" as any)
-    .eq("id", clientId)
-    .maybeSingle();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cr = clientRow as any as { client_type?: string | null; phone?: string | null } | null;
-  const clientType = cr?.client_type ?? null;
-  const phone = cr?.phone ?? "";
-
-  // Fire dept ping best-effort; never blocks intake
-  notifyDepartmentForInquiry(matched.buttonId, { phone, clientType }).catch((err: unknown) => {
-    logger.warn({ err, inquiryId: matched.buttonId }, "intake: dept notify failed (fire-and-forget)");
-  });
-
-  if (clientType === "old") {
-    await advanceTo(conversationId, chatId, clientId, "issue");
-  } else {
-    await advanceTo(conversationId, chatId, clientId, "full_name");
-  }
-}
-
-async function handleIssue(
-  conversationId: string,
-  chatId: string,
-  clientId: string,
-  payload: MessagePayload,
-): Promise<void> {
-  if (payload.kind !== "text" || payload.text.trim().length === 0) {
-    await sendTextPrompt(conversationId, chatId, "issue");
-    return;
-  }
-
-  await updateClient(clientId, { issue_description: payload.text.trim() });
-
-  await advanceTo(conversationId, chatId, clientId, "action_choice");
-}
-
-async function handleActionChoice(
-  conversationId: string,
-  chatId: string,
-  clientId: string,
-  payload: MessagePayload,
-): Promise<void> {
-  if (payload.kind !== "text") {
-    await sendButtonPrompt(conversationId, chatId, "action_choice");
-    return;
-  }
-
-  const val = payload.text.trim();
-
-  if (val === "move_to_rep" || val === "מעבר לנציג/ה") {
-    const repAckText = INTAKE_PROMPTS.rep_ack.text;
-    try {
-      const { idMessage } = await sendMessageWithTyping(chatId, repAckText);
-      await persistOutbound(conversationId, repAckText, idMessage);
-    } catch (err) {
-      logger.error({ conversationId, err }, "intake: failed to send rep_ack");
-    }
-    await finalizeRepresentative(conversationId, clientId);
-    return;
-  }
-
-  if (val === "schedule_meeting" || val === "קביעת פגישה") {
-    await advanceTo(conversationId, chatId, clientId, "done");
-    return;
-  }
-
-  await sendButtonPrompt(conversationId, chatId, "action_choice");
-}
-
-async function handleFullName(
-  conversationId: string,
-  chatId: string,
-  clientId: string,
-  payload: MessagePayload,
-): Promise<void> {
-  if (payload.kind !== "text" || payload.text.trim().length < 2) {
-    await sendTextPrompt(conversationId, chatId, "full_name");
-    return;
-  }
-
-  const result = await classifyIntakeResponse(
-    payload.text.trim(),
-    "full_name",
-    INTAKE_PROMPTS.full_name.text,
-    "A person's full name (first and last name). Not a greeting, question, or sentence.",
+  const matched = INTAKE_PROMPTS.menu.buttons.find(
+    (b) => b.buttonId === val || b.buttonText === val,
   );
 
-  if (!result.valid) {
-    await sendTextPrompt(conversationId, chatId, "full_name");
+  if (!matched) {
+    await sendTextPrompt(conversationId, chatId, "menu_reprompt");
     return;
   }
 
-  await updateClient(clientId, { full_name: result.extracted });
-  await advanceTo(conversationId, chatId, clientId, "email");
+  const id = matched.buttonId;
+
+  // Buttons 1-7 — insurance type → staff email → thank-you → bot off.
+  if ((INQUIRY_TYPES as readonly string[]).includes(id)) {
+    await updateClient(clientId, { inquiry_type: id });
+    const { phone, fullName } = await loadContact(clientId);
+    void sendStaffLeadEmail(id, { phone, waName: displayName(fullName, phone) }).catch(
+      (err: unknown) => logger.warn({ err, inquiryId: id }, "intake: staff lead email failed"),
+    );
+    await sendTextPrompt(conversationId, chatId, "thanks_menu");
+    await endFlow(conversationId, clientId, "new_lead");
+    return;
+  }
+
+  // Button 8 — request a callback from Didi.
+  if (id === "callback_didi") {
+    await updateClient(clientId, { inquiry_type: "callback" });
+    const { phone, fullName } = await loadContact(clientId);
+    try {
+      await notifyOwner(buildCallbackAlert(phone, displayName(fullName, phone)));
+    } catch (err) {
+      logger.warn({ err, clientId }, "intake: callback owner alert failed");
+    }
+    await sendTextPrompt(conversationId, chatId, "thanks_callback");
+    await endFlow(conversationId, clientId, "new_lead");
+    return;
+  }
+
+  // Button 9 — meeting request → existing/new sub-choice.
+  if (id === "meeting_didi") {
+    await updateClient(clientId, { inquiry_type: "meeting" });
+    await advanceTo(conversationId, chatId, clientId, "meeting_type");
+    return;
+  }
+
+  await sendTextPrompt(conversationId, chatId, "menu_reprompt");
 }
 
-async function handleEmail(
+async function handleMeetingType(
   conversationId: string,
   chatId: string,
   clientId: string,
   payload: MessagePayload,
 ): Promise<void> {
   if (payload.kind !== "text") {
-    await sendTextPrompt(conversationId, chatId, "email");
+    await sendTextPrompt(conversationId, chatId, "menu_reprompt");
     return;
   }
 
-  const raw = payload.text.trim();
+  const val = payload.text.trim();
+  const matched = INTAKE_PROMPTS.meeting_type.buttons.find(
+    (b) => b.buttonId === val || b.buttonText === val,
+  );
 
-  // Fast path: valid email regex — no need for LLM
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
-    await updateClient(clientId, { email: raw });
+  if (!matched) {
+    await sendTextPrompt(conversationId, chatId, "menu_reprompt");
+    return;
+  }
+
+  if (matched.buttonId === "existing_client") {
+    await updateClient(clientId, { client_type: "old" });
+    await sendText(
+      conversationId,
+      chatId,
+      `${INTAKE_PROMPTS.done_existing.text}\n\n${env.GOOGLE_CALENDAR_BOOKING_URL}`,
+    );
+    await endFlow(conversationId, clientId, "meeting_scheduling");
+    return;
+  }
+
+  // new_client
+  await updateClient(clientId, { client_type: "new" });
+  await advanceTo(conversationId, chatId, clientId, "consent");
+  await updateClient(clientId, {
+    consent_prompted_at: new Date().toISOString(),
+    stall_notified_at: null,
+  });
+}
+
+async function handleConsent(
+  conversationId: string,
+  chatId: string,
+  clientId: string,
+  payload: MessagePayload,
+): Promise<void> {
+  if (
+    payload.kind === "text" &&
+    payload.isButtonReply &&
+    (payload.text === "consent_approve" || payload.text === "מאשר")
+  ) {
     await advanceTo(conversationId, chatId, clientId, "id_photo");
     return;
   }
 
-  const result = await classifyIntakeResponse(
-    raw,
-    "email",
-    INTAKE_PROMPTS.email.text,
-    'A valid email address.',
-  );
-
-  if (!result.valid) {
-    await sendTextPrompt(conversationId, chatId, "email");
-    return;
-  }
-
-  await updateClient(clientId, { email: result.extracted });
-  await advanceTo(conversationId, chatId, clientId, "id_photo");
+  await sendTextPrompt(conversationId, chatId, "consent_reprompt");
 }
 
 async function handleIdPhoto(
@@ -510,77 +363,51 @@ async function handleIdPhoto(
     return;
   }
 
-  // Combined OCR pass: validate the ID photo AND extract the ID number in one call.
+  // Combined vision pass: validate the ID photo AND extract id number + name.
   const imageUrl = payload.fileUrl;
   let ocrResult: Awaited<ReturnType<typeof validateIdPhoto>> | undefined;
   try {
     ocrResult = await validateIdPhoto(imageUrl);
   } catch (err) {
     logger.warn({ err }, "intake: OCR validation failed — requesting resend");
-    const retryText = "לא ניתן לקרוא את התמונה, נא לשלוח מחדש תמונה ברורה של תעודת הזהות.";
-    try {
-      const { idMessage } = await sendMessageWithTyping(chatId, retryText);
-      await persistOutbound(conversationId, retryText, idMessage);
-    } catch (sendErr) {
-      logger.error({ sendErr }, "intake: failed to send OCR error message");
-    }
+    await sendText(
+      conversationId,
+      chatId,
+      "לא ניתן לקרוא את התמונה, נא לשלוח מחדש תמונה ברורה של תעודת הזהות.",
+    );
     return;
   }
 
   if (!ocrResult) return;
 
   if (!ocrResult.valid) {
-    const rePrompt = INTAKE_PROMPTS.id_photo_invalid.text.replace(
-      "{reason}",
-      ocrResult.reason,
-    );
-    try {
-      const { idMessage } = await sendMessageWithTyping(chatId, rePrompt);
-      await persistOutbound(conversationId, rePrompt, idMessage);
-    } catch (sendErr) {
-      logger.error({ sendErr }, "intake: failed to send OCR rejection");
-    }
+    const rePrompt = INTAKE_PROMPTS.id_photo_invalid.text.replace("{reason}", ocrResult.reason);
+    await sendText(conversationId, chatId, rePrompt);
     return;
   }
 
   const extractedIdNumber = ocrResult.idNumber;
+  const ocrName = ocrResult.fullName;
 
-  // Load client name for Drive filename (best-effort fallback to phone)
-  const { data: clientRow } = await supabaseAdmin
-    .from("clients")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select("full_name, phone" as any)
-    .eq("id", clientId)
-    .maybeSingle();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const nameRow = clientRow as any as { full_name?: string | null; phone?: string | null } | null;
-  const fullName = nameRow?.full_name ?? nameRow?.phone ?? clientId;
+  const { phone } = await loadContact(clientId);
+  const phoneDigits = phone.replace(/\D/g, "");
+  const fileBase = ocrName ?? phoneDigits ?? clientId;
 
   const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את תעודת הזהות.";
 
   const bytes = await fetchRemoteFile(payload.fileUrl);
   if (!bytes) {
-    try {
-      const { idMessage } = await sendMessageWithTyping(chatId, resendText);
-      await persistOutbound(conversationId, resendText, idMessage);
-    } catch (sendErr) {
-      logger.error({ sendErr }, "intake: failed to send file-fetch error message");
-    }
+    await sendText(conversationId, chatId, resendText);
     return;
   }
 
   const up = await uploadLeadDocument({
-    name: `${fullName} - ID`,
+    name: `${fileBase} - ID`,
     mimeType: payload.mimeType ?? "image/jpeg",
     bytes,
   });
   if (!up) {
-    try {
-      const { idMessage } = await sendMessageWithTyping(chatId, resendText);
-      await persistOutbound(conversationId, resendText, idMessage);
-    } catch (sendErr) {
-      logger.error({ sendErr }, "intake: failed to send drive-upload error message");
-    }
+    await sendText(conversationId, chatId, resendText);
     return;
   }
 
@@ -592,96 +419,19 @@ async function handleIdPhoto(
     mime_type: payload.mimeType ?? null,
   });
 
-  const photoUpdate: ClientIntakeUpdate = {
+  await updateClient(clientId, {
     id_photo_url: up.webViewLink,
     id_validated: true,
     ...(extractedIdNumber ? { id_number: extractedIdNumber } : {}),
-  };
-  if (extractedIdNumber) {
-    logger.info({ clientId, idNumber: extractedIdNumber }, "intake: ID number extracted and will be persisted");
-  }
-  await updateClient(clientId, photoUpdate);
+    ...(ocrName ? { full_name: ocrName } : {}),
+  });
 
-  await advanceTo(conversationId, chatId, clientId, "poa");
-}
-
-const POA_SKIP_EXACT = new Set([
-  "skip", "no", "none",
-  "דלג", "לא", "אין",
-]);
-
-function isPoaSkip(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  if (POA_SKIP_EXACT.has(t)) return true;
-  return /\bאין\b|\bדלג\b|don'?t have|no poa/i.test(text);
-}
-
-async function handlePoa(
-  conversationId: string,
-  chatId: string,
-  clientId: string,
-  payload: MessagePayload,
-): Promise<void> {
-  if (payload.kind === "text" && isPoaSkip(payload.text)) {
-    await advanceTo(conversationId, chatId, clientId, "done");
-    return;
-  }
-
-  if (payload.kind === "image" || payload.kind === "document") {
-    // Load client name for Drive filename (best-effort fallback to phone)
-    const { data: clientRow } = await supabaseAdmin
-      .from("clients")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .select("full_name, phone" as any)
-      .eq("id", clientId)
-      .maybeSingle();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const nameRow = clientRow as any as { full_name?: string | null; phone?: string | null } | null;
-    const fullName = nameRow?.full_name ?? nameRow?.phone ?? clientId;
-
-    const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את ייפוי הכוח.";
-
-    const bytes = await fetchRemoteFile(payload.fileUrl);
-    if (!bytes) {
-      try {
-        const { idMessage } = await sendMessageWithTyping(chatId, resendText);
-        await persistOutbound(conversationId, resendText, idMessage);
-      } catch (sendErr) {
-        logger.error({ sendErr }, "intake: failed to send poa file-fetch error message");
-      }
-      return;
-    }
-
-    const up = await uploadLeadDocument({
-      name: `${fullName} - POA`,
-      mimeType: payload.mimeType ?? "application/pdf",
-      bytes,
-    });
-    if (!up) {
-      try {
-        const { idMessage } = await sendMessageWithTyping(chatId, resendText);
-        await persistOutbound(conversationId, resendText, idMessage);
-      } catch (sendErr) {
-        logger.error({ sendErr }, "intake: failed to send poa drive-upload error message");
-      }
-      return;
-    }
-
-    await supabaseAdmin.from("documents").insert({
-      client_id: clientId,
-      type: "poa",
-      file_url: up.webViewLink,
-      file_name: payload.fileName ?? null,
-      mime_type: payload.mimeType ?? null,
-    });
-
-    await updateClient(clientId, { poa_doc_url: up.webViewLink });
-    await advanceTo(conversationId, chatId, clientId, "done");
-    return;
-  }
-
-  // Invalid — resend
-  await sendTextPrompt(conversationId, chatId, "poa");
+  await sendText(
+    conversationId,
+    chatId,
+    `${INTAKE_PROMPTS.done_new.text}\n\n${env.GOOGLE_CALENDAR_BOOKING_URL}`,
+  );
+  await endFlow(conversationId, clientId, "meeting_scheduling");
 }
 
 // ---------------------------------------------------------------------------
@@ -706,7 +456,7 @@ export async function handleIntake(
     return { consumed: false };
   }
 
-  // 0b. Respect per-conversation pause
+  // 0b. Respect per-conversation pause (auto-clear expired cooldowns)
   const { data: conv } = await supabaseAdmin
     .from("conversations")
     .select("bot_paused, bot_paused_until")
@@ -751,9 +501,22 @@ export async function handleIntake(
   const state = row.intake_state;
   const slot = row.intake_current_slot;
 
-  // 2. If already completed or at done slot, fall through to AI
-  if (state === "completed" || slot === "done") {
+  // Operator escape hatch — skipped conversations fall through to the AI layer.
+  if (state === "skipped") {
     return { consumed: false };
+  }
+
+  // 2. Completed / terminal + unpaused (post-cooldown) → fresh menu restart.
+  if (state === "completed" || slot === "done") {
+    await updateClient(clientId, {
+      intake_state: "collecting",
+      intake_current_slot: "welcome",
+      consent_prompted_at: null,
+      stall_notified_at: null,
+      intake_completed_at: null,
+    });
+    await handleWelcome(conversationId, chatId, clientId);
+    return { consumed: true };
   }
 
   logger.info({ conversationId, clientId, slot }, "intake: handling slot");
@@ -763,32 +526,18 @@ export async function handleIntake(
     case "welcome":
       await handleWelcome(conversationId, chatId, clientId);
       break;
-    case "client_type":
-      await handleClientType(conversationId, chatId, clientId, payload);
+    case "menu":
+      await handleMenu(conversationId, chatId, clientId, payload);
       break;
-    case "inquiry_type":
-      await handleInquiryType(conversationId, chatId, clientId, payload);
+    case "meeting_type":
+      await handleMeetingType(conversationId, chatId, clientId, payload);
       break;
-    case "issue":
-      await handleIssue(conversationId, chatId, clientId, payload);
-      break;
-    case "action_choice":
-      await handleActionChoice(conversationId, chatId, clientId, payload);
-      break;
-    case "full_name":
-      await handleFullName(conversationId, chatId, clientId, payload);
-      break;
-    case "email":
-      await handleEmail(conversationId, chatId, clientId, payload);
+    case "consent":
+      await handleConsent(conversationId, chatId, clientId, payload);
       break;
     case "id_photo":
       await handleIdPhoto(conversationId, chatId, clientId, payload);
       break;
-    case "poa":
-      await handlePoa(conversationId, chatId, clientId, payload);
-      break;
-    case "done":
-      return { consumed: false };
     default:
       logger.warn(
         { conversationId, slot },

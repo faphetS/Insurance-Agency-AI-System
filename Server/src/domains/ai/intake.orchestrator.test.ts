@@ -1,85 +1,81 @@
 /**
- * Unit tests for the v3 intake flow:
- *  - handleClientType: captures client_type ('new'/'old'), advances to inquiry_type
- *  - handleInquiryType: old → issue, new → full_name; fires dept notify fire-and-forget
- *  - handleIssue: stores issue_description, mirrors, advances to action_choice
- *  - handleActionChoice: move_to_rep → rep_ack + finalize (no meeting); schedule_meeting → finalize (meeting)
- *  - sendButtonPrompt: fallback to plain text on failure
+ * Unit tests for the v4 intake flow (9-button menu):
+ *  - welcome → menu buttons + scheduled brand image
+ *  - menu: free text / image → re-prompt #12; buttons 1-7 → staff email + thanks + endFlow;
+ *    callback_didi → notifyOwner + thanks; meeting_didi → meeting_type sub-choice
+ *  - meeting_type: existing → booking link + 24h pause; new → consent buttons + consent_prompted_at
+ *  - consent: tap-only advance; typed מאשר re-prompts
+ *  - id_photo: valid → Drive name from OCR name (phone fallback), full_name upgraded, terminal + pause
+ *  - completed + unpaused → fresh menu restart
  *
- * All DB and external I/O is mocked.
+ * All DB and external I/O is mocked. No live WhatsApp / email / GreenAPI calls.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-// ---------------------------------------------------------------------------
-// Mocks — vi.hoisted so factories can reference them before module init
-// ---------------------------------------------------------------------------
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const {
   mockSendInteractiveButtons,
   mockSendMessageWithTyping,
+  mockSendFileByUrl,
   mockFromImpl,
-  mockNotifyDept,
   mockMirrorLeadToSheet,
+  mockValidateIdPhoto,
+  mockFetchRemoteFile,
+  mockUploadLeadDocument,
+  mockSendStaffLeadEmail,
+  mockBuildCallbackAlert,
+  mockNotifyOwner,
 } = vi.hoisted(() => ({
   mockSendInteractiveButtons: vi.fn().mockResolvedValue({ idMessage: "btn-1" }),
   mockSendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "txt-1" }),
+  mockSendFileByUrl: vi.fn().mockResolvedValue({ idMessage: "file-1" }),
   mockFromImpl: vi.fn(),
-  mockNotifyDept: vi.fn().mockResolvedValue(undefined),
   mockMirrorLeadToSheet: vi.fn().mockResolvedValue(undefined),
+  mockValidateIdPhoto: vi.fn(),
+  mockFetchRemoteFile: vi.fn(),
+  mockUploadLeadDocument: vi.fn(),
+  mockSendStaffLeadEmail: vi.fn().mockResolvedValue(undefined),
+  mockBuildCallbackAlert: vi.fn(() => "📞 CALLBACK ALERT"),
+  mockNotifyOwner: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../../config/supabase.js", () => ({
-  supabaseAdmin: { from: mockFromImpl },
-}));
-
+vi.mock("../../config/supabase.js", () => ({ supabaseAdmin: { from: mockFromImpl } }));
 vi.mock("../../config/env.js", () => ({
   env: {
     GOOGLE_CALENDAR_BOOKING_URL: "https://example.com/book",
+    WELCOME_IMAGE_URL: "https://example.com/brand.jpeg",
+    BACKEND_URL: "https://example.com",
     NODE_ENV: "test",
   },
 }));
-
 vi.mock("../../config/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-
 vi.mock("../whatsapp/whatsapp.service.js", () => ({
   sendMessageWithTyping: mockSendMessageWithTyping,
   sendInteractiveButtonsWithTyping: mockSendInteractiveButtons,
+  sendFileByUrl: mockSendFileByUrl,
 }));
-
-vi.mock("./ai.service.js", () => ({
-  classifyIntakeResponse: vi.fn(),
-  validateIdPhoto: vi.fn(),
-  classifyComplexity: vi.fn(),
-}));
-
-vi.mock("../../lib/storage.js", () => ({ fetchRemoteFile: vi.fn() }));
-vi.mock("../integrations/google/google.drive.js", () => ({ uploadLeadDocument: vi.fn() }));
+vi.mock("./ai.service.js", () => ({ validateIdPhoto: mockValidateIdPhoto }));
+vi.mock("../../lib/storage.js", () => ({ fetchRemoteFile: mockFetchRemoteFile }));
+vi.mock("../integrations/google/google.drive.js", () => ({ uploadLeadDocument: mockUploadLeadDocument }));
 vi.mock("../integrations/google/leads-mirror.service.js", () => ({ mirrorLeadToSheet: mockMirrorLeadToSheet }));
-vi.mock("../whatsapp/department-routing.js", () => ({ notifyDepartmentForInquiry: mockNotifyDept }));
-
-// ---------------------------------------------------------------------------
-// Subject
-// ---------------------------------------------------------------------------
+vi.mock("./intake-notify.service.js", () => ({
+  sendStaffLeadEmail: mockSendStaffLeadEmail,
+  buildCallbackAlert: mockBuildCallbackAlert,
+}));
+vi.mock("../operations/owner-notify.js", () => ({ notifyOwner: mockNotifyOwner }));
 
 import { handleIntake } from "./intake.orchestrator.js";
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function makeBuilder(result: unknown) {
   const b: Record<string, unknown> = {};
-  const chainMethods = [
+  const chain = [
     "select", "eq", "neq", "is", "not", "in", "gte", "lte", "lt", "gt",
     "order", "limit", "insert", "upsert", "update", "delete",
   ];
-  for (const m of chainMethods) {
-    b[m] = vi.fn().mockReturnValue(b);
-  }
+  for (const m of chain) b[m] = vi.fn().mockReturnValue(b);
   const terminal = vi.fn().mockResolvedValue(result);
   b["maybeSingle"] = terminal;
   b["single"] = terminal;
@@ -97,6 +93,7 @@ function setupFrom(builders: ReturnType<typeof makeBuilder>[]) {
 }
 
 const textPayload = (text: string): MessagePayload => ({ kind: "text", text });
+const buttonPayload = (text: string): MessagePayload => ({ kind: "text", text, isButtonReply: true });
 const imagePayload = (): MessagePayload => ({
   kind: "image",
   fileUrl: "https://example.com/img.jpg",
@@ -107,416 +104,503 @@ const imagePayload = (): MessagePayload => ({
 
 const BOT_ENABLED = { data: { enabled: true }, error: null };
 const CONV_ACTIVE = { data: { bot_paused: false, bot_paused_until: null }, error: null };
+const clientState = (slot: string, state = "collecting") => ({
+  data: { intake_state: state, intake_current_slot: slot },
+  error: null,
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+  mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn" });
+  mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt" });
+  mockSendFileByUrl.mockResolvedValue({ idMessage: "file" });
+  mockMirrorLeadToSheet.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
 
 // ---------------------------------------------------------------------------
-// handleClientType — captures client_type and advances to inquiry_type
+// welcome
 // ---------------------------------------------------------------------------
 
-describe("handleClientType — client_type mapping and advances to inquiry_type", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-inquiry" });
-    mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt-inquiry" });
-  });
+describe("welcome slot", () => {
+  it("sends the 9-button opening menu", async () => {
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("welcome")), makeBuilder({ data: null, error: null })]);
 
-  function setupClientTypeSlot() {
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "client_type" }, error: null });
-    const updateClientType = makeBuilder({ data: null, error: null });
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateClientType, updateSlot, persistMsg]);
-    return { updateClientType };
-  }
+    const result = await handleIntake("conv1", "client1", "chat1@c.us", textPayload("hi"));
 
-  it("id 'old_client' → client_type 'old'", async () => {
-    const { updateClientType } = setupClientTypeSlot();
-    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("old_client"));
-    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledOnce();
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "old" });
-  });
-
-  it("id 'new_client' → client_type 'new'", async () => {
-    const { updateClientType } = setupClientTypeSlot();
-    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("new_client"));
-    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledOnce();
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "new" });
-  });
-
-  it("Hebrew label 'אני לקוח/ה קיים/ת' (contains קיים) → client_type 'old'", async () => {
-    const { updateClientType } = setupClientTypeSlot();
-    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("אני לקוח/ה קיים/ת"));
-    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "old" });
-  });
-
-  it("advances to inquiry_type (sends interactive buttons)", async () => {
-    setupClientTypeSlot();
-    const result = await handleIntake("conv1", "client1", "chat1@c.us", textPayload("old_client"));
     expect(result.consumed).toBe(true);
     expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
-    const call = mockSendInteractiveButtons.mock.calls[0];
-    expect(call?.[1]).toContain("נושא");
+    const [, body, buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
+    expect(body).toContain("שקד סוכנות לביטוח");
+    expect(buttons).toHaveLength(9);
   });
 
-  it("unrecognised text → defaults to 'new'", async () => {
-    const { updateClientType } = setupClientTypeSlot();
-    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("something else"));
-    const updateFn = updateClientType["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ client_type: "new" });
+  it("schedules the brand image as a 2nd bubble", async () => {
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("welcome")), makeBuilder({ data: null, error: null })]);
+
+    await handleIntake("conv1", "client1", "chat1@c.us", textPayload("hi"));
+    await vi.runAllTimersAsync();
+
+    expect(mockSendFileByUrl).toHaveBeenCalledOnce();
+    expect(mockSendFileByUrl.mock.calls[0]?.[1]).toBe("https://example.com/brand.jpeg");
   });
 });
 
 // ---------------------------------------------------------------------------
-// handleInquiryType — branches old→issue, new→full_name; fires dept notify
+// menu — re-prompt on non-button input
 // ---------------------------------------------------------------------------
 
-describe("handleInquiryType — old→issue, new→full_name, dept notify fire-and-forget", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-x" });
-    mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt-x" });
-    mockNotifyDept.mockResolvedValue(undefined);
-    mockMirrorLeadToSheet.mockResolvedValue(undefined);
+describe("menu slot — free-text / image re-prompt", () => {
+  it("free text → menu re-prompt #12, slot unchanged", async () => {
+    const client = makeBuilder(clientState("menu"));
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), client, makeBuilder({ data: null, error: null })]);
+
+    const result = await handleIntake("c", "cl", "chat@c.us", textPayload("random words"));
+
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+    expect(client["update"]).not.toHaveBeenCalled();
   });
 
-  function setupInquirySlot(clientType: "new" | "old") {
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "inquiry_type" }, error: null });
+  it("image at menu → re-prompt, never crashes on fileUrl payload", async () => {
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
+
+    const result = await handleIntake("c", "cl", "chat@c.us", imagePayload());
+
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// menu — buttons 1-7 (insurance)
+// ---------------------------------------------------------------------------
+
+describe("menu slot — insurance buttons 1-7", () => {
+  function setupInquiry() {
     const updateInquiry = makeBuilder({ data: null, error: null });
-    // lookup for client_type + phone
-    const clientLookup = makeBuilder({ data: { client_type: clientType, phone: "972501234567" }, error: null });
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateInquiry, clientLookup, updateSlot, persistMsg]);
-    return { updateInquiry };
+    const contact = makeBuilder({ data: { full_name: "יעל כהן", phone: "972501234567" }, error: null });
+    const persist = makeBuilder({ data: null, error: null });
+    const endUpdate = makeBuilder({ data: null, error: null });
+    const convPause = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("menu")),
+      updateInquiry,
+      contact,
+      persist,
+      endUpdate,
+      convPause,
+    ]);
+    return { updateInquiry, endUpdate, convPause };
   }
 
-  it("new client tap 'vehicle' → stores inquiry_type, advances to full_name", async () => {
-    const { updateInquiry } = setupInquirySlot("new");
-    const result = await handleIntake("conv5", "client5", "chat5@c.us", textPayload("vehicle"));
+  it("vehicle → staff email, thanks #3, endFlow (completed + 24h pause)", async () => {
+    const { updateInquiry, endUpdate, convPause } = setupInquiry();
+
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("vehicle"));
+
     expect(result.consumed).toBe(true);
-    const updateFn = updateInquiry["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledOnce();
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "vehicle" });
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sentText).toContain("שם");
+    expect((updateInquiry["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "vehicle" });
+    expect(mockSendStaffLeadEmail).toHaveBeenCalledOnce();
+    expect(mockSendStaffLeadEmail.mock.calls[0]?.[0]).toBe("vehicle");
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("תודה על פנייתך! קיבלנו את הפרטים וניצור איתך קשר בהקדם.");
+
+    expect((endUpdate["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      intake_state: "completed",
+      intake_current_slot: "done",
+      pipeline_stage: "new_lead",
+    });
+    const pauseArg = (convPause["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      bot_paused: boolean;
+      bot_paused_until: string;
+    };
+    expect(pauseArg.bot_paused).toBe(true);
+    const until = new Date(pauseArg.bot_paused_until).getTime();
+    const expected = Date.now() + 24 * 60 * 60 * 1000;
+    expect(Math.abs(until - expected)).toBeLessThan(5000);
+    expect(mockNotifyOwner).not.toHaveBeenCalled();
   });
 
-  it("old client tap 'home' → advances to issue (text prompt)", async () => {
-    setupInquirySlot("old");
-    const result = await handleIntake("conv6", "client6", "chat6@c.us", textPayload("home"));
-    expect(result.consumed).toBe(true);
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sentText).toContain("בעיה");
-    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+  it("passes the WA display name to sendStaffLeadEmail", async () => {
+    setupInquiry();
+    await handleIntake("conv", "client", "chat@c.us", textPayload("home"));
+    expect(mockSendStaffLeadEmail.mock.calls[0]?.[1]).toEqual({ phone: "972501234567", waName: "יעל כהן" });
   });
 
-  it("fires dept notify fire-and-forget", async () => {
-    setupInquirySlot("new");
-    await handleIntake("conv7", "client7", "chat7@c.us", textPayload("vehicle"));
-    expect(mockNotifyDept).toHaveBeenCalledOnce();
-    expect(mockNotifyDept.mock.calls[0]?.[0]).toBe("vehicle");
-  });
-
-  it("unmatched text → re-sends buttons, no advance", async () => {
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "inquiry_type" }, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, persistMsg]);
-
-    const result = await handleIntake("conv5", "client5", "chat5@c.us", textPayload("random words"));
-    expect(result.consumed).toBe(true);
-    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
-    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
-  });
+  it.each(["vehicle", "home", "business", "life_health_pension", "travel", "finance", "other"])(
+    "button %s → sendStaffLeadEmail called with that id",
+    async (id) => {
+      setupInquiry();
+      await handleIntake("conv", "client", "chat@c.us", textPayload(id));
+      expect(mockSendStaffLeadEmail).toHaveBeenCalledOnce();
+      expect(mockSendStaffLeadEmail.mock.calls[0]?.[0]).toBe(id);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
-// handleIssue — stores issue_description, mirrors, advances to action_choice
+// menu — button 8 callback
 // ---------------------------------------------------------------------------
 
-describe("handleIssue — stores text, mirrors, advances to action_choice", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-ac" });
-    mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt-ac" });
-    mockMirrorLeadToSheet.mockResolvedValue(undefined);
-  });
-
-  function setupIssueSlot() {
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "issue" }, error: null });
-    const updateIssue = makeBuilder({ data: null, error: null });
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateIssue, updateSlot, persistMsg]);
-    return { updateIssue };
-  }
-
-  it("valid text → stores issue_description and advances to action_choice", async () => {
-    const { updateIssue } = setupIssueSlot();
-    const result = await handleIntake("conv-i", "client-i", "chat-i@c.us", textPayload("הפוליסה שלי פגה"));
-    expect(result.consumed).toBe(true);
-    const updateFn = updateIssue["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledOnce();
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ issue_description: "הפוליסה שלי פגה" });
-    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
-    const call = mockSendInteractiveButtons.mock.calls[0];
-    expect(call?.[1]).toContain("תרצה/י");
-  });
-
-  it("empty text → re-sends issue prompt, no update", async () => {
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "issue" }, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, persistMsg]);
-
-    const result = await handleIntake("conv-i2", "client-i2", "chat-i2@c.us", textPayload("  "));
-    expect(result.consumed).toBe(true);
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sentText).toContain("בעיה");
-    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// handleActionChoice — move_to_rep sends ack + no meeting; schedule_meeting → booking
-// ---------------------------------------------------------------------------
-
-describe("handleActionChoice — move_to_rep finalizes without meeting; schedule_meeting finalizes with meeting", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt-ac" });
-    mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-ac" });
-    mockMirrorLeadToSheet.mockResolvedValue(undefined);
-  });
-
-  function setupActionChoiceSlot() {
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "action_choice" }, error: null });
-    return { botSettings, conv, client };
-  }
-
-  it("move_to_rep → sends rep_ack text, finalizes (no meeting insert), bot paused", async () => {
-    const { botSettings, conv, client } = setupActionChoiceSlot();
-    const persistRepAck = makeBuilder({ data: null, error: null });
-    const finalizeUpdate = makeBuilder({ data: null, error: null });
-    const convPause = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, persistRepAck, finalizeUpdate, convPause]);
-
-    const result = await handleIntake("conv-ac", "client-ac", "chat-ac@c.us", textPayload("move_to_rep"));
-    expect(result.consumed).toBe(true);
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sentText).toContain("נציג");
-
-    const convPauseFn = convPause["update"] as ReturnType<typeof vi.fn>;
-    expect(convPauseFn).toHaveBeenCalledWith({ bot_paused: true });
-
-    expect(mockMirrorLeadToSheet).toHaveBeenCalledOnce();
-    expect(mockMirrorLeadToSheet.mock.calls[0]?.[0]).toBe("client-ac");
-
-    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
-  });
-
-  it("move_to_rep via Hebrew label → same result", async () => {
-    const { botSettings, conv, client } = setupActionChoiceSlot();
-    const persistRepAck = makeBuilder({ data: null, error: null });
-    const finalizeUpdate = makeBuilder({ data: null, error: null });
-    const convPause = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, persistRepAck, finalizeUpdate, convPause]);
-
-    const result = await handleIntake("conv-ac2", "client-ac2", "chat-ac2@c.us", textPayload("מעבר לנציג/ה"));
-    expect(result.consumed).toBe(true);
-    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sentText).toContain("נציג");
-  });
-
-  it("move_to_rep → does NOT insert a meetings row", async () => {
-    const { botSettings, conv, client } = setupActionChoiceSlot();
-    const persistRepAck = makeBuilder({ data: null, error: null });
-    const finalizeUpdate = makeBuilder({ data: null, error: null });
-    const convPause = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, persistRepAck, finalizeUpdate, convPause]);
-
-    await handleIntake("conv-ac3", "client-ac3", "chat-ac3@c.us", textPayload("move_to_rep"));
-
-    const allFromCalls = mockFromImpl.mock.calls.map((c: unknown[]) => c[0]);
-    expect(allFromCalls).not.toContain("meetings");
-  });
-
-  it("schedule_meeting → calls finalize path with booking link and meeting insert", async () => {
-    const { botSettings, conv, client } = setupActionChoiceSlot();
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const clientForFinalize = makeBuilder({ data: { inquiry_type: "home", poa_doc_url: null, email: null, client_type: "old" }, error: null });
-    const finalizeUpdate = makeBuilder({ data: null, error: null });
-    const meetingsInsert = makeBuilder({ data: null, error: null });
-    const persistDone = makeBuilder({ data: null, error: null });
-    const convPause = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateSlot, clientForFinalize, finalizeUpdate, meetingsInsert, persistDone, convPause]);
-
-    const result = await handleIntake("conv-sm", "client-sm", "chat-sm@c.us", textPayload("schedule_meeting"));
-    expect(result.consumed).toBe(true);
-
-    const allFromCalls = mockFromImpl.mock.calls.map((c: unknown[]) => c[0]);
-    expect(allFromCalls).toContain("meetings");
-
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sentText).toContain("https://example.com/book");
-  });
-
-  it("Hebrew label 'קביעת פגישה' → same schedule_meeting finalize path (meeting inserted)", async () => {
-    const { botSettings, conv, client } = setupActionChoiceSlot();
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const clientForFinalize = makeBuilder({ data: { inquiry_type: "home", poa_doc_url: null, email: null, client_type: "old" }, error: null });
-    const finalizeUpdate = makeBuilder({ data: null, error: null });
-    const meetingsInsert = makeBuilder({ data: null, error: null });
-    const persistDone = makeBuilder({ data: null, error: null });
-    const convPause = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateSlot, clientForFinalize, finalizeUpdate, meetingsInsert, persistDone, convPause]);
-
-    const result = await handleIntake("conv-he-sm", "client-he-sm", "chat-he-sm@c.us", textPayload("קביעת פגישה"));
-    expect(result.consumed).toBe(true);
-
-    const allFromCalls = mockFromImpl.mock.calls.map((c: unknown[]) => c[0]);
-    expect(allFromCalls).toContain("meetings");
-
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const sentText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sentText).toContain("https://example.com/book");
-  });
-
-  it("unmatched button text → re-sends action_choice buttons", async () => {
-    const { botSettings, conv, client } = setupActionChoiceSlot();
-    const persistReprompt = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, persistReprompt]);
-
-    const result = await handleIntake("conv-ac4", "client-ac4", "chat-ac4@c.us", textPayload("something else"));
-    expect(result.consumed).toBe(true);
-    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
-    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// sendButtonPrompt — fallback to plain text on button send failure
-// ---------------------------------------------------------------------------
-
-describe("sendButtonPrompt — fallback to plain text on button send failure", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockSendMessageWithTyping.mockResolvedValue({ idMessage: "fallback-txt" });
-  });
-
-  it("client_type: falls back to plain text list when interactive buttons throw", async () => {
-    mockSendInteractiveButtons.mockRejectedValueOnce(new Error("buttons unsupported"));
-
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "welcome" }, error: null });
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateSlot, persistMsg]);
-
-    const result = await handleIntake("conv3", "client3", "chat3@c.us", textPayload("hi"));
-    expect(result.consumed).toBe(true);
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const fallbackText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(fallbackText).toContain("אני לקוח/ה קיים/ת");
-    expect(fallbackText).toContain("אני עדיין לא לקוח/ה");
-  });
-
-  it("inquiry_type: falls back to plain text list when interactive buttons throw", async () => {
-    mockSendInteractiveButtons.mockRejectedValueOnce(new Error("buttons unsupported"));
-
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "client_type" }, error: null });
-    const updateClientType = makeBuilder({ data: null, error: null });
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateClientType, updateSlot, persistMsg]);
-
-    const result = await handleIntake("conv4", "client4", "chat4@c.us", textPayload("old_client"));
-    expect(result.consumed).toBe(true);
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const fallbackText = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(fallbackText).toContain("ביטוח רכב");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// handleInquiryType — 7-button strict match; unmatched always re-prompts
-// ---------------------------------------------------------------------------
-
-describe("handleInquiryType — strict button match, re-prompt on no match", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-inquiry" });
-    mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt-inquiry" });
-    mockNotifyDept.mockResolvedValue(undefined);
-    mockMirrorLeadToSheet.mockResolvedValue(undefined);
-  });
-
-  function setupInquirySlot() {
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "inquiry_type" }, error: null });
+describe("menu slot — callback_didi (button 8)", () => {
+  it("notifies Didi with the 📞 template, thanks #4, NO staff email", async () => {
     const updateInquiry = makeBuilder({ data: null, error: null });
-    const clientLookup = makeBuilder({ data: { client_type: "new", phone: "972501234567" }, error: null });
-    const updateSlot = makeBuilder({ data: null, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, updateInquiry, clientLookup, updateSlot, persistMsg]);
-    return { updateInquiry };
-  }
+    const contact = makeBuilder({ data: { full_name: "דוד", phone: "972501234567" }, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("menu")),
+      updateInquiry,
+      contact,
+      makeBuilder({ data: null, error: null }),
+    ]);
 
-  it("tap by label 'ביטוח רכב' → stored as 'vehicle'", async () => {
-    const { updateInquiry } = setupInquirySlot();
-    await handleIntake("conv5", "client5", "chat5@c.us", textPayload("ביטוח רכב"));
-    const updateFn = updateInquiry["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledOnce();
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "vehicle" });
+    const result = await handleIntake("conv", "client", "chat@c.us", buttonPayload("callback_didi"));
+
+    expect(result.consumed).toBe(true);
+    expect((updateInquiry["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "callback" });
+    expect(mockBuildCallbackAlert).toHaveBeenCalledOnce();
+    expect(mockNotifyOwner).toHaveBeenCalledOnce();
+    expect(mockNotifyOwner.mock.calls[0]?.[0]).toBe("📞 CALLBACK ALERT");
+    expect(mockSendStaffLeadEmail).not.toHaveBeenCalled();
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("תודה! הפרטים הועברו לדידי והוא יחזור אליך בהקדם.");
   });
+});
 
-  it("tap by id 'finance' → stored as 'finance'", async () => {
-    const { updateInquiry } = setupInquirySlot();
-    await handleIntake("conv5", "client5", "chat5@c.us", textPayload("finance"));
-    const updateFn = updateInquiry["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledOnce();
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "finance" });
-  });
+// ---------------------------------------------------------------------------
+// menu — button 9 meeting → meeting_type
+// ---------------------------------------------------------------------------
 
-  it("tap combined button label → stored as 'life_health_pension'", async () => {
-    const { updateInquiry } = setupInquirySlot();
-    await handleIntake("conv5", "client5", "chat5@c.us", textPayload('ביטוח חיים/בריאות/פנסיה'));
-    const updateFn = updateInquiry["update"] as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledOnce();
-    expect(updateFn.mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "life_health_pension" });
-  });
+describe("menu slot — meeting_didi (button 9)", () => {
+  it("advances to the existing/new sub-choice buttons", async () => {
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("menu")),
+      makeBuilder({ data: null, error: null }), // updateInquiry meeting
+      makeBuilder({ data: null, error: null }), // updateSlot
+      makeBuilder({ data: null, error: null }), // persist
+    ]);
 
-  it("non-text payload re-sends buttons once, updateClient NOT called", async () => {
-    const botSettings = makeBuilder(BOT_ENABLED);
-    const conv = makeBuilder(CONV_ACTIVE);
-    const client = makeBuilder({ data: { intake_state: "collecting", intake_current_slot: "inquiry_type" }, error: null });
-    const persistMsg = makeBuilder({ data: null, error: null });
-    setupFrom([botSettings, conv, client, persistMsg]);
+    const result = await handleIntake("conv", "client", "chat@c.us", buttonPayload("meeting_didi"));
 
-    const result = await handleIntake("conv5", "client5", "chat5@c.us", imagePayload());
     expect(result.consumed).toBe(true);
     expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
-    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
+    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
+    expect(buttons.map((b) => b.buttonId)).toEqual(["existing_client", "new_client"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// meeting_type
+// ---------------------------------------------------------------------------
+
+describe("meeting_type slot", () => {
+  it("existing → booking link + 24h pause, no notification", async () => {
+    const updateType = makeBuilder({ data: null, error: null });
+    const convPause = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("meeting_type")),
+      updateType,
+      makeBuilder({ data: null, error: null }), // persist done_existing
+      makeBuilder({ data: null, error: null }), // endFlow client update
+      convPause,
+    ]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", buttonPayload("existing_client"));
+
+    expect(result.consumed).toBe(true);
+    expect((updateType["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ client_type: "old" });
+    const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sent).toContain("https://example.com/book");
+    expect(mockNotifyOwner).not.toHaveBeenCalled();
+    expect(mockSendStaffLeadEmail).not.toHaveBeenCalled();
+    expect((convPause["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ bot_paused: true });
+  });
+
+  it("new → consent buttons + consent_prompted_at set", async () => {
+    const updateType = makeBuilder({ data: null, error: null });
+    const updateSlot = makeBuilder({ data: null, error: null });
+    const persist = makeBuilder({ data: null, error: null });
+    const updateConsent = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("meeting_type")),
+      updateType,
+      updateSlot,
+      persist,
+      updateConsent,
+    ]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", buttonPayload("new_client"));
+
+    expect(result.consumed).toBe(true);
+    expect((updateType["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ client_type: "new" });
+    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
+    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string; buttonText: string }[]];
+    expect(buttons[0]?.buttonId).toBe("consent_approve");
+    expect(buttons[0]?.buttonText).toBe("מאשר");
+
+    const consentArg = (updateConsent["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      consent_prompted_at: string;
+      stall_notified_at: null;
+    };
+    expect(typeof consentArg.consent_prompted_at).toBe("string");
+    expect(consentArg.stall_notified_at).toBeNull();
+  });
+
+  it("unmatched free text → menu re-prompt, no advance", async () => {
+    const client = makeBuilder(clientState("meeting_type"));
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), client, makeBuilder({ data: null, error: null })]);
+
+    await handleIntake("conv", "client", "chat@c.us", textPayload("שלום"));
+
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
+    expect(client["update"]).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// consent — tap-only
+// ---------------------------------------------------------------------------
+
+describe("consent slot — tap-only advance", () => {
+  it("typed 'מאשר' WITHOUT isButtonReply → re-prompt #8, no advance", async () => {
+    const client = makeBuilder(clientState("consent"));
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), client, makeBuilder({ data: null, error: null })]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("מאשר"));
+
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe('כדי להמשיך, יש ללחוץ על כפתור "מאשר"');
+    expect(client["update"]).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+  });
+
+  it("tap by buttonId (isButtonReply) → advances to id_photo prompt #9", async () => {
+    const updateSlot = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("consent")),
+      updateSlot,
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    await handleIntake("conv", "client", "chat@c.us", buttonPayload("consent_approve"));
+
+    expect((updateSlot["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ intake_current_slot: "id_photo" });
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toContain("צילום תעודת הזהות");
+  });
+
+  it("tap by Hebrew label 'מאשר' (isButtonReply) → also advances", async () => {
+    const updateSlot = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("consent")),
+      updateSlot,
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    await handleIntake("conv", "client", "chat@c.us", buttonPayload("מאשר"));
+
+    expect((updateSlot["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ intake_current_slot: "id_photo" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// id_photo
+// ---------------------------------------------------------------------------
+
+describe("id_photo slot", () => {
+  function setupIdPhoto(contactData: { full_name: string | null; phone: string }) {
+    const contact = makeBuilder({ data: contactData, error: null });
+    const docInsert = makeBuilder({ data: null, error: null });
+    const updatePhoto = makeBuilder({ data: null, error: null });
+    const persist = makeBuilder({ data: null, error: null });
+    const endUpdate = makeBuilder({ data: null, error: null });
+    const convPause = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("id_photo")),
+      contact,
+      docInsert,
+      updatePhoto,
+      persist,
+      endUpdate,
+      convPause,
+    ]);
+    return { updatePhoto, convPause };
+  }
+
+  it("valid ID → Drive name from OCR name, full_name upgraded, terminal #11 + pause", async () => {
+    mockValidateIdPhoto.mockResolvedValue({ valid: true, reason: "תקין", idNumber: "123456789", fullName: "משה לוי" });
+    mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
+    mockUploadLeadDocument.mockResolvedValue({ fileId: "d1", webViewLink: "https://drive/x" });
+
+    const { updatePhoto, convPause } = setupIdPhoto({ full_name: "old", phone: "972501234567" });
+
+    const result = await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(result.consumed).toBe(true);
+    expect(mockUploadLeadDocument.mock.calls[0]?.[0]).toMatchObject({ name: "משה לוי - ID" });
+    expect((updatePhoto["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      id_photo_url: "https://drive/x",
+      id_validated: true,
+      id_number: "123456789",
+      full_name: "משה לוי",
+    });
+    const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sent).toContain("תודה רבה! קיבלנו את כל הפרטים");
+    expect(sent).toContain("https://example.com/book");
+    expect((convPause["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ bot_paused: true });
+    expect(mockNotifyOwner).not.toHaveBeenCalled(); // silent completion
+  });
+
+  it("valid ID with no OCR name → Drive name falls back to phone digits", async () => {
+    mockValidateIdPhoto.mockResolvedValue({ valid: true, reason: "תקין", idNumber: null, fullName: null });
+    mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
+    mockUploadLeadDocument.mockResolvedValue({ fileId: "d1", webViewLink: "https://drive/x" });
+
+    const { updatePhoto } = setupIdPhoto({ full_name: null, phone: "972501234567" });
+
+    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(mockUploadLeadDocument.mock.calls[0]?.[0]).toMatchObject({ name: "972501234567 - ID" });
+    // full_name not overwritten when OCR name is null
+    expect((updatePhoto["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).not.toHaveProperty("full_name");
+  });
+
+  it("invalid ID → re-prompt #10 with the reason, no upload", async () => {
+    mockValidateIdPhoto.mockResolvedValue({ valid: false, reason: "התמונה מטושטשת", idNumber: null, fullName: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("id_photo")),
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sent).toContain("לא ניתן לאמת את תמונת תעודת הזהות");
+    expect(sent).toContain("התמונה מטושטשת");
+    expect(mockUploadLeadDocument).not.toHaveBeenCalled();
+  });
+
+  it("non-image at id_photo → resends the id_photo prompt", async () => {
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("id_photo")),
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    await handleIntake("conv", "client", "chat@c.us", textPayload("hello"));
+
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toContain("צילום תעודת הזהות");
+    expect(mockValidateIdPhoto).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// completed + unpaused → fresh menu restart
+// ---------------------------------------------------------------------------
+
+describe("post-cooldown restart", () => {
+  it("completed + unpaused client message → fresh reset → menu re-sent", async () => {
+    const reset = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("done", "completed")),
+      reset,
+      makeBuilder({ data: null, error: null }), // advanceTo updateSlot
+      makeBuilder({ data: null, error: null }), // persist menu
+    ]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("hi again"));
+
+    expect(result.consumed).toBe(true);
+    expect((reset["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      intake_state: "collecting",
+      intake_current_slot: "welcome",
+      consent_prompted_at: null,
+      stall_notified_at: null,
+      intake_completed_at: null,
+    });
+    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
+    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
+    expect(buttons).toHaveLength(9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sendButtonPrompt fallback
+// ---------------------------------------------------------------------------
+
+describe("sendButtonPrompt fallback", () => {
+  it("falls back to a plain text list when interactive buttons throw", async () => {
+    mockSendInteractiveButtons.mockRejectedValueOnce(new Error("buttons unsupported"));
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("welcome")),
+      makeBuilder({ data: null, error: null }),
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("hi"));
+
+    expect(result.consumed).toBe(true);
+    const fallback = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(fallback).toContain("ביטוח רכב");
+    expect(fallback).toContain("מבקש שדידי יחזור אליי");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gates
+// ---------------------------------------------------------------------------
+
+describe("entry gates", () => {
+  it("bot disabled → not consumed", async () => {
+    setupFrom([makeBuilder({ data: { enabled: false }, error: null })]);
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("hi"));
+    expect(result.consumed).toBe(false);
+  });
+
+  it("paused (not expired) → not consumed", async () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder({ data: { bot_paused: true, bot_paused_until: future }, error: null }),
+    ]);
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("hi"));
+    expect(result.consumed).toBe(false);
+  });
+
+  it("intake_state 'skipped' → not consumed (operator escape hatch)", async () => {
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("menu", "skipped")),
+    ]);
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("hi"));
+    expect(result.consumed).toBe(false);
   });
 });
