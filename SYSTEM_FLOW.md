@@ -481,12 +481,16 @@ service-meeting cron (was `10 8 * * *` — **deleted**), Timeless hourly poll + 
 
 Note: the **call reminder** is not independently scheduled — it ships inside the 09:00 digest.
 
-### 6a. Unanswered WA messages (new pillar, 2026-07-10) — `operations/unanswered-wa.service.ts`
+### 6a. Unanswered WA messages (new pillar 2026-07-10; session-model rework same day) — `operations/unanswered-wa.service.ts`
 Watches Didi's own line (944) via its webhook (token now REQUIRED — see §9): incoming private-chat message
-07:00–20:00 Israel with no reply for 1h → auto-reply from 944 as Didi (office number 026244791); anyone
-replying cancels; next day 09:00 → 2-button follow-up (`ua_ok`/`ua_callback`); `ua_callback` tap →
-🔔 alert to Didi via the NOTIFY instance. Caps: 1 auto-reply/chat/day, 20 auto-replies/day, 40
-follow-ups/day; 20s send pacing. Table `wa_unanswered`. Full spec: `.claude/OPERATIONAL_BOT.md` §2b.
+07:00–20:00 Israel with no reply for 1h → **LLM closer gate** (`unanswered-wa.llm.ts`: gemini-2.5-flash reads
+the chat's last 4 messages with `[DD/MM HH:MM]` Israel-time labels; "תודה"-type closers resolve silently,
+fail-open on error) → auto-reply from 944 as Didi (office number 026244791); anyone replying cancels;
+2nd same-day episode is suppressed-but-tracked (no repeat auto-reply, still gets next-day buttons);
+next day 09:00 → 2-button follow-up (`ua_ok` = silent resolve / `ua_callback` → 🔔 alert to Didi via the
+NOTIFY instance); untapped buttons expire at midnight Israel (daily session reset). Caps: 1 auto-reply/chat/day,
+20 auto-replies/day, 40 follow-ups/day; 20s pacing. Env `UNANSWERED_WINDOW_DISABLED` bypasses the watch window
+(testing only). Table `wa_unanswered`. Full spec: `.claude/OPERATIONAL_BOT.md` §2b.
 
 ---
 
