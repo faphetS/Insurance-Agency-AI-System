@@ -11,6 +11,7 @@ import {
 } from "../whatsapp/whatsapp.service.js";
 import { extractButtonId, toChatId } from "../whatsapp/whatsapp.util.js";
 import { notifyOwnerOps } from "./owner-notify.js";
+import { needsReplyFromDidi } from "./unanswered-wa.llm.js";
 
 const TZ = "Asia/Jerusalem";
 
@@ -59,6 +60,7 @@ function israelMinutesOfDay(d: Date): number {
 }
 
 export function isWithinWatchWindow(d: Date): boolean {
+  if (env.UNANSWERED_WINDOW_DISABLED) return true;
   const minutes = israelMinutesOfDay(d);
   return minutes >= 7 * 60 && minutes <= 20 * 60;
 }
@@ -148,8 +150,13 @@ async function resolveActiveRowForChat(chatId: string): Promise<void> {
   );
 }
 
-async function markSkipped(id: string): Promise<void> {
-  await pool.query(`UPDATE public.wa_unanswered SET state='skipped', updated_at=now() WHERE id=$1`, [id]);
+// Suppressed-tracking: episode stays open (no auto-reply sent), but the row keeps
+// tomorrow's 09:00 follow-up eligible since auto_replied_at is deliberately left NULL.
+async function suppressRow(id: string): Promise<void> {
+  await pool.query(
+    `UPDATE public.wa_unanswered SET state='awaiting_reply', updated_at=now() WHERE id=$1`,
+    [id],
+  );
 }
 
 async function markExpired(id: string): Promise<void> {
@@ -249,10 +256,15 @@ export async function handleOpInstanceEvent(rawBody: unknown): Promise<void> {
 
 let sweepRunning = false;
 
-export async function sweepUnanswered(): Promise<{ processed: number; autoReplied: number; skipped: number }> {
+export async function sweepUnanswered(): Promise<{
+  processed: number;
+  autoReplied: number;
+  skipped: number;
+  closedByLlm: number;
+}> {
   if (sweepRunning) {
     logger.warn("unanswered-wa: sweep already in progress — skipping re-entrant call");
-    return { processed: 0, autoReplied: 0, skipped: 0 };
+    return { processed: 0, autoReplied: 0, skipped: 0, closedByLlm: 0 };
   }
   sweepRunning = true;
 
@@ -260,12 +272,21 @@ export async function sweepUnanswered(): Promise<{ processed: number; autoReplie
     const creds = opCreds();
     if (!creds) {
       logger.info("unanswered-wa: op creds unset — skipping sweep");
-      return { processed: 0, autoReplied: 0, skipped: 0 };
+      return { processed: 0, autoReplied: 0, skipped: 0, closedByLlm: 0 };
     }
 
     const now = new Date();
     const cutoff = new Date(now.getTime() - 60 * 60 * 1000);
     const dayStart = israelDayStart(now);
+
+    // Daily-reset expiry: yesterday's pending follow-ups (button prompt already sent,
+    // no reply) expire at the start of today's Israel day. Cheap, runs every sweep.
+    await pool.query(
+      `UPDATE public.wa_unanswered
+       SET state='expired', updated_at=now()
+       WHERE state='pending_followup' AND followup_sent_at < $1`,
+      [dayStart.toISOString()],
+    );
 
     const res = await pool.query<{ id: string; chat_id: string }>(
       `SELECT id, chat_id FROM public.wa_unanswered
@@ -275,10 +296,22 @@ export async function sweepUnanswered(): Promise<{ processed: number; autoReplie
 
     let autoReplied = 0;
     let skipped = 0;
+    let closedByLlm = 0;
     let sentTodayCount = await countAutoRepliedToday(dayStart);
 
     for (const row of res.rows) {
       try {
+        const needed = await needsReplyFromDidi(row.chat_id);
+        if (!needed) {
+          await resolveRow(row.id);
+          closedByLlm++;
+          logger.info(
+            { chatId: row.chat_id },
+            "unanswered-wa: LLM judged trailing message a closer — resolved without auto-reply",
+          );
+          continue;
+        }
+
         const already = await pool.query(
           `SELECT 1 FROM public.wa_unanswered
            WHERE chat_id = $1 AND auto_replied_at IS NOT NULL AND auto_replied_at >= $2
@@ -287,7 +320,7 @@ export async function sweepUnanswered(): Promise<{ processed: number; autoReplie
         );
 
         if ((already.rowCount ?? 0) > 0) {
-          await markSkipped(row.id);
+          await suppressRow(row.id);
           skipped++;
           continue;
         }
@@ -297,7 +330,7 @@ export async function sweepUnanswered(): Promise<{ processed: number; autoReplie
             { chatId: row.chat_id, cap: DAILY_AUTO_REPLY_CAP },
             "unanswered-wa: daily auto-reply cap reached — skipping",
           );
-          await markSkipped(row.id);
+          await suppressRow(row.id);
           skipped++;
           continue;
         }
@@ -320,8 +353,11 @@ export async function sweepUnanswered(): Promise<{ processed: number; autoReplie
       }
     }
 
-    logger.info({ processed: res.rows.length, autoReplied, skipped }, "unanswered-wa: sweep complete");
-    return { processed: res.rows.length, autoReplied, skipped };
+    logger.info(
+      { processed: res.rows.length, autoReplied, skipped, closedByLlm },
+      "unanswered-wa: sweep complete",
+    );
+    return { processed: res.rows.length, autoReplied, skipped, closedByLlm };
   } finally {
     sweepRunning = false;
   }
@@ -351,7 +387,7 @@ export async function sendUnansweredFollowups(): Promise<{ followupsSent: number
     if (creds) {
       const res = await pool.query<{ id: string; chat_id: string }>(
         `SELECT id, chat_id FROM public.wa_unanswered
-         WHERE state = 'awaiting_reply' AND auto_replied_at < $1`,
+         WHERE state = 'awaiting_reply' AND COALESCE(auto_replied_at, first_unanswered_at) < $1`,
         [dayStart.toISOString()],
       );
 
@@ -390,17 +426,8 @@ export async function sendUnansweredFollowups(): Promise<{ followupsSent: number
       logger.info("unanswered-wa: op creds unset — skipping follow-up sends");
     }
 
-    // Housekeeping (runs regardless of creds): expire stale pending_followup rows,
-    // and delete old resolved/skipped/expired rows.
-    const expireCutoff = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-    const expiredRes = await pool.query(
-      `UPDATE public.wa_unanswered
-       SET state='expired', updated_at=now()
-       WHERE state='pending_followup' AND followup_sent_at <= $1`,
-      [expireCutoff.toISOString()],
-    );
-    expired += expiredRes.rowCount ?? 0;
-
+    // Housekeeping (runs regardless of creds): delete old resolved/skipped/expired rows.
+    // Stale pending_followup rows now expire on the daily-reset in sweepUnanswered().
     const deleteCutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const deletedRes = await pool.query(
       `DELETE FROM public.wa_unanswered

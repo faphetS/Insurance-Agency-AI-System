@@ -101,6 +101,11 @@ const envSchema = z.object({
   GREENAPI_OP_ID_INSTANCE: z.string().optional(),
   GREENAPI_OP_API_TOKEN: z.string().optional(),
 
+  // Test-period toggle for the unanswered-WA watcher: when set (any non-empty value),
+  // isWithinWatchWindow() always returns true, ignoring the 07:00-20:00 Israel window.
+  // Must be unset in production.
+  UNANSWERED_WINDOW_DISABLED: z.string().optional(),
+
   // GreenAPI instance #3 — dedicated operational-notify line. Carries every owner
   // notification the operational bot sends (morning digest, call-reminder, commitments,
   // unanswered-WA alerts). Leave blank to keep dormant — notifyOwnerOps() no-ops.
