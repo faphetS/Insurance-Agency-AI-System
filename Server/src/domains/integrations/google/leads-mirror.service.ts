@@ -59,6 +59,20 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
       return;
     }
 
+    const inquiry = c.inquiry_type;
+    if (!inquiry || inquiry === "general") {
+      logger.debug({ clientId, inquiry }, "leads-mirror: no menu choice yet — skipping");
+      return;
+    }
+    if (inquiry === "meeting" && c.client_type !== "old" && c.client_type !== "new") {
+      logger.debug({ clientId }, "leads-mirror: meeting awaiting existing/new sub-choice — skipping");
+      return;
+    }
+
+    const tab = inquiry === "meeting" && c.client_type === "old"
+      ? env.LEADS_SHEET_TAB_EXISTING
+      : env.LEADS_SHEET_TAB_NEW;
+
     const name = displayName(c.full_name, c.phone) ?? "";
     const inquiryHe = inquiryColumn(c.inquiry_type, c.client_type);
 
@@ -73,7 +87,7 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
       nowIsraelString(),
     ];
 
-    await upsertLeadRow(row, env.LEADS_SHEET_TAB_NEW, { setOnceColumns: [6] });
+    await upsertLeadRow(row, tab, { setOnceColumns: [6] });
   } catch (err) {
     logger.error({ err, clientId }, "leads-mirror: unexpected error");
   }

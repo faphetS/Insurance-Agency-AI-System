@@ -8,18 +8,21 @@ const {
   mockSheetsGet,
   mockSheetsAppend,
   mockSheetsUpdate,
+  mockSheetsBatchUpdate,
   mockGetAuthenticatedClient,
 } = vi.hoisted(() => {
   const mockFromImpl = vi.fn();
   const mockSheetsGet = vi.fn();
   const mockSheetsAppend = vi.fn();
   const mockSheetsUpdate = vi.fn();
+  const mockSheetsBatchUpdate = vi.fn();
   const mockGetAuthenticatedClient = vi.fn();
   return {
     mockFromImpl,
     mockSheetsGet,
     mockSheetsAppend,
     mockSheetsUpdate,
+    mockSheetsBatchUpdate,
     mockGetAuthenticatedClient,
   };
 });
@@ -33,6 +36,7 @@ vi.mock("../../../config/env.js", () => ({
     LEADS_SPREADSHEET_ID: "sheet-id",
     LEADS_SHEET_TAB: "לידים חדשים",
     LEADS_SHEET_TAB_NEW: "לידים חדשים",
+    LEADS_SHEET_TAB_EXISTING: "לקוח קיים",
     LEADS_DRIVE_FOLDER_ID: "folder-id",
     NODE_ENV: "test",
   },
@@ -53,11 +57,12 @@ vi.mock("googleapis", () => ({
         get: vi.fn().mockResolvedValue({
           data: {
             sheets: [
-              { properties: { title: "לידים חדשים" } },
-              { properties: { title: "לקוח קיים" } },
+              { properties: { title: "לידים חדשים", sheetId: 0 } },
+              { properties: { title: "לקוח קיים", sheetId: 111 } },
             ],
           },
         }),
+        batchUpdate: mockSheetsBatchUpdate,
         values: {
           get: mockSheetsGet,
           append: mockSheetsAppend,
@@ -76,7 +81,7 @@ vi.mock("./google.auth.js", () => ({
 // ---------------------------------------------------------------------------
 // Import under test
 // ---------------------------------------------------------------------------
-import { upsertLeadRow } from "./google.sheets.js";
+import { upsertLeadRow, appendLeadRow } from "./google.sheets.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — set up supabaseAdmin.from for resolveLeadsTabTitle cache miss
@@ -140,6 +145,7 @@ describe("upsertLeadRow — phone found → values.update", () => {
     expect(updateArg.range).toBe("לידים חדשים!A2:H2");
     expect(updateArg.requestBody.values[0]).toEqual(row);
     expect(mockSheetsAppend).not.toHaveBeenCalled();
+    expect(mockSheetsBatchUpdate).not.toHaveBeenCalled();
   });
 
   it("matches phone stored with non-digit formatting (+972-50-123-4567)", async () => {
@@ -396,5 +402,127 @@ describe("upsertLeadRow — setOnceColumns", () => {
     const appendArg = mockSheetsAppend.mock.calls[0]?.[0] as { requestBody: { values: string[][] } };
     expect(appendArg.requestBody.values[0]).toEqual(row);
     expect(mockSheetsGet).toHaveBeenCalledOnce(); // only the A:A lookup
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Row formatting on append — 13pt / not-bold / white, cols A-G
+// ---------------------------------------------------------------------------
+
+describe("row formatting on append", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAuthenticatedClient.mockResolvedValue({});
+    setupCachedTab("לידים חדשים");
+  });
+
+  it("appendLeadRow triggers exactly one repeatCell batchUpdate on the parsed row", async () => {
+    mockSheetsAppend.mockResolvedValue({
+      data: { updates: { updatedRange: "'לידים חדשים '!A3:G3" } },
+    });
+    mockSheetsBatchUpdate.mockResolvedValue({});
+
+    const row = ["972501234567", "New Client", "ביטוח רכב", "", "", "", "09/07/2026 12:00"];
+    const result = await appendLeadRow(row);
+
+    expect(result).toBe(true);
+    expect(mockSheetsBatchUpdate).toHaveBeenCalledOnce();
+
+    const batchArg = mockSheetsBatchUpdate.mock.calls[0]?.[0] as {
+      requestBody: {
+        requests: [
+          {
+            repeatCell: {
+              range: {
+                sheetId: number;
+                startRowIndex: number;
+                endRowIndex: number;
+                startColumnIndex: number;
+                endColumnIndex: number;
+              };
+              cell: {
+                userEnteredFormat: {
+                  backgroundColor: { red: number; green: number; blue: number };
+                  textFormat: { fontSize: number; bold: boolean };
+                };
+              };
+              fields: string;
+            };
+          },
+        ];
+      };
+    };
+    const repeatCell = batchArg.requestBody.requests[0].repeatCell;
+    expect(repeatCell.range.sheetId).toBe(0);
+    expect(repeatCell.range.startRowIndex).toBe(2);
+    expect(repeatCell.range.endRowIndex).toBe(3);
+    expect(repeatCell.range.startColumnIndex).toBe(0);
+    expect(repeatCell.range.endColumnIndex).toBe(7);
+    expect(repeatCell.cell.userEnteredFormat.textFormat).toEqual({ fontSize: 13, bold: false });
+    expect(repeatCell.cell.userEnteredFormat.backgroundColor).toEqual({ red: 1, green: 1, blue: 1 });
+    expect(repeatCell.fields).toBe("userEnteredFormat(backgroundColor,textFormat.fontSize,textFormat.bold)");
+  });
+
+  it("upsertLeadRow append branch also triggers the repeatCell batchUpdate", async () => {
+    mockSheetsGet.mockResolvedValue({ data: { values: null } }); // A:A — not found
+    mockSheetsAppend.mockResolvedValue({
+      data: { updates: { updatedRange: "'לידים חדשים '!A5:G5" } },
+    });
+    mockSheetsBatchUpdate.mockResolvedValue({});
+
+    const row = ["972500000002", "n", "", "", "", "", ""];
+    const result = await upsertLeadRow(row, "לידים חדשים");
+
+    expect(result).toBe(true);
+    expect(mockSheetsBatchUpdate).toHaveBeenCalledOnce();
+    const batchArg = mockSheetsBatchUpdate.mock.calls[0]?.[0] as {
+      requestBody: { requests: [{ repeatCell: { range: { startRowIndex: number; endRowIndex: number } } }] };
+    };
+    expect(batchArg.requestBody.requests[0].repeatCell.range.startRowIndex).toBe(4);
+    expect(batchArg.requestBody.requests[0].repeatCell.range.endRowIndex).toBe(5);
+  });
+
+  it("missing updatedRange → no throw, no batchUpdate, still returns true", async () => {
+    mockSheetsAppend.mockResolvedValue({ data: { updates: {} } });
+
+    const row = ["972501234568", "n", "", "", "", "", ""];
+    const result = await appendLeadRow(row);
+
+    expect(result).toBe(true);
+    expect(mockSheetsBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  it("malformed updatedRange → no throw, no batchUpdate, still returns true", async () => {
+    mockSheetsAppend.mockResolvedValue({
+      data: { updates: { updatedRange: "not-a-valid-range" } },
+    });
+
+    const row = ["972501234569", "n", "", "", "", "", ""];
+    const result = await appendLeadRow(row);
+
+    expect(result).toBe(true);
+    expect(mockSheetsBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  it("append response entirely missing .data → no throw, no batchUpdate, still returns true", async () => {
+    mockSheetsAppend.mockResolvedValue({});
+
+    const row = ["972501234570", "n", "", "", "", "", ""];
+    const result = await appendLeadRow(row);
+
+    expect(result).toBe(true);
+    expect(mockSheetsBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  it("batchUpdate failure is swallowed — append still returns true", async () => {
+    mockSheetsAppend.mockResolvedValue({
+      data: { updates: { updatedRange: "'לידים חדשים '!A9:G9" } },
+    });
+    mockSheetsBatchUpdate.mockRejectedValue(new Error("batchUpdate API error"));
+
+    const row = ["972501234571", "n", "", "", "", "", ""];
+    const result = await appendLeadRow(row);
+
+    expect(result).toBe(true);
   });
 });

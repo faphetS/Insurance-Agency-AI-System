@@ -67,6 +67,120 @@ export async function resolveLeadsTabTitle(tabTitle?: string): Promise<string | 
   }
 }
 
+async function resolveLeadsSheetId(exactTitle: string): Promise<number | null> {
+  const cacheKey = `leads_sheet_gid:${exactTitle}`;
+
+  const { data: cached } = await supabaseAdmin
+    .from("system_settings")
+    .select("value")
+    .eq("key", cacheKey)
+    .maybeSingle();
+
+  if (cached?.value) {
+    const parsed = Number(cached.value as string);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+
+  let client;
+  try {
+    client = await getAuthenticatedClient();
+  } catch (err) {
+    logger.warn({ err }, "google.sheets: not connected — cannot resolve sheet id");
+    return null;
+  }
+
+  try {
+    const sheets = google.sheets({ version: "v4", auth: client });
+    const res = await sheets.spreadsheets.get({
+      spreadsheetId: env.LEADS_SPREADSHEET_ID,
+      fields: "sheets.properties(sheetId,title)",
+    });
+
+    const match = (res.data.sheets ?? []).find(
+      (s) => (s.properties?.title ?? "").trim() === exactTitle.trim(),
+    );
+
+    const sheetId = match?.properties?.sheetId;
+    if (sheetId === undefined || sheetId === null) {
+      logger.warn({ exactTitle }, "google.sheets: sheetId not found for tab");
+      return null;
+    }
+
+    await supabaseAdmin
+      .from("system_settings")
+      .upsert({ key: cacheKey, value: String(sheetId) }, { onConflict: "key" });
+
+    return sheetId;
+  } catch (err) {
+    logger.error({ err }, "google.sheets: resolveLeadsSheetId failed");
+    return null;
+  }
+}
+
+// Data rows (as opposed to the header) must be 13pt / not bold / white — Sheets
+// otherwise has values.append inherit whatever formatting sits on the row above.
+async function formatDataRow(
+  sheets: ReturnType<typeof google.sheets>,
+  sheetId: number,
+  rowIndex1Based: number,
+): Promise<void> {
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: env.LEADS_SPREADSHEET_ID,
+    requestBody: {
+      requests: [
+        {
+          repeatCell: {
+            range: {
+              sheetId,
+              startRowIndex: rowIndex1Based - 1,
+              endRowIndex: rowIndex1Based,
+              startColumnIndex: 0,
+              endColumnIndex: 7,
+            },
+            cell: {
+              userEnteredFormat: {
+                backgroundColor: { red: 1, green: 1, blue: 1 },
+                textFormat: { fontSize: 13, bold: false },
+              },
+            },
+            fields: "userEnteredFormat(backgroundColor,textFormat.fontSize,textFormat.bold)",
+          },
+        },
+      ],
+    },
+  });
+}
+
+function parseAppendedRowIndex(updatedRange: string | null | undefined): number | null {
+  if (!updatedRange) return null;
+  const match = /!A(\d+)(?::|$)/.exec(updatedRange);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isNaN(n) ? null : n;
+}
+
+// Best-effort — a formatting failure must never fail the append it decorates.
+async function formatAppendedRowBestEffort(
+  sheets: ReturnType<typeof google.sheets>,
+  exactTitle: string,
+  updatedRange: string | null | undefined,
+): Promise<void> {
+  try {
+    const rowIndex = parseAppendedRowIndex(updatedRange);
+    if (rowIndex === null) {
+      logger.warn({ updatedRange }, "google.sheets: could not parse appended row index — skipping format");
+      return;
+    }
+
+    const sheetId = await resolveLeadsSheetId(exactTitle);
+    if (sheetId === null) return;
+
+    await formatDataRow(sheets, sheetId, rowIndex);
+  } catch (err) {
+    logger.warn({ err }, "google.sheets: row formatting failed");
+  }
+}
+
 export async function appendLeadRow(values: string[], tabTitle?: string): Promise<boolean> {
   const title = await resolveLeadsTabTitle(tabTitle);
   if (!title) {
@@ -84,13 +198,14 @@ export async function appendLeadRow(values: string[], tabTitle?: string): Promis
 
   try {
     const sheets = google.sheets({ version: "v4", auth: client });
-    await sheets.spreadsheets.values.append({
+    const res = await sheets.spreadsheets.values.append({
       spreadsheetId: env.LEADS_SPREADSHEET_ID,
       range: `${title}!A:H`,
       valueInputOption: "RAW",
       insertDataOption: "INSERT_ROWS",
       requestBody: { values: [values] },
     });
+    await formatAppendedRowBestEffort(sheets, title, res.data?.updates?.updatedRange);
     return true;
   } catch (err) {
     logger.error({ err }, "google.sheets: appendLeadRow failed");
@@ -166,13 +281,14 @@ export async function upsertLeadRow(
         requestBody: { values: [outValues] },
       });
     } else {
-      await sheets.spreadsheets.values.append({
+      const res = await sheets.spreadsheets.values.append({
         spreadsheetId: env.LEADS_SPREADSHEET_ID,
         range: `${title}!A:${endCol}`,
         valueInputOption: "RAW",
         insertDataOption: "INSERT_ROWS",
         requestBody: { values: [values] },
       });
+      await formatAppendedRowBestEffort(sheets, title, res.data?.updates?.updatedRange);
     }
 
     return true;

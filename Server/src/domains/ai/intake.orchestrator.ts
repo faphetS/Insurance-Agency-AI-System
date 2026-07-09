@@ -285,7 +285,7 @@ async function handleMenu(
 
   // Button 9 — meeting request → existing/new sub-choice.
   if (id === "meeting_didi") {
-    await updateClient(clientId, { inquiry_type: "meeting" });
+    await updateClient(clientId, { inquiry_type: "meeting", client_type: null });
     await advanceTo(conversationId, chatId, clientId, "meeting_type");
     return;
   }
@@ -514,6 +514,8 @@ export async function handleIntake(
       consent_prompted_at: null,
       stall_notified_at: null,
       intake_completed_at: null,
+      inquiry_type: "general",
+      client_type: null,
     });
     await handleWelcome(conversationId, chatId, clientId);
     return { consumed: true };

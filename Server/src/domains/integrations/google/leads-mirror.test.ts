@@ -14,6 +14,7 @@ vi.mock("../../../config/env.js", () => ({
     LEADS_SPREADSHEET_ID: "sheet-id",
     LEADS_SHEET_TAB: "לידים חדשים",
     LEADS_SHEET_TAB_NEW: "לידים חדשים",
+    LEADS_SHEET_TAB_EXISTING: "לקוח קיים",
     LEADS_DRIVE_FOLDER_ID: "folder-id",
     NODE_ENV: "test",
   },
@@ -124,47 +125,73 @@ describe("mirrorLeadToSheet — 7-col row into the new-leads tab", () => {
     expect(row[1]).toBe("");
   });
 
-  it("callback inquiry → col C 'בקשת שיחה חוזרת'", async () => {
+  it("callback inquiry → col C 'בקשת שיחה חוזרת', new-leads tab", async () => {
     setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "callback" }), error: null })]);
     await mirrorLeadToSheet(CLIENT_ID);
-    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
+    const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
     expect(row[2]).toBe("בקשת שיחה חוזרת");
+    expect(tab).toBe("לידים חדשים");
   });
 
-  it("meeting + client_type old → 'תיאום פגישה — לקוח קיים'", async () => {
+  it("meeting + client_type old → 'תיאום פגישה — לקוח קיים', existing-client tab", async () => {
     setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "meeting", client_type: "old" }), error: null })]);
     await mirrorLeadToSheet(CLIENT_ID);
-    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
+    const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
     expect(row[2]).toBe("תיאום פגישה — לקוח קיים");
+    expect(tab).toBe("לקוח קיים");
   });
 
-  it("meeting + client_type new → 'תיאום פגישה — לקוח חדש'", async () => {
+  it("meeting + client_type new → 'תיאום פגישה — לקוח חדש', new-leads tab", async () => {
     setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "meeting", client_type: "new" }), error: null })]);
     await mirrorLeadToSheet(CLIENT_ID);
-    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
+    const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
     expect(row[2]).toBe("תיאום פגישה — לקוח חדש");
+    expect(tab).toBe("לידים חדשים");
   });
 
-  it("meeting before the sub-choice (no client_type) → plain 'תיאום פגישה'", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "meeting", client_type: null }), error: null })]);
+  it("vehicle inquiry → new-leads tab", async () => {
+    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "vehicle" }), error: null })]);
     await mirrorLeadToSheet(CLIENT_ID);
-    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
-    expect(row[2]).toBe("תיאום פגישה");
+    const [, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
+    expect(tab).toBe("לידים חדשים");
   });
 
-  it("placeholder 'general' inquiry → col C blank", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "general" }), error: null })]);
-    await mirrorLeadToSheet(CLIENT_ID);
-    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
-    expect(row[2]).toBe("");
-  });
-
-  it("mirrors regardless of client_type (no gating)", async () => {
+  it("mirrors non-meeting inquiries regardless of client_type", async () => {
     setupFromSequence([makeBuilder({ data: clientRow({ client_type: null, inquiry_type: "home" }), error: null })]);
     await mirrorLeadToSheet(CLIENT_ID);
     expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
-    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
+    const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
     expect(row[2]).toBe("ביטוח דירה");
+    expect(tab).toBe("לידים חדשים");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tab-routing gates — no row until a definitive choice is made
+// ---------------------------------------------------------------------------
+
+describe("mirrorLeadToSheet — routing gates", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpsertLeadRow.mockResolvedValue(true);
+  });
+
+  it("skips when inquiry_type is 'general' (no menu choice yet)", async () => {
+    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "general" }), error: null })]);
+    await mirrorLeadToSheet(CLIENT_ID);
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+
+  it("skips when inquiry_type is null", async () => {
+    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: null }), error: null })]);
+    await mirrorLeadToSheet(CLIENT_ID);
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+
+  it("skips a meeting request before the existing/new sub-choice (client_type null)", async () => {
+    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "meeting", client_type: null }), error: null })]);
+    await mirrorLeadToSheet(CLIENT_ID);
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
   });
 });
 

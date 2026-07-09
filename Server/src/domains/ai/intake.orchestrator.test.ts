@@ -282,11 +282,12 @@ describe("menu slot — callback_didi (button 8)", () => {
 
 describe("menu slot — meeting_didi (button 9)", () => {
   it("advances to the existing/new sub-choice buttons", async () => {
+    const updateInquiry = makeBuilder({ data: null, error: null });
     setupFrom([
       makeBuilder(BOT_ENABLED),
       makeBuilder(CONV_ACTIVE),
       makeBuilder(clientState("menu")),
-      makeBuilder({ data: null, error: null }), // updateInquiry meeting
+      updateInquiry, // updateInquiry meeting
       makeBuilder({ data: null, error: null }), // updateSlot
       makeBuilder({ data: null, error: null }), // persist
     ]);
@@ -294,6 +295,10 @@ describe("menu slot — meeting_didi (button 9)", () => {
     const result = await handleIntake("conv", "client", "chat@c.us", buttonPayload("meeting_didi"));
 
     expect(result.consumed).toBe(true);
+    expect((updateInquiry["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      inquiry_type: "meeting",
+      client_type: null,
+    });
     expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
     const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
     expect(buttons.map((b) => b.buttonId)).toEqual(["existing_client", "new_client"]);
@@ -542,6 +547,8 @@ describe("post-cooldown restart", () => {
       consent_prompted_at: null,
       stall_notified_at: null,
       intake_completed_at: null,
+      inquiry_type: "general",
+      client_type: null,
     });
     expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
     const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
