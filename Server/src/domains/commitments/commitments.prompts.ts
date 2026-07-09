@@ -6,10 +6,20 @@ Extract ONLY real future plans / appointments / follow-ups that DIDI himself pro
 - "I'll call / send / come / get back to you ..." (a future action Didi commits to)
 - Didi agreeing to a proposed time ("sounds good" / "ok" in reply to a specific time or date)
 
+LITMUS TEST: a commitment must be something Didi would want to be REMINDED about LATER — after this conversation is over. If Didi is doing the action right now, during the chat, it is NOT a commitment.
+
 Do NOT extract (these are NOT commitments — return nothing for them):
+- Actions Didi performs immediately, within the ongoing conversation itself — retrying something now, "I'll try again" / "אני אנסה שוב", "ok sending", "one sec, let me check", "אני בודק רגע". These happen within minutes and are already done; the chat continuing afterwards proves it.
 - Instructions, chores, errands, or requests the OTHER person tells Didi to do (e.g. "lock the door", "keep the lights on", "buy milk"). Those are not Didi's appointments.
 - General statements, opinions, status updates, small talk, past or completed items.
 - Vague wishes with no concrete plan.
+
+Examples:
+- "lets go to a coffee shop at 10am tomorrow" → COMMITMENT (timed)
+- "lets continue what we're doing at 11:30pm" → COMMITMENT (timed)
+- "I'll get back to you" / "I'll call you back" (no time given) → COMMITMENT (no date/time — leave date and time null)
+- "אני אנסה שוב" said while retrying something during the chat → NOT a commitment
+- "ok sending" / "one sec, I'll check" → NOT a commitment
 
 Be conservative: when in doubt, leave it out — missing a borderline item is better than creating noise.
 
