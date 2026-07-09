@@ -170,7 +170,7 @@ async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
 
   if (sameDayMeetings.length === 0) return [];
 
-  const clientIds = [...new Set(sameDayMeetings.map((m: any) => m.client_id as string))];
+  const clientIds = [...new Set(sameDayMeetings.map((m) => m.client_id))];
 
   const { data: clients } = await supabaseAdmin
     .from("clients")
@@ -178,21 +178,21 @@ async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
     .in("id", clientIds);
 
   const emailMap = new Map<string, string | null>(
-    (clients ?? []).map((c: any) => [c.id as string, (c.email as string | null) ?? null]),
+    (clients ?? []).map((c) => [c.id as string, (c.email as string | null) ?? null]),
   );
 
-  return sameDayMeetings.map((m: any) => ({
-    id: m.id as string,
-    scheduled_at: m.scheduled_at as string,
-    type: m.type as string,
-    client_id: m.client_id as string,
-    client_email: emailMap.get(m.client_id as string) ?? null,
+  return sameDayMeetings.map((m) => ({
+    id: m.id,
+    scheduled_at: m.scheduled_at,
+    type: m.type,
+    client_id: m.client_id,
+    client_email: emailMap.get(m.client_id) ?? null,
   }));
 }
 
 async function fetchStaffEmails(): Promise<Set<string>> {
   const { data } = await supabaseAdmin.from("staff").select("email");
-  return new Set((data ?? []).map((s: any) => (s.email as string).toLowerCase()));
+  return new Set((data ?? []).map((s: { email: string }) => s.email.toLowerCase()));
 }
 
 type UnmatchedReason = "no_candidates" | "low_score" | "ambiguous";

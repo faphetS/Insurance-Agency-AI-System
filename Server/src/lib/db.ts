@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- supabase-js compat shim: dynamically typed builder by design */
 import { Pool } from "pg";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";

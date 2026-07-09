@@ -80,7 +80,7 @@ export async function fetchRemoteFile(sourceUrl: string): Promise<Buffer | null>
 export async function persistRemoteFile(
   sourceUrl: string,
   destPath: string,
-  contentType?: string,
+  _contentType?: string,
 ): Promise<string | null> {
   try {
     const controller = new AbortController();

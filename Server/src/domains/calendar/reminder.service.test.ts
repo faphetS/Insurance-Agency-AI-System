@@ -48,6 +48,7 @@ vi.mock("../../config/supabase.js", () => {
         const flagKey = Object.keys(payload).find(
           (k) => k === "reminder_24h_sent" || k === "reminder_1h_sent",
         );
+        // eslint-disable-next-line @typescript-eslint/no-this-alias -- inner eq() closure needs the builder mock
         const outerSelf = this;
         if (flagKey) outerSelf._flag = flagKey;
         return {
