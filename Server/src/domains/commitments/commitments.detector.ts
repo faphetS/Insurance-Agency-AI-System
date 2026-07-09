@@ -32,7 +32,7 @@ function djb2(str: string): number {
   return hash >>> 0;
 }
 
-function israelLineLabel(at: Date): string {
+export function israelLineLabel(at: Date): string {
   const parts = LINE_LABEL_FORMAT.formatToParts(at).reduce<Record<string, string>>((acc, p) => {
     acc[p.type] = p.value;
     return acc;
