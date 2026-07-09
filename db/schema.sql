@@ -398,6 +398,33 @@ CREATE INDEX email_staff_mentions_status_idx
   ON public.email_staff_mentions (status, sent_at);
 
 -- ============================================================
+-- wa_unanswered — tracks unanswered inbound messages on Didi's own
+--   WhatsApp line (GreenAPI OP instance) so the operational bot can
+--   auto-reply after 1h of silence and a follow-up the next morning.
+--   One "active" row per chat_id at a time (partial unique index).
+-- ============================================================
+CREATE TABLE public.wa_unanswered (
+  id                  uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  chat_id             text        NOT NULL,
+  sender_name         text,
+  first_unanswered_at timestamptz NOT NULL,
+  auto_replied_at     timestamptz,
+  followup_sent_at    timestamptz,
+  state               text        NOT NULL DEFAULT 'watching'
+                      CHECK (state IN (
+                        'watching', 'awaiting_reply', 'pending_followup',
+                        'resolved', 'skipped', 'expired'
+                      )),
+  resolved_at         timestamptz,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX wa_unanswered_chat_id_active_uidx
+  ON public.wa_unanswered (chat_id)
+  WHERE state IN ('watching', 'awaiting_reply', 'pending_followup');
+CREATE INDEX wa_unanswered_state_idx ON public.wa_unanswered (state);
+
+-- ============================================================
 -- DEFERRED FOREIGN KEY: meetings.conversation_id → conversations
 -- Added after both tables exist (meetings refs conversations
 -- which was created in the same migration batch, but meetings

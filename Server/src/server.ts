@@ -9,6 +9,7 @@ import { ensureClientDocumentsBucket } from "./lib/storage.js";
 import { startCommitmentCrons } from "./domains/commitments/commitments.service.js";
 import { sendMorningDigest } from "./domains/operations/morning-digest.service.js";
 import { runStaffEmailNotify } from "./domains/operations/email-mentions.service.js";
+import { sweepUnanswered, sendUnansweredFollowups } from "./domains/operations/unanswered-wa.service.js";
 // v4: disabled — booking-sync + calendar reminders gated off (services kept dormant).
 // import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 // import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
@@ -164,13 +165,16 @@ const server = app.listen(env.PORT, () => {
     startCommitmentCrons();
 
     cron.schedule(
-      "0 8 * * *",
+      "0 9 * * *",
       () => {
         sendMorningDigest().catch((err: unknown) =>
           logger.error({ err }, "morning-digest: daily run failed"),
         );
         runStaffEmailNotify().catch((err: unknown) =>
           logger.error({ err }, "email-mentions: daily run failed"),
+        );
+        sendUnansweredFollowups().catch((err: unknown) =>
+          logger.error({ err }, "unanswered-wa: daily follow-up run failed"),
         );
       },
       { timezone: "Asia/Jerusalem" },
@@ -201,6 +205,13 @@ const server = app.listen(env.PORT, () => {
         logger.error({ err }, "intake-stall: scheduled check failed"),
       );
     }, 10 * 60 * 1000);
+
+    // Unanswered-WA sweeper — every 5 minutes, auto-reply on Didi's own line after 1h of silence.
+    setInterval(() => {
+      sweepUnanswered().catch((err: unknown) =>
+        logger.error({ err }, "unanswered-wa: scheduled sweep failed"),
+      );
+    }, 5 * 60 * 1000);
   } else {
     logger.info("Skipping booking/reminder schedulers — BACKEND_URL not public");
   }

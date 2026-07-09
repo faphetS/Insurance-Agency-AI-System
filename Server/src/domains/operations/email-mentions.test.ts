@@ -1,4 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// ---------------------------------------------------------------------------
+// Hoisted mock functions
+// ---------------------------------------------------------------------------
+const { mockPoolQuery, mockSendOwnerEmail, mockSleep } = vi.hoisted(() => ({
+  mockPoolQuery: vi.fn(),
+  mockSendOwnerEmail: vi.fn(),
+  mockSleep: vi.fn(),
+}));
 
 // ---------------------------------------------------------------------------
 // Module mocks — declared before any project imports so Vitest hoists them
@@ -17,19 +26,29 @@ vi.mock("../../config/logger.js", () => ({
 }));
 
 vi.mock("../../lib/db.js", () => ({
-  pool: { query: vi.fn() },
+  pool: { query: mockPoolQuery },
+}));
+
+vi.mock("../../lib/sleep.js", () => ({
+  sleep: mockSleep,
 }));
 
 vi.mock("../integrations/google/google.gmail.js", () => ({
   listSentMessageIds: vi.fn(),
   getSentMessage: vi.fn(),
-  sendOwnerEmail: vi.fn(),
+  sendOwnerEmail: mockSendOwnerEmail,
 }));
 
 // ---------------------------------------------------------------------------
 // Subject import (after mocks)
 // ---------------------------------------------------------------------------
-import { matchStaffInEmail } from "./email-mentions.service.js";
+import { env } from "../../config/env.js";
+import {
+  matchStaffInEmail,
+  staffFirstName,
+  buildStaffReminderEmail,
+  notifyStaffMentions,
+} from "./email-mentions.service.js";
 import type { StaffMatch } from "./email-mentions.service.js";
 
 // ---------------------------------------------------------------------------
@@ -103,5 +122,132 @@ describe("matchStaffInEmail", () => {
     const matches = matchStaffInEmail(headers, AGENT_STAFF);
     expect(matches).toHaveLength(1);
     expect(matches[0].staff.id).toBe("uuid-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: staffFirstName (pure helper)
+// ---------------------------------------------------------------------------
+describe("staffFirstName", () => {
+  it("returns the first token of a two-word name", () => {
+    expect(staffFirstName("Moshe Cohen")).toBe("Moshe");
+  });
+
+  it("returns the first token of a Hebrew multi-word name", () => {
+    expect(staffFirstName("משה   כהן לוי")).toBe("משה");
+  });
+
+  it("returns the whole string when there is only one token", () => {
+    expect(staffFirstName("Moshe")).toBe("Moshe");
+  });
+
+  it("returns empty string for a blank name", () => {
+    expect(staffFirstName("")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: buildStaffReminderEmail (pure helper)
+// ---------------------------------------------------------------------------
+describe("buildStaffReminderEmail", () => {
+  it("subject is always תזכורת", () => {
+    const { subject } = buildStaffReminderEmail("Moshe Cohen", [{ subject: "Policy renewal" }]);
+    expect(subject).toBe("תזכורת");
+  });
+
+  it("renders singular wording for exactly one subject row", () => {
+    const { body } = buildStaffReminderEmail("Moshe Cohen", [{ subject: "Policy renewal" }]);
+    expect(body).toBe(
+      "היי Moshe — זוהי תזכורת למייל שקיבלת מדידי בנושא Policy renewal.\n\nתודה, דידי",
+    );
+  });
+
+  it("renders plural wording with bullet list for multiple subject rows", () => {
+    const { body } = buildStaffReminderEmail("Sara Levi", [
+      { subject: "Policy renewal" },
+      { subject: "Client follow-up" },
+    ]);
+    expect(body).toBe(
+      "היי Sara — זוהי תזכורת למיילים שקיבלת מדידי בנושאים:\n• Policy renewal\n• Client follow-up\n\nתודה, דידי",
+    );
+  });
+
+  it("renders a null subject as (ללא נושא)", () => {
+    const { body } = buildStaffReminderEmail("Moshe Cohen", [{ subject: null }]);
+    expect(body).toContain("(ללא נושא)");
+  });
+
+  it("renders a null subject as (ללא נושא) inside the plural bullet list", () => {
+    const { body } = buildStaffReminderEmail("Moshe Cohen", [
+      { subject: "Real subject" },
+      { subject: null },
+    ]);
+    expect(body).toContain("• (ללא נושא)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: notifyStaffMentions — send-mode pacing (30s gap) vs log-mode (no delay)
+// ---------------------------------------------------------------------------
+describe("notifyStaffMentions — pacing", () => {
+  const TWO_STAFF_ROWS = [
+    { id: "m1", staff_id: "uuid-1", staff_email: "moshe@shaked-ins.com", staff_name: "Moshe Cohen", subject: "A", sent_at: "2026-07-01T08:00:00Z" },
+    { id: "m2", staff_id: "uuid-2", staff_email: "sara@shaked-ins.com", staff_name: "Sara Levi", subject: "B", sent_at: "2026-07-01T09:00:00Z" },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSleep.mockResolvedValue(undefined);
+    mockSendOwnerEmail.mockResolvedValue(undefined);
+    mockPoolQuery.mockImplementation((sql: string) => {
+      if (sql.includes("SELECT id, staff_id")) {
+        return Promise.resolve({ rows: TWO_STAFF_ROWS });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+  });
+
+  it("log mode: sends no real emails and never sleeps between staff", async () => {
+    env.STAFF_EMAIL_NOTIFY_MODE = "log";
+
+    const result = await notifyStaffMentions();
+
+    expect(result.notified).toBe(2);
+    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+    expect(mockSleep).not.toHaveBeenCalled();
+  });
+
+  it("send mode: waits between per-staff emails (sleep called once for 2 staff)", async () => {
+    env.STAFF_EMAIL_NOTIFY_MODE = "send";
+
+    const result = await notifyStaffMentions();
+
+    expect(result.notified).toBe(2);
+    expect(mockSendOwnerEmail).toHaveBeenCalledTimes(2);
+    expect(mockSleep).toHaveBeenCalledTimes(1);
+    expect(mockSleep).toHaveBeenCalledWith(30_000);
+
+    env.STAFF_EMAIL_NOTIFY_MODE = "log";
+  });
+
+  it("send mode: does not sleep before the first send", async () => {
+    env.STAFF_EMAIL_NOTIFY_MODE = "send";
+
+    // sleep should be called AFTER the first email, before the second — verify ordering
+    const callOrder: string[] = [];
+    mockSendOwnerEmail.mockImplementation(() => {
+      callOrder.push("send");
+      return Promise.resolve(undefined);
+    });
+    mockSleep.mockImplementation(() => {
+      callOrder.push("sleep");
+      return Promise.resolve(undefined);
+    });
+
+    await notifyStaffMentions();
+
+    expect(callOrder).toEqual(["send", "sleep", "send"]);
+
+    env.STAFF_EMAIL_NOTIFY_MODE = "log";
   });
 });

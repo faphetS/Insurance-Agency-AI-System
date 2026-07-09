@@ -6,11 +6,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const {
   mockGetUnresolvedMissedSince,
   mockPruneCallsOlderThan,
-  mockNotifyOwner,
+  mockNotifyOwnerOps,
 } = vi.hoisted(() => ({
   mockGetUnresolvedMissedSince: vi.fn(),
   mockPruneCallsOlderThan: vi.fn(),
-  mockNotifyOwner: vi.fn(),
+  mockNotifyOwnerOps: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ vi.mock("./call-events.service.js", () => ({
 }));
 
 vi.mock("./owner-notify.js", () => ({
-  notifyOwner: mockNotifyOwner,
+  notifyOwnerOps: mockNotifyOwnerOps,
 }));
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ describe("sendDailyCallReminder", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPruneCallsOlderThan.mockResolvedValue(undefined);
-    mockNotifyOwner.mockResolvedValue(true);
+    mockNotifyOwnerOps.mockResolvedValue(true);
   });
 
   it("does NOT call notifyOwner when there are no missed/declined rows", async () => {
@@ -58,7 +58,7 @@ describe("sendDailyCallReminder", () => {
 
     await sendDailyCallReminder();
 
-    expect(mockNotifyOwner).not.toHaveBeenCalled();
+    expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
   });
 
   it("calls notifyOwner with a message containing the phone numbers when rows exist", async () => {
@@ -69,8 +69,8 @@ describe("sendDailyCallReminder", () => {
 
     await sendDailyCallReminder();
 
-    expect(mockNotifyOwner).toHaveBeenCalledOnce();
-    const [text] = mockNotifyOwner.mock.calls[0] as [string];
+    expect(mockNotifyOwnerOps).toHaveBeenCalledOnce();
+    const [text] = mockNotifyOwnerOps.mock.calls[0] as [string];
     expect(text).toContain("972501234567");
     expect(text).toContain("972509876543");
     expect(text).toMatch(/\d{2}:\d{2}/);
@@ -83,7 +83,7 @@ describe("sendDailyCallReminder", () => {
 
     await sendDailyCallReminder();
 
-    const [text] = mockNotifyOwner.mock.calls[0] as [string];
+    const [text] = mockNotifyOwnerOps.mock.calls[0] as [string];
     expect(text).toContain("972501111111");
     expect(text).not.toContain("@c.us");
   });
@@ -92,7 +92,7 @@ describe("sendDailyCallReminder", () => {
     mockGetUnresolvedMissedSince.mockResolvedValue([
       { counterpart_phone: "972501234567@c.us", called_at: "2026-06-25T09:30:00Z" },
     ]);
-    mockNotifyOwner.mockResolvedValue(false);
+    mockNotifyOwnerOps.mockResolvedValue(false);
 
     await sendDailyCallReminder();
 

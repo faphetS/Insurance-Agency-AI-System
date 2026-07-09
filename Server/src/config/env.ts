@@ -101,6 +101,13 @@ const envSchema = z.object({
   GREENAPI_OP_ID_INSTANCE: z.string().optional(),
   GREENAPI_OP_API_TOKEN: z.string().optional(),
 
+  // GreenAPI instance #3 — dedicated operational-notify line. Carries every owner
+  // notification the operational bot sends (morning digest, call-reminder, commitments,
+  // unanswered-WA alerts). Leave blank to keep dormant — notifyOwnerOps() no-ops.
+  GREENAPI_NOTIFY_ID_INSTANCE: z.string().optional(),
+  GREENAPI_NOTIFY_API_TOKEN: z.string().optional(),
+  GREENAPI_NOTIFY_BASE_URL: z.string().optional(),
+
   // Provider toggles — set to "stub" to disable live API calls
   EMAIL_PROVIDER: z.enum(["stub", "live"]).default("live"),
 

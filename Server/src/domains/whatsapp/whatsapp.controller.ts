@@ -4,6 +4,7 @@ import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
 import { assignStaffToMeeting } from "../meetings/meeting-handoff.service.js";
+import { handleOpInstanceEvent } from "../operations/unanswered-wa.service.js";
 import * as whatsappService from "./whatsapp.service.js";
 import {
   incomingMessageSchema,
@@ -23,17 +24,9 @@ export const whatsappController = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawBody = req.body as Record<string, any>;
 
-    // Operational-instance short-circuit: any webhook from the op line (GREENAPI_OP_*)
-    // is acknowledged and ignored — it never enters the conversational pipeline.
-    // (SIM/cellular missed calls are captured via the separate Zadarma webhook.)
-    const opIdInstance = rawBody.instanceData?.idInstance;
-    if (opIdInstance !== undefined && env.GREENAPI_OP_ID_INSTANCE && String(opIdInstance) === env.GREENAPI_OP_ID_INSTANCE) {
-      res.status(200).json({ ok: true });
-      return;
-    }
-
-    // 1. Verify token — accept either Authorization: Bearer <token> (GreenAPI style)
-    //    or a ?token=<token> query param.
+    // 1. Verify token FIRST — accept either Authorization: Bearer <token> (GreenAPI style)
+    //    or a ?token=<token> query param. Applies to every instance hitting this webhook,
+    //    including the operational (GREENAPI_OP_*) line.
     const authHeader = req.headers.authorization;
     const tokenParam = typeof req.query["token"] === "string" ? req.query["token"] : null;
     const headerOk = authHeader === `Bearer ${env.GREENAPI_WEBHOOK_TOKEN}`;
@@ -45,6 +38,21 @@ export const whatsappController = {
         "Webhook token mismatch — returning 200 to prevent retry storms",
       );
       res.status(200).json({ ok: true });
+      return;
+    }
+
+    // Operational-instance short-circuit: any TOKEN-VERIFIED webhook from the op line
+    // (GREENAPI_OP_*) is acknowledged and handed to the unanswered-WA handler; it never
+    // enters the conversational pipeline below. (SIM/cellular missed calls are captured
+    // via the separate Zadarma webhook.)
+    const opIdInstance = rawBody.instanceData?.idInstance;
+    if (opIdInstance !== undefined && env.GREENAPI_OP_ID_INSTANCE && String(opIdInstance) === env.GREENAPI_OP_ID_INSTANCE) {
+      res.status(200).json({ ok: true });
+      setImmediate(() =>
+        handleOpInstanceEvent(rawBody).catch((err: unknown) =>
+          logger.error({ err }, "handleOpInstanceEvent failed"),
+        ),
+      );
       return;
     }
 

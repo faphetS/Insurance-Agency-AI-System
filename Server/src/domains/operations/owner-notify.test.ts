@@ -3,9 +3,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 // Hoisted mock functions
 // ---------------------------------------------------------------------------
-const { mockSendMessage, mockToChatId } = vi.hoisted(() => ({
+const { mockSendMessage, mockToChatId, mockNotifyCreds, mockSendMessageWith } = vi.hoisted(() => ({
   mockSendMessage: vi.fn(),
   mockToChatId: vi.fn(),
+  mockNotifyCreds: vi.fn(),
+  mockSendMessageWith: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -24,6 +26,8 @@ vi.mock("../../config/logger.js", () => ({
 
 vi.mock("../whatsapp/whatsapp.service.js", () => ({
   sendMessage: mockSendMessage,
+  notifyCreds: mockNotifyCreds,
+  sendMessageWith: mockSendMessageWith,
 }));
 
 vi.mock("../whatsapp/whatsapp.util.js", () => ({
@@ -33,7 +37,7 @@ vi.mock("../whatsapp/whatsapp.util.js", () => ({
 // ---------------------------------------------------------------------------
 // Subject import (after mocks)
 // ---------------------------------------------------------------------------
-import { notifyOwner } from "./owner-notify.js";
+import { notifyOwner, notifyOwnerOps } from "./owner-notify.js";
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -77,6 +81,51 @@ describe("notifyOwner", () => {
     mockSendMessage.mockRejectedValue(new Error("network error"));
 
     const result = await notifyOwner("test message");
+
+    expect(result).toBe(false);
+  });
+});
+
+const NOTIFY_CREDS = { idInstance: "notify-id", token: "notify-token", baseUrl: "https://notify.api.greenapi.com" };
+
+describe("notifyOwnerOps", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendMessageWith.mockResolvedValue({ idMessage: "msg-1" });
+    mockToChatId.mockReturnValue(CHAT_ID);
+    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
+  });
+
+  it("returns false and does not call sendMessageWith when SUMMARY_RECIPIENT_PHONE is unset", async () => {
+    mockToChatId.mockReturnValue(null);
+
+    const result = await notifyOwnerOps("hello");
+
+    expect(result).toBe(false);
+    expect(mockSendMessageWith).not.toHaveBeenCalled();
+  });
+
+  it("returns false and does not call sendMessageWith when notify creds are blank", async () => {
+    mockNotifyCreds.mockReturnValue(null);
+
+    const result = await notifyOwnerOps("hello");
+
+    expect(result).toBe(false);
+    expect(mockSendMessageWith).not.toHaveBeenCalled();
+  });
+
+  it("calls sendMessageWith with the notify creds, chatId and text, returns true on success", async () => {
+    const result = await notifyOwnerOps("test message");
+
+    expect(result).toBe(true);
+    expect(mockSendMessageWith).toHaveBeenCalledOnce();
+    expect(mockSendMessageWith).toHaveBeenCalledWith(NOTIFY_CREDS, CHAT_ID, "test message");
+  });
+
+  it("returns false when sendMessageWith throws", async () => {
+    mockSendMessageWith.mockRejectedValue(new Error("network error"));
+
+    const result = await notifyOwnerOps("test message");
 
     expect(result).toBe(false);
   });

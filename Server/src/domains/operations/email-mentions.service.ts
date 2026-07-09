@@ -1,7 +1,12 @@
 import { pool } from "../../lib/db.js";
 import { logger } from "../../config/logger.js";
 import { env } from "../../config/env.js";
+import { sleep } from "../../lib/sleep.js";
 import { listSentMessageIds, getSentMessage, sendOwnerEmail } from "../integrations/google/google.gmail.js";
+
+// Gap between per-staff reminder emails when actually sending (STAFF_EMAIL_NOTIFY_MODE=send).
+// No delay in "log" (dry-run) mode.
+const STAFF_EMAIL_SEND_GAP_MS = 30_000;
 
 const TEMPLATE = /חתימה מרחוק|סיום תהליך/;
 
@@ -105,6 +110,35 @@ export async function scanAndStoreSentMentions(): Promise<{ scanned: number; sto
   return { scanned, stored };
 }
 
+// First whitespace-separated token of the staff's full name (greeting form).
+export function staffFirstName(staffName: string): string {
+  return staffName.trim().split(/\s+/)[0] ?? "";
+}
+
+export interface StaffReminderEmail {
+  subject: string;
+  body: string;
+}
+
+// Adaptive Hebrew reminder body: singular wording for one subject, plural for many.
+// Null subjects render as "(ללא נושא)".
+export function buildStaffReminderEmail(
+  staffName: string,
+  rows: Pick<MentionRow, "subject">[],
+): StaffReminderEmail {
+  const first = staffFirstName(staffName);
+  const subjects = rows.map((r) => r.subject ?? "(ללא נושא)");
+
+  const body =
+    subjects.length === 1
+      ? `היי ${first} — זוהי תזכורת למייל שקיבלת מדידי בנושא ${subjects[0]}.\n\nתודה, דידי`
+      : `היי ${first} — זוהי תזכורת למיילים שקיבלת מדידי בנושאים:\n${subjects
+          .map((s) => `• ${s}`)
+          .join("\n")}\n\nתודה, דידי`;
+
+  return { subject: "תזכורת", body };
+}
+
 export async function notifyStaffMentions(): Promise<{ notified: number }> {
   const res = await pool.query<MentionRow>(
     `SELECT id, staff_id, staff_email, staff_name, subject, sent_at
@@ -121,24 +155,24 @@ export async function notifyStaffMentions(): Promise<{ notified: number }> {
   }
 
   let notified = 0;
+  let isFirst = true;
 
   for (const [, rows] of byStaff) {
     const first = rows[0];
     const staffName = first.staff_name ?? "";
     const staffEmail = first.staff_email;
 
-    const bullets = rows
-      .map((r) => `• "${r.subject ?? "(ללא נושא)"}"`)
-      .join("\n");
-
-    const subject = "תזכורת ממשרד שקד";
-    const body = `שלום ${staffName},\n\nתזכורת: אתמול דידי שלח/העביר אליך מייל בנושא:\n${bullets}\n\nנא לטפל בהתאם.`;
+    const { subject, body } = buildStaffReminderEmail(staffName, rows);
 
     if (env.STAFF_EMAIL_NOTIFY_MODE === "send") {
+      if (!isFirst) {
+        await sleep(STAFF_EMAIL_SEND_GAP_MS);
+      }
       await sendOwnerEmail(staffEmail, subject, body);
     } else {
       logger.info({ to: staffEmail, subject, body }, "staff-email-notify (DRY RUN — not sent)");
     }
+    isFirst = false;
 
     const ids = rows.map((r) => r.id);
     await pool.query(

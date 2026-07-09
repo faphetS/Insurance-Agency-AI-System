@@ -10,12 +10,14 @@ const {
   mockSendMessageWithTyping,
   mockIsStaffChat,
   mockFromImpl,
+  mockHandleOpInstanceEvent,
 } = vi.hoisted(() => ({
   mockHandleIntake: vi.fn().mockResolvedValue({ consumed: false }),
   mockAssignStaffToMeeting: vi.fn().mockResolvedValue(undefined),
   mockSendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "out1" }),
   mockIsStaffChat: vi.fn().mockResolvedValue(null),
   mockFromImpl: vi.fn(),
+  mockHandleOpInstanceEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------
@@ -54,6 +56,10 @@ vi.mock("../ai/intake.orchestrator.js", () => ({
 
 vi.mock("../meetings/meeting-handoff.service.js", () => ({
   assignStaffToMeeting: mockAssignStaffToMeeting,
+}));
+
+vi.mock("../operations/unanswered-wa.service.js", () => ({
+  handleOpInstanceEvent: mockHandleOpInstanceEvent,
 }));
 
 vi.mock("./whatsapp.service.js", () => ({
@@ -333,6 +339,75 @@ describe("whatsappController.handleWebhook — token guard", () => {
 
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
     expect((res.json as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith({ ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Operational-instance dispatch — token verified FIRST, then handed to
+// handleOpInstanceEvent; never reaches the conversational pipeline.
+// ---------------------------------------------------------------------------
+
+describe("whatsappController.handleWebhook — operational-instance dispatch", () => {
+  const OP_ID_INSTANCE = "7103519997";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsStaffChat.mockResolvedValue(null);
+    mockHandleIntake.mockResolvedValue({ consumed: false });
+    envMock.GREENAPI_OP_ID_INSTANCE = OP_ID_INSTANCE;
+  });
+
+  afterEach(() => {
+    envMock.GREENAPI_OP_ID_INSTANCE = undefined;
+  });
+
+  it("valid token + OP instance event: 200, dispatches to handleOpInstanceEvent, never handleIntake", async () => {
+    const body = {
+      typeWebhook: "incomingMessageReceived",
+      instanceData: { idInstance: OP_ID_INSTANCE },
+      senderData: { chatId: "972501111111@c.us", senderName: "Someone" },
+      messageData: { typeMessage: "textMessage", textMessageData: { textMessage: "hi" } },
+    };
+    const req = {
+      headers: { authorization: "Bearer tok" },
+      query: {},
+      body,
+    } as unknown as Request;
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(mockHandleOpInstanceEvent).toHaveBeenCalledOnce();
+    expect(mockHandleOpInstanceEvent).toHaveBeenCalledWith(body);
+    expect(mockHandleIntake).not.toHaveBeenCalled();
+  });
+
+  it("bad token + OP instance event: 200, warns, does NOT dispatch to handleOpInstanceEvent", async () => {
+    const body = {
+      typeWebhook: "incomingMessageReceived",
+      instanceData: { idInstance: OP_ID_INSTANCE },
+      senderData: { chatId: "972501111111@c.us", senderName: "Someone" },
+      messageData: { typeMessage: "textMessage", textMessageData: { textMessage: "hi" } },
+    };
+    const req = {
+      headers: {},
+      query: { token: "wrong-token" },
+      body,
+    } as unknown as Request;
+    const res = makeRes();
+
+    await whatsappController.handleWebhook(req, res);
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+    expect((res.json as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith({ ok: true });
+
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(mockHandleOpInstanceEvent).not.toHaveBeenCalled();
   });
 });
 

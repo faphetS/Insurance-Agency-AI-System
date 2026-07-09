@@ -32,4 +32,11 @@ router.post(
   operationsController.runEmailMentions,
 );
 
+router.post(
+  "/unanswered/run",
+  authenticate,
+  authorize("admin"),
+  operationsController.runUnanswered,
+);
+
 export default router;

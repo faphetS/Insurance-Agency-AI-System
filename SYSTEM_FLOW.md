@@ -1,8 +1,18 @@
 # SYSTEM_FLOW.md — End-to-End Behavioral Reference
 
 > Canonical description of **how the system behaves**, re-traced from source on **2026-07-01**,
-> updated **2026-07-09** for the **conversational bot v4** redesign (9-button menu; see §3 and
-> `.claude/CONVERSATIONAL_BOT.md` for the full bot reference).
+> updated **2026-07-09** for the **conversational bot v4/v4.1** redesign (9-button menu + sheet-mirror
+> tab routing).
+>
+> **📍 The two bots each have a dedicated deep-dive doc — read those for feature-level detail:**
+> - **`.claude/CONVERSATIONAL_BOT.md`** — the customer-facing WhatsApp intake bot (v4.1 state machine,
+>   staff-email routing, lead mirror, control switches).
+> - **`.claude/OPERATIONAL_BOT.md`** — every automation outside intake (morning digest, commitments,
+>   missed-call/Zadarma capture, email staff-mentions, Timeless post-meeting pipeline, staff handoff,
+>   calendar machinery, biennial), each tagged LIVE / DISABLED / DORMANT.
+>
+> This file stays the end-to-end map (cross-bot flow, data locations, cadences); the two docs above are
+> the per-bot source of truth and are updated first when a bot changes.
 > Complements `CLAUDE.md` (architecture + conventions). BAFI is fully dropped (decision 2026-06-24);
 > its reference assets live in `temp-files/` and no BAFI code remains.
 > **When code and this doc disagree, the code wins — update this doc.** Items that could not be fully
@@ -46,7 +56,11 @@ menu (7 insurance types → staff **email**; callback → Didi WA alert; meeting
 tap-only consent + lenient ID OCR); department-routing pings removed; terminals now pause 24h (cooldown,
 fresh menu on return); 3h stall watcher alerts Didi; calendar booking-sync + 24h/1h reminders + Timeless
 run-loops **disabled** (code kept, server.ts registrations commented out); biennial service-meeting cron
-deleted (service kept dormant); lead mirror rewritten to a 7-column single-tab progressive upsert.**
+deleted (service kept dormant); lead mirror rewritten to a 7-column single-tab progressive upsert.
+**v4.1 (same day, `b0da7b3`): sheet mirror tab-routed — rows appear only after a definitive menu choice
+(buttons 1-8 → `לידים חדשים `; button 9 + existing → `לקוח קיים `; no flow-start phone-only rows);
+appended rows auto-formatted 13pt/not-bold/white; `meeting_didi` tap + fresh-restart now clear stale
+`inquiry_type`/`client_type`.**
 
 ---
 
@@ -285,11 +299,13 @@ verifies the signature, acks 200 immediately, records the event, and forwards `p
 
 ## 5. Operational bot — three pillars (`operations/*`, `commitments/*`)
 
-**Send transport:** the Didi-facing reminders (pillars 1 & 2 + the merged digest) **deliver through the
-conversational GreenAPI instance** via `notifyOwner(text)` (`operations/owner-notify.ts` →
-`sendMessage(toChatId(SUMMARY_RECIPIENT_PHONE), text)`) — a real notification to Didi. It returns `false`
-(and sends nothing) if `SUMMARY_RECIPIENT_PHONE` is unset or the conversational GreenAPI creds are blank
-(the no-op guard is inside `sendMessage`), and the "mark sent"/prune steps are gated on a `true` result.
+**Send transport (changed 2026-07-10):** the Didi-facing reminders (pillars 1 & 2 + the merged digest +
+unanswered-WA alerts) **deliver through the dedicated NOTIFY GreenAPI instance** (`GREENAPI_NOTIFY_*`,
+instance `7107677591`, free tier — only ever messages Didi) via `notifyOwnerOps(text)`
+(`operations/owner-notify.ts` → `sendMessageWith(notifyCreds(), toChatId(SUMMARY_RECIPIENT_PHONE), text)`).
+It returns `false` (and sends nothing) if `SUMMARY_RECIPIENT_PHONE` or the notify creds are blank, and the
+"mark sent"/prune steps are gated on a `true` result. The old `notifyOwner` (conversational 945 line) now
+carries ONLY the intake 📞 callback + ⚠️ stall alerts.
 **Scanning is still the GreenAPI op line** (`opCreds()` journals only — call webhooks are now handled by
 Zadarma, §5a). The `commitment_self_chat_id` / `commitment_bot_chat_id` settings are still populated and
 still used to **exclude Didi's own self/bot chat from the commitment scan** (`getExcludedChatIds`) — they
@@ -308,8 +324,8 @@ Gmail.
   **no answered-callback suppression** (the "latest answered call cancels a missed-call entry" logic was
   removed). Output: `"תזכורת על שיחות שלא נענו אתמול:"` + `- <phone> בשעה <HH:mm>` lines.
 - **Send.** `sendDailyCallReminder` exists as a standalone sender (manual route) and delivers to Didi
-  via `notifyOwner` (conversational GreenAPI instance), but in production this section is **merged into
-  the 08:00 morning digest** (§5.4). `call_events` pruned older than 48h after a successful send.
+  via `notifyOwnerOps` (NOTIFY instance), but in production this section is **merged into
+  the 09:00 morning digest** (§5.4). `call_events` pruned older than 48h after a successful send.
 
 ### 5.2 Pillar 2 — Personal commitment reminders — `commitments/*`
 - **Scan (`scanRecentChats`).** Reads the op line's last-24h **incoming + outgoing** journals
@@ -322,8 +338,8 @@ Gmail.
   inserted into `commitments` with a derived `kind` and `fire_at`; dedup key
   `source_message_id = "<chatId>:<djb2(what)>"` (partial-unique, raw SQL `ON CONFLICT … DO NOTHING`).
 - **`fire_at` rules (`commitments.fireat.ts`).** `timed` (date + time) → **1 h before**, clamped to
-  07:00–21:00 Jerusalem; `date_only` (date, no time) → **08:00 on the due date**; `floating` (neither) →
-  **next day 08:00** (message date + 1 day).
+  07:00–21:00 Jerusalem; `date_only` (date, no time) → **09:00 on the due date**; `floating` (neither) →
+  **next day 09:00** (message date + 1 day).
 - **Fire.**
   - **Timed:** `fireTimedReminders` runs every **15 min** (`setInterval` in `startCommitmentCrons`). It
     cancels `timed` rows that are stale by > 2 h, then sends due rows grouped by minute as
@@ -331,10 +347,10 @@ Gmail.
     send).
   - **Date-only / floating:** `buildMorningCommitmentSection` (status `pending`, kind in
     `date_only`/`floating`, `fire_at <= now`) is composed by the LLM into a Hebrew bullet list
-    (`"בוקר טוב! התזכורות להיום:"`, fallback template on LLM failure) and **merged into the 08:00 digest**;
+    (`"בוקר טוב! התזכורות להיום:"`, fallback template on LLM failure) and **merged into the 09:00 digest**;
     the included ids are then marked `sent`.
-- All commitment reminders go to **Didi via the conversational GreenAPI instance** (`sendSelfMessage`
-  wraps `notifyOwner` — despite the legacy name it sends to `SUMMARY_RECIPIENT_PHONE`, not as a
+- All commitment reminders go to **Didi via the NOTIFY instance** (`sendSelfMessage`
+  wraps `notifyOwnerOps` — despite the legacy name it sends to `SUMMARY_RECIPIENT_PHONE`, not as a
   self-message on the op line).
 
 ### 5.3 Pillar 3 — Email staff-mentions — `operations/email-mentions.service.ts`
@@ -344,17 +360,19 @@ Gmail.
   staff local-part (so both `@shaked-ins.com` and `@ddins.net` match; body matching was removed to avoid
   quoted-header false positives). Matches are inserted into `email_staff_mentions`, dedup
   `(gmail_message_id, staff_id)`.
-- **Notify (`notifyStaffMentions`).** Groups pending rows per staff and composes a Hebrew reminder
-  (subject `"תזכורת ממשרד שקד"`; body lists the email subjects). **Delivery is gated by
+- **Notify (`notifyStaffMentions`).** Groups pending rows per staff and composes the Hebrew reminder
+  (`buildStaffReminderEmail`, new template 2026-07-10): subject `"תזכורת"`; greeting `היי <first name>`;
+  ONE subject → `זוהי תזכורת למייל שקיבלת מדידי בנושא <subject>.`, SEVERAL → plural sentence + `•` bullets;
+  sign-off `תודה, דידי`. **30s gap between emails in `send` mode** (none in `log`). **Delivery is gated by
   `STAFF_EMAIL_NOTIFY_MODE`** (default **`log`** = dry-run to pm2 logs, **no send**; `send` = actually
   email each staff via `sendOwnerEmail`). Rows flip to `status='sent'` either way (idempotent).
-- `runStaffEmailNotify` (scan + notify) runs at **08:00** alongside the digest cron.
+- `runStaffEmailNotify` (scan + notify) runs at **09:00** alongside the digest cron.
 
-### 5.4 The merged 08:00 digest — `operations/morning-digest.service.ts`
-`sendMorningDigest` (cron `0 8 * * *`, Asia/Jerusalem) re-scans commitments (`refreshCommitments`), builds
+### 5.4 The merged 09:00 digest — `operations/morning-digest.service.ts`
+`sendMorningDigest` (cron `0 9 * * *`, Asia/Jerusalem) re-scans commitments (`refreshCommitments`), builds
 the **commitment morning section** and the **call-reminder section** in parallel, joins them (commitments
-first, blank line, then calls) into **one** Hebrew message and sends it **to Didi via `notifyOwner`**
-(conversational GreenAPI instance). If both sections are empty it returns early without sending anything.
+first, blank line, then calls) into **one** Hebrew message and sends it **to Didi via `notifyOwnerOps`**
+(NOTIFY instance). If both sections are empty it returns early without sending anything.
 After the send attempt: commitment ids are marked `sent` **only if the send returned `true`**; then
 `pruneCallsOlderThan(48h)` runs **unconditionally** (regardless of send result, but only if there was
 something to send — the empty-check above returns before this point). Still gated on `opCreds()` (scan
@@ -430,24 +448,31 @@ localhost) so dev boots never touch live lines or prod data.
 | Job | Trigger | Cadence | Source |
 |---|---|---|---|
 | Commitment timed reminders | `setInterval` (`startCommitmentCrons`) | every 15 min | `commitments.reminders.ts` |
-| Morning digest (commitments + calls) **and** email staff-mentions | `cron` | `0 8 * * *` Asia/Jerusalem | `morning-digest.service.ts` + `email-mentions.service.ts` |
+| Morning digest (commitments + calls) **and** email staff-mentions **and** unanswered-WA follow-ups | `cron` | `0 9 * * *` Asia/Jerusalem (moved from 08:00, 2026-07-10) | `morning-digest.service.ts` + `email-mentions.service.ts` + `unanswered-wa.service.ts` |
+| **Unanswered-WA sweeper (new 2026-07-10)** | `setInterval` | every 5 min | `operations/unanswered-wa.service.ts` |
 | **Intake stall watcher (v4)** | `setInterval` | every 10 min | `ai/intake-stall.service.ts` |
 
 **Disabled/removed in v4** (registrations commented out or deleted in `server.ts`; service code kept):
 calendar booking-sync (was +30s / 3 min), appointment 24h/1h reminders (was 10 min), biennial
 service-meeting cron (was `10 8 * * *` — **deleted**), Timeless hourly poll + webhook registration.
 
-Note: the **call reminder** is not independently scheduled — it ships inside the 08:00 digest. There is
-**no** SLA / unanswered-scan / milestone-task cron anymore.
+Note: the **call reminder** is not independently scheduled — it ships inside the 09:00 digest.
+
+### 6a. Unanswered WA messages (new pillar, 2026-07-10) — `operations/unanswered-wa.service.ts`
+Watches Didi's own line (944) via its webhook (token now REQUIRED — see §9): incoming private-chat message
+07:00–20:00 Israel with no reply for 1h → auto-reply from 944 as Didi (office number 026244791); anyone
+replying cancels; next day 09:00 → 2-button follow-up (`ua_ok`/`ua_callback`); `ua_callback` tap →
+🔔 alert to Didi via the NOTIFY instance. Caps: 1 auto-reply/chat/day, 20 auto-replies/day, 40
+follow-ups/day; 20s send pacing. Table `wa_unanswered`. Full spec: `.claude/OPERATIONAL_BOT.md` §2b.
 
 ---
 
 ## 7. Data model & where everything is saved (`db/schema.sql` + filesystem/Drive)
 
-**Tables (14):** `staff`, `clients`, `meetings`, `documents`, `audit_logs`, `conversations`, `messages`,
+**Tables (15):** `staff`, `clients`, `meetings`, `documents`, `audit_logs`, `conversations`, `messages`,
 `bot_settings`, `system_settings`, `whatsapp_instances`, `timeless_unmatched_meetings`, `commitments`,
-`call_events`, `email_staff_mentions`. **No `tasks`, `notifications`, `gmail_integrations`, or
-`v_client_pipeline`.**
+`call_events`, `email_staff_mentions`, `wa_unanswered` (new 2026-07-10, §6a). **No `tasks`,
+`notifications`, `gmail_integrations`, or `v_client_pipeline`.**
 
 - `clients`: `pipeline_stage`, `complexity` (dormant since v4), `id_number`, `policy_number`,
   `client_type` (`new`/`old`), `assigned_to` / `assigned_handler_id` (handler preferred),
@@ -533,14 +558,17 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
 - **WhatsApp:** conversational GreenAPI instance: `GREENAPI_ID_INSTANCE`, `GREENAPI_API_TOKEN`,
   `GREENAPI_BASE_URL`, `GREENAPI_WEBHOOK_TOKEN` — all **optional** in `env.ts`; when blank, sends no-op
   with a warning (staged rollout guard). Scan/op creds `GREENAPI_SCAN_*` and `GREENAPI_OP_*` optional
-  (features stay dormant if unset). There are no `CLIX_*` env vars — Clix is fully removed.
+  (features stay dormant if unset). **NEW (2026-07-10):** `GREENAPI_NOTIFY_*` (id/token/base-url) — the
+  dedicated operational-notify instance (`7107677591`); blank → `notifyOwnerOps` no-ops.
+  There are no `CLIX_*` env vars — Clix is fully removed.
 - **AI:** `OPENROUTER_API_KEY` required; `AI_MODEL` default `google/gemini-2.5-flash`; `AI_FALLBACK_MODEL`
   `google/gemini-3.1-pro-preview`; `COMMITMENT_AI_MODEL` `google/gemini-3.1-flash-lite`.
 - **Google:** **Calendar** OAuth `GOOGLE_*` (separate client) for booking sync. **Workspace** OAuth
   `GOOGLE_WS_CLIENT_ID`/`GOOGLE_WS_CLIENT_SECRET` (single account) for Sheets + Drive + Gmail. The old
   per-staff `GOOGLE_OAUTH_*` Gmail vars are **gone**.
 - **Timeless:** `TIMELESS_API_KEY`; `SUMMARY_RECIPIENT_PHONE` (owner line — the target for the post-meeting
-  summary/staff-picker and the operational Didi-reminders via `notifyOwner`; also gates the
+  summary/staff-picker, the operational Didi-reminders via `notifyOwnerOps` (NOTIFY instance) and the
+  intake alerts via `notifyOwner` (945); also gates the
   operational-only owner number in the webhook). **Set to `972547725826` (Didi) as of 2026-06-30.**
   When unset, all owner-facing sends (op Didi-reminders + post-meeting summary/staff-picker) skip — the
   feature code is intact, only the recipient is unconfigured.
@@ -575,8 +603,9 @@ Note: the **call reminder** is not independently scheduled — it ships inside t
   = instance **`7107600945`**; operational `GREENAPI_OP_*` = instance **`7107600944`** (= **Didi's phone**);
   both host `https://7107.api.greenapi.com`. Settings verified live via `getSettings`: both webhooks →
   `…/api/whatsapp/webhook`; **945** token = `GREENAPI_WEBHOOK_TOKEN` (`becf48…`), incoming + outgoing-msg ON,
-  calls OFF; **944** token BLANK (OK — the op short-circuit at `whatsapp.controller.ts` runs *before* the token
-  gate, matched by `idInstance`), calls ON (but irrelevant — op-line webhooks are now ACK'd and dropped).
+  calls OFF; ⚠️ **944 token was verified BLANK — this is now BROKEN by the 2026-07-10 rework**: the token
+  gate runs *before* the op-instance routing, so 944 events are dropped until the console sets 944's webhook
+  token = `GREENAPI_WEBHOOK_TOKEN` + incoming AND outgoing notifications ON (required for unanswered-WA, §6a).
   ⚠️ **No WhatsApp number connected yet → bot OFFLINE**; outbound crons `502` harmlessly until the team
   scans the QR (**944 → Didi `972547725826`**; **945 → a separate bot line**, ≠ Didi & ≠ 944). On scan it
   goes live automatically — no restart / no `setSettings` needed.

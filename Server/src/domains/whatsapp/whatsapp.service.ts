@@ -346,6 +346,17 @@ export async function sendMessageWith(
   });
 }
 
+// Dedicated operational-notify GreenAPI line (GREENAPI_NOTIFY_*) — carries every owner
+// notification the operational bot sends (digest, call-reminder, commitments, unanswered-WA).
+// Returns null when any of the three env vars is missing (feature stays dormant).
+export function notifyCreds(): GreenApiCreds | null {
+  const id = env.GREENAPI_NOTIFY_ID_INSTANCE;
+  const tok = env.GREENAPI_NOTIFY_API_TOKEN;
+  const url = env.GREENAPI_NOTIFY_BASE_URL;
+  if (!id || !tok || !url) return null;
+  return { idInstance: id, token: tok, baseUrl: url };
+}
+
 export async function sendTypingWith(
   creds: GreenApiCreds,
   chatId: string,
