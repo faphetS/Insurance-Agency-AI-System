@@ -8,9 +8,20 @@ import type { ChatTranscript, DetectedCommitment } from "./commitments.types.js"
 
 const FALLBACK_MODEL = "google/gemini-2.5-flash";
 
+const TZ = "Asia/Jerusalem";
+
 const openai = new OpenAI({
   apiKey: env.OPENROUTER_API_KEY,
   baseURL: "https://openrouter.ai/api/v1",
+});
+
+const LINE_LABEL_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  timeZone: TZ,
+  day: "2-digit",
+  month: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
 });
 
 function djb2(str: string): number {
@@ -21,25 +32,53 @@ function djb2(str: string): number {
   return hash >>> 0;
 }
 
-function buildTranscriptString(transcript: ChatTranscript): { text: string; conversationDate: string } {
-  const firstTs = transcript.lines[0]?.ts ?? Math.floor(Date.now() / 1000);
-  const conversationDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem" }).format(
-    new Date(firstTs * 1000),
-  );
+function israelLineLabel(at: Date): string {
+  const parts = LINE_LABEL_FORMAT.formatToParts(at).reduce<Record<string, string>>((acc, p) => {
+    acc[p.type] = p.value;
+    return acc;
+  }, {});
 
+  // Intl reports midnight as hour "24" under hour12: false — normalize to "00"
+  const hour = parts["hour"] === "24" ? "00" : parts["hour"];
+  return `${parts["day"]}/${parts["month"]} ${hour}:${parts["minute"]}`;
+}
+
+export function israelNowString(d: Date): string {
+  const datePart = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(d);
+  const timeParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
+    .formatToParts(d)
+    .reduce<Record<string, string>>((acc, p) => {
+      acc[p.type] = p.value;
+      return acc;
+    }, {});
+
+  // Intl reports midnight as hour "24" under hour12: false — normalize to "00"
+  const hour = timeParts["hour"] === "24" ? "00" : timeParts["hour"];
+  return `${datePart} ${hour}:${timeParts["minute"]}`;
+}
+
+export function buildTranscriptString(transcript: ChatTranscript): string {
   const lines = transcript.lines.map((l) => {
     const label = l.fromDidi ? "Didi" : transcript.contactName;
-    const time = new Date(l.ts * 1000).toISOString().slice(11, 16);
+    const time = israelLineLabel(new Date(l.ts * 1000));
     return `[${time}] ${label}: ${l.text}`;
   });
 
-  return { text: lines.join("\n"), conversationDate };
+  return lines.join("\n");
 }
 
-async function callLlm(prompt: string, conversationDate: string): Promise<DetectedCommitment[]> {
+async function callLlm(transcriptText: string): Promise<DetectedCommitment[]> {
   const model = env.COMMITMENT_AI_MODEL ?? FALLBACK_MODEL;
 
-  const userContent = `Conversation date (Asia/Jerusalem): ${conversationDate}\n\n${prompt}`;
+  const userContent = `Current time (Asia/Jerusalem): ${israelNowString(new Date())}
+Each transcript line is prefixed [DD/MM HH:MM] — the moment it was sent, Asia/Jerusalem timezone, always within the 24 hours before the current time.
+
+${transcriptText}`;
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     { role: "system", content: COMMITMENT_EXTRACTION_SYSTEM_PROMPT },
@@ -87,11 +126,11 @@ async function callLlm(prompt: string, conversationDate: string): Promise<Detect
 export async function detectCommitments(transcripts: ChatTranscript[]): Promise<void> {
   for (const transcript of transcripts) {
     try {
-      const { text: transcriptText, conversationDate } = buildTranscriptString(transcript);
+      const transcriptText = buildTranscriptString(transcript);
       let detected: DetectedCommitment[] = [];
 
       try {
-        detected = await callLlm(transcriptText, conversationDate);
+        detected = await callLlm(transcriptText);
       } catch (err) {
         logger.warn(
           { err, chatId: transcript.chatId },

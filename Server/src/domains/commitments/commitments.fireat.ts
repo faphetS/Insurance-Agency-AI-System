@@ -33,25 +33,25 @@ export function fireAtTimed(dueDate: string, dueTime: string): Date {
 
 /**
  * Compute fire_at for a "date_only" commitment:
- * due_date @ 08:00 Jerusalem.
+ * due_date @ 09:00 Jerusalem.
  *
  * @param dueDate  YYYY-MM-DD
  */
 export function fireAtDateOnly(dueDate: string): Date {
   const ref = new Date(`${dueDate}T00:00:00Z`);
-  return israelWallTimeInstant(ref, 8, 0);
+  return israelWallTimeInstant(ref, 9, 0);
 }
 
 /**
  * Compute fire_at for a "floating" commitment:
- * (message_date + 1 day) @ 08:00 Jerusalem.
+ * (message_date + 1 day) @ 09:00 Jerusalem.
  *
  * @param messageTs  Unix timestamp (seconds) of the source message.
  */
 export function fireAtFloating(messageTs: number): Date {
   const msgDate = new Date(messageTs * 1000);
   const nextDay = new Date(msgDate.getTime() + 24 * 60 * 60 * 1000);
-  return israelWallTimeInstant(nextDay, 8, 0);
+  return israelWallTimeInstant(nextDay, 9, 0);
 }
 
 /**

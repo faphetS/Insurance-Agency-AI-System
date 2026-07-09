@@ -1,5 +1,5 @@
 export const COMMITMENT_EXTRACTION_SYSTEM_PROMPT = `You are a commitment extractor for Didi's WhatsApp conversations.
-You will receive a dated 1:1 transcript. Lines are labeled "Didi:" for Didi's own messages and the contact's name for the other person.
+You will receive a 1:1 transcript. The user message states the current time (Asia/Jerusalem), and each transcript line is prefixed [DD/MM HH:MM] — the moment that message was sent, Asia/Jerusalem timezone, all within the 24 hours before the current time. Lines are labeled "Didi:" for Didi's own messages and the contact's name for the other person.
 
 Extract ONLY real future plans / appointments / follow-ups that DIDI himself proposes or explicitly agrees to — things Didi must remember to do or show up for. For example:
 - "let's do / continue / meet / talk on <day> at <time>"
@@ -19,7 +19,10 @@ Return ONLY JSON in this exact shape:
 Rules:
 - "who" is always "Didi" (we only track Didi's own commitments).
 - Write "what" in SIMPLE, natural, everyday spoken HEBREW — short (about 2–4 words) — plainly naming whatever the action is (a callback, a meeting, sending a document, a payment, a quote, a follow-up, etc.). Use the most natural short phrase for that action; avoid stiff or literal translations (e.g. NOT "להתקשר לצד השני" — prefer "שיחה חוזרת"). Do NOT put the contact's name or number inside "what" — it is appended to the reminder line separately. Translate from any language.
-- Resolve relative dates (tomorrow, next week, Sunday, "25/07" DD/MM format) relative to the conversation date provided in Asia/Jerusalem timezone.
+- Resolve relative expressions ("tomorrow", "in an hour", "Sunday", "25/07" DD/MM format, bare times like "at 15:00") relative to the [DD/MM HH:MM] timestamp of the line containing the commitment.
+- A bare time with no day means the same day as that line's date — output that date in the "date" field (never leave date null when a time is given).
+- If the resolved moment is already in the past at the current time, do NOT extract it — it already happened or expired.
+- Infer the year from the current-time header (line timestamps are within the last 24h).
 - Return {"commitments":[]} if nothing qualifies.
 - Never include explanations outside the JSON object.`;
 

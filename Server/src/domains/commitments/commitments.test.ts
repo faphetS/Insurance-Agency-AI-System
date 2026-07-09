@@ -42,7 +42,8 @@ vi.mock("../whatsapp/whatsapp.service.js", () => ({
 // ---------------------------------------------------------------------------
 
 import { deriveKind, fireAtTimed, fireAtDateOnly, fireAtFloating, computeFireAt } from "./commitments.fireat.js";
-import type { Commitment } from "./commitments.types.js";
+import { buildTranscriptString, israelNowString } from "./commitments.detector.js";
+import type { Commitment, ChatTranscript } from "./commitments.types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -126,51 +127,51 @@ describe("fireAtTimed", () => {
 });
 
 // ---------------------------------------------------------------------------
-// fireAtDateOnly — due_date @ 08:00 Jerusalem
+// fireAtDateOnly — due_date @ 09:00 Jerusalem
 // ---------------------------------------------------------------------------
 
 describe("fireAtDateOnly", () => {
-  it("fires at 08:00 Jerusalem on the due date", () => {
+  it("fires at 09:00 Jerusalem on the due date", () => {
     const result = fireAtDateOnly("2026-07-15");
     const { h, m } = israelHourMinute(result);
-    expect(h).toBe(8);
+    expect(h).toBe(9);
     expect(m).toBe(0);
     expect(israelDateString(result)).toBe("2026-07-15");
   });
 
-  it("fires at 08:00 on a winter date (UTC+2)", () => {
+  it("fires at 09:00 on a winter date (UTC+2)", () => {
     // January — Israel is UTC+2 (no DST)
     const result = fireAtDateOnly("2026-01-20");
     const { h, m } = israelHourMinute(result);
-    expect(h).toBe(8);
+    expect(h).toBe(9);
     expect(m).toBe(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// fireAtFloating — (message_date + 1 day) @ 08:00 Jerusalem
+// fireAtFloating — (message_date + 1 day) @ 09:00 Jerusalem
 // ---------------------------------------------------------------------------
 
 describe("fireAtFloating", () => {
-  it("fires at 08:00 Jerusalem the next calendar day after the message", () => {
-    // message at 2026-07-01 20:00 Jerusalem → fire at 2026-07-02 08:00 Jerusalem
+  it("fires at 09:00 Jerusalem the next calendar day after the message", () => {
+    // message at 2026-07-01 20:00 Jerusalem → fire at 2026-07-02 09:00 Jerusalem
     const msgDate = new Date("2026-07-01T17:00:00Z"); // 20:00 Jerusalem (UTC+3 summer)
     const msgTs = Math.floor(msgDate.getTime() / 1000);
     const result = fireAtFloating(msgTs);
     const { h, m } = israelHourMinute(result);
-    expect(h).toBe(8);
+    expect(h).toBe(9);
     expect(m).toBe(0);
     expect(israelDateString(result)).toBe("2026-07-02");
   });
 
   it("handles midnight boundary correctly", () => {
-    // message at 2026-07-01 23:59 Jerusalem → fire at 2026-07-02 08:00
+    // message at 2026-07-01 23:59 Jerusalem → fire at 2026-07-02 09:00
     const msgDate = new Date("2026-07-01T20:59:00Z"); // 23:59 Jerusalem (UTC+3)
     const msgTs = Math.floor(msgDate.getTime() / 1000);
     const result = fireAtFloating(msgTs);
     expect(israelDateString(result)).toBe("2026-07-02");
     const { h } = israelHourMinute(result);
-    expect(h).toBe(8);
+    expect(h).toBe(9);
   });
 });
 
@@ -180,19 +181,19 @@ describe("fireAtFloating", () => {
 // ---------------------------------------------------------------------------
 
 describe("fireAtDateOnly — DST boundary (Israel spring forward)", () => {
-  it("fires at 08:00 Jerusalem on DST switch day (UTC+3 from that morning)", () => {
-    // 2026-03-27 is the DST change day; 08:00 IST = 05:00 UTC that day
+  it("fires at 09:00 Jerusalem on DST switch day (UTC+3 from that morning)", () => {
+    // 2026-03-27 is the DST change day; 09:00 IST = 06:00 UTC that day
     const result = fireAtDateOnly("2026-03-27");
     const { h, m } = israelHourMinute(result);
-    expect(h).toBe(8);
+    expect(h).toBe(9);
     expect(m).toBe(0);
   });
 
-  it("fires at 08:00 Jerusalem the day before DST (still UTC+2)", () => {
-    // 2026-03-26: 08:00 IST = 06:00 UTC
+  it("fires at 09:00 Jerusalem the day before DST (still UTC+2)", () => {
+    // 2026-03-26: 09:00 IST = 07:00 UTC
     const result = fireAtDateOnly("2026-03-26");
     const { h, m } = israelHourMinute(result);
-    expect(h).toBe(8);
+    expect(h).toBe(9);
     expect(m).toBe(0);
   });
 });
@@ -213,13 +214,13 @@ describe("computeFireAt", () => {
   it("dispatches to fireAtDateOnly for kind='date_only'", () => {
     const result = computeFireAt("date_only", "2026-07-10", null, fixedMsgTs);
     const { h } = israelHourMinute(result);
-    expect(h).toBe(8);
+    expect(h).toBe(9);
   });
 
   it("dispatches to fireAtFloating for kind='floating'", () => {
     const result = computeFireAt("floating", null, null, fixedMsgTs);
     const { h } = israelHourMinute(result);
-    expect(h).toBe(8);
+    expect(h).toBe(9);
     // next day
     expect(israelDateString(result)).toBe("2026-07-11");
   });
@@ -313,5 +314,63 @@ describe("morning batch template fallback", () => {
     expect(lines).toHaveLength(3);
     expect(lines[1]).toContain("לבדוק חשבון");
     expect(lines[2]).toContain("לתאם פגישה");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildTranscriptString — Asia/Jerusalem [DD/MM HH:MM] line labels
+// ---------------------------------------------------------------------------
+
+describe("buildTranscriptString", () => {
+  it("labels a summer line in Asia/Jerusalem wall time (UTC+3)", () => {
+    const transcript: ChatTranscript = {
+      chatId: "chat-1",
+      contactName: "יוסי",
+      latestTs: 0,
+      lines: [{ ts: Math.floor(new Date("2026-07-08T09:00:00Z").getTime() / 1000), fromDidi: true, text: "hello" }],
+    };
+    expect(buildTranscriptString(transcript)).toBe("[08/07 12:00] Didi: hello");
+  });
+
+  it("labels a winter line in Asia/Jerusalem wall time (UTC+2)", () => {
+    const transcript: ChatTranscript = {
+      chatId: "chat-1",
+      contactName: "יוסי",
+      latestTs: 0,
+      lines: [{ ts: Math.floor(new Date("2026-01-20T09:00:00Z").getTime() / 1000), fromDidi: false, text: "hi" }],
+    };
+    expect(buildTranscriptString(transcript)).toBe("[20/01 11:00] יוסי: hi");
+  });
+
+  it("keeps multiple lines in order with correct Didi/contact labels", () => {
+    const transcript: ChatTranscript = {
+      chatId: "chat-1",
+      contactName: "רחל",
+      latestTs: 0,
+      lines: [
+        { ts: Math.floor(new Date("2026-07-08T09:00:00Z").getTime() / 1000), fromDidi: false, text: "first" },
+        { ts: Math.floor(new Date("2026-07-08T10:00:00Z").getTime() / 1000), fromDidi: true, text: "second" },
+      ],
+    };
+    const result = buildTranscriptString(transcript);
+    expect(result).toBe("[08/07 12:00] רחל: first\n[08/07 13:00] Didi: second");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// israelNowString — current-time header in Asia/Jerusalem
+// ---------------------------------------------------------------------------
+
+describe("israelNowString", () => {
+  it("formats a summer instant (UTC+3)", () => {
+    expect(israelNowString(new Date("2026-07-08T09:00:00Z"))).toBe("2026-07-08 12:00");
+  });
+
+  it("formats a winter instant (UTC+2)", () => {
+    expect(israelNowString(new Date("2026-01-20T09:00:00Z"))).toBe("2026-01-20 11:00");
+  });
+
+  it("handles the midnight-crossing hour-24 quirk", () => {
+    expect(israelNowString(new Date("2026-07-08T21:30:00Z"))).toBe("2026-07-09 00:30");
   });
 });
