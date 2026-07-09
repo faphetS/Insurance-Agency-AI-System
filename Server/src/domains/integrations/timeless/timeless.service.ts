@@ -178,7 +178,7 @@ async function fetchCandidates(startTime: string): Promise<MeetingCandidate[]> {
     .in("id", clientIds);
 
   const emailMap = new Map<string, string | null>(
-    (clients ?? []).map((c) => [c.id as string, (c.email as string | null) ?? null]),
+    (clients ?? []).map((c: { id: string; email: string | null }) => [c.id, c.email ?? null]),
   );
 
   return sameDayMeetings.map((m) => ({
