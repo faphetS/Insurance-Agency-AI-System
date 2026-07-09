@@ -4,6 +4,7 @@ import { sendDailyCallReminder } from "./call-reminder.service.js";
 import { runMorningCommitments } from "../commitments/commitments.service.js";
 import { sendMorningDigest } from "./morning-digest.service.js";
 import { runStaffEmailNotify } from "./email-mentions.service.js";
+import { runUnansweredEmailNotify } from "./unanswered-emails.service.js";
 import { sweepUnanswered, sendUnansweredFollowups } from "./unanswered-wa.service.js";
 
 export const operationsController = {
@@ -36,5 +37,11 @@ export const operationsController = {
     const sweep = await sweepUnanswered();
     const followups = await sendUnansweredFollowups();
     res.json({ status: "success", sweep, followups });
+  },
+
+  async runUnansweredEmails(_req: Request, res: Response): Promise<void> {
+    logger.info("operations: manual unanswered-emails trigger");
+    const counts = await runUnansweredEmailNotify();
+    res.json({ status: "success", ...counts });
   },
 };

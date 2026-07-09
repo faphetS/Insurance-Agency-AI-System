@@ -86,6 +86,70 @@ export async function getSentMessage(
   return { headers, bodyText, internalDate };
 }
 
+export async function getProfileAddress(): Promise<string> {
+  const auth = await getAuthenticatedClient();
+  const gmail = google.gmail({ version: "v1", auth });
+
+  const res = await gmail.users.getProfile({ userId: "me" });
+  return (res.data.emailAddress ?? "").toLowerCase();
+}
+
+export async function getMessageMeta(
+  id: string,
+): Promise<{ headers: Record<string, string>; labelIds: string[]; threadId: string; internalDate: number }> {
+  const auth = await getAuthenticatedClient();
+  const gmail = google.gmail({ version: "v1", auth });
+
+  const res = await gmail.users.messages.get({
+    userId: "me",
+    id,
+    format: "metadata",
+    metadataHeaders: ["From", "Subject", "List-Unsubscribe"],
+  });
+  const msg = res.data;
+
+  const headers: Record<string, string> = {};
+  for (const h of msg.payload?.headers ?? []) {
+    if (h.name && h.value) {
+      headers[h.name.toLowerCase()] = h.value;
+    }
+  }
+
+  return {
+    headers,
+    labelIds: msg.labelIds ?? [],
+    threadId: msg.threadId ?? "",
+    internalDate: Number(msg.internalDate ?? 0),
+  };
+}
+
+export async function threadRepliedAfter(
+  threadId: string,
+  afterMs: number,
+  ownAddress: string,
+): Promise<boolean> {
+  const auth = await getAuthenticatedClient();
+  const gmail = google.gmail({ version: "v1", auth });
+
+  const res = await gmail.users.threads.get({
+    userId: "me",
+    id: threadId,
+    format: "metadata",
+    metadataHeaders: ["From"],
+  });
+
+  const own = ownAddress.toLowerCase();
+  for (const msg of res.data.messages ?? []) {
+    const internalDate = Number(msg.internalDate ?? 0);
+    if (internalDate <= afterMs) continue;
+
+    const fromHeader = msg.payload?.headers?.find((h) => h.name?.toLowerCase() === "from")?.value ?? "";
+    if (fromHeader.toLowerCase().includes(own)) return true;
+  }
+
+  return false;
+}
+
 export async function sendOwnerEmail(
   to: string,
   subject: string,

@@ -9,6 +9,7 @@ import { ensureClientDocumentsBucket } from "./lib/storage.js";
 import { startCommitmentCrons } from "./domains/commitments/commitments.service.js";
 import { sendMorningDigest } from "./domains/operations/morning-digest.service.js";
 import { runStaffEmailNotify } from "./domains/operations/email-mentions.service.js";
+import { runUnansweredEmailNotify } from "./domains/operations/unanswered-emails.service.js";
 import { sweepUnanswered, sendUnansweredFollowups } from "./domains/operations/unanswered-wa.service.js";
 // v4: disabled — booking-sync + calendar reminders gated off (services kept dormant).
 // import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
@@ -172,6 +173,9 @@ const server = app.listen(env.PORT, () => {
         );
         runStaffEmailNotify().catch((err: unknown) =>
           logger.error({ err }, "email-mentions: daily run failed"),
+        );
+        runUnansweredEmailNotify().catch((err: unknown) =>
+          logger.error({ err }, "unanswered-emails: daily run failed"),
         );
         sendUnansweredFollowups().catch((err: unknown) =>
           logger.error({ err }, "unanswered-wa: daily follow-up run failed"),

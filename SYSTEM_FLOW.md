@@ -368,6 +368,27 @@ Gmail.
   email each staff via `sendOwnerEmail`). Rows flip to `status='sent'` either way (idempotent).
 - `runStaffEmailNotify` (scan + notify) runs at **09:00** alongside the digest cron.
 
+### 5.3b Pillar 5 — Unanswered emails (self-notification, new 2026-07-10) — `operations/unanswered-emails.service.ts`
+- **Scan (`runUnansweredEmailNotify`, same 09:00 cron tick).** Lists Didi's **inbox** (`in:inbox
+  newer_than:7d`) and keeps messages inside the window `[watermark, run-start)` — the watermark
+  (`system_settings` key `unanswered_emails_last_run`, advanced to run-start after EVERY run, log mode
+  included) makes each email appear **once only** and self-heals after downtime (floored at 7 days).
+  First run falls back to the last 24h.
+- **Eligibility:** must carry the `CATEGORY_PERSONAL` label (⚠️ the `category:primary` **query operator
+  returns 0** on this account — tabs disabled — so filtering is client-side by `labelIds`); drops
+  self-sent (`from` contains own address — also prevents the notification itself being re-flagged),
+  `no-reply`/`donotreply` senders, and newsletters (`List-Unsubscribe` header). Staff mail IS included
+  (owner decision). Leftover Primary bot-noise (Mislaka payroll etc.) accepted, no blocklist.
+- **"Responded" check:** dedupe to one row per **thread** (latest message), then drop threads where a
+  message **from Didi** exists later in the thread (`threadRepliedAfter` — reply or forward both count;
+  archiving removes the mail from `in:inbox` = natural dismiss).
+- **Notify:** empty list → nothing sent (watermark still advances). Otherwise ONE Hebrew email to
+  **Didi himself** (`sendOwnerEmail(ownAddress …)`, address from `users.getProfile`): subject
+  `מיילים שלא נענו מאתמול`, body `היי דידי — אלו המיילים מ־24 השעות האחרונות שעדיין לא הגבת עליהם:` +
+  `• <subject> — מאת: <sender>` bullets (oldest first, `(ללא נושא)` fallback) + `(מייל אוטומטי מהמערכת)`.
+  Gated by **`STAFF_EMAIL_NOTIFY_MODE`** (`log` = pm2 dry-run, `send` = real self-email). Self-send from
+  the own account can't be spam-flagged; 1 email/day max, no pacing needed.
+
 ### 5.4 The merged 09:00 digest — `operations/morning-digest.service.ts`
 `sendMorningDigest` (cron `0 9 * * *`, Asia/Jerusalem) re-scans commitments (`refreshCommitments`), builds
 the **commitment morning section** and the **call-reminder section** in parallel, joins them (commitments
@@ -405,7 +426,9 @@ events to `POST /api/zadarma/call-webhook`.
 
 ### 5.5 Manual triggers — `operations/operations.controller.ts` + `operations.routes.ts`
 Admin-only (`authenticate` + `authorize("admin")`) POST endpoints under `/api/operations` mirror the
-scheduled jobs: `/call-reminder/run`, `/commitments/run`, `/morning-digest/run`, `/email-mentions/run`.
+scheduled jobs: `/call-reminder/run`, `/commitments/run`, `/morning-digest/run`, `/email-mentions/run`,
+`/unanswered/run` (WA sweeper + follow-ups), `/unanswered-emails/run` (⚠️ advances the watermark — the
+next 09:00 run then only covers mail received after the manual run).
 
 ### 5.6 Biennial service meetings — **REMOVED from the schedule in v4** — `calendar/service-meeting.service.ts`
 **v4 (2026-07-09): the 08:10 cron block and its import were deleted from `server.ts`** (owner: "we
@@ -448,7 +471,7 @@ localhost) so dev boots never touch live lines or prod data.
 | Job | Trigger | Cadence | Source |
 |---|---|---|---|
 | Commitment timed reminders | `setInterval` (`startCommitmentCrons`) | every 15 min | `commitments.reminders.ts` |
-| Morning digest (commitments + calls) **and** email staff-mentions **and** unanswered-WA follow-ups | `cron` | `0 9 * * *` Asia/Jerusalem (moved from 08:00, 2026-07-10) | `morning-digest.service.ts` + `email-mentions.service.ts` + `unanswered-wa.service.ts` |
+| Morning digest (commitments + calls) **and** email staff-mentions **and** unanswered-emails self-notify **and** unanswered-WA follow-ups | `cron` | `0 9 * * *` Asia/Jerusalem (moved from 08:00, 2026-07-10) | `morning-digest.service.ts` + `email-mentions.service.ts` + `unanswered-emails.service.ts` + `unanswered-wa.service.ts` |
 | **Unanswered-WA sweeper (new 2026-07-10)** | `setInterval` | every 5 min | `operations/unanswered-wa.service.ts` |
 | **Intake stall watcher (v4)** | `setInterval` | every 10 min | `ai/intake-stall.service.ts` |
 

@@ -39,4 +39,11 @@ router.post(
   operationsController.runUnanswered,
 );
 
+router.post(
+  "/unanswered-emails/run",
+  authenticate,
+  authorize("admin"),
+  operationsController.runUnansweredEmails,
+);
+
 export default router;
