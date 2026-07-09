@@ -10,8 +10,28 @@ import {
 } from "./timeless.service.js";
 import type { TimelessWebhookPayload } from "./timeless.types.js";
 
+// v4 TEST-MODE KILL SWITCH — Timeless ingest is fully disabled so no meeting summary
+// (owner WhatsApp) or client-summary email can fire during live intake testing.
+// The hourly poll cron + ensureWebhookRegistered are already commented out in server.ts;
+// this neutralises the still-mounted webhook route too by ACK-ing 200 and returning before
+// any signature check / ingest. Note: the client-summary email path
+// (ingest → sendClientSummaryEmail → sendOwnerEmail) is NOT gated by STAFF_EMAIL_NOTIFY_MODE,
+// which is exactly why the route must not process until go-live.
+// RESTORE AT GO-LIVE: set TIMELESS_INGEST_DISABLED = false AND re-enable the poll cron +
+// ensureWebhookRegistered in server.ts (see the `// v4: disabled` blocks there).
+const TIMELESS_INGEST_DISABLED = true;
+
 export const timelessController = {
   async webhook(req: Request, res: Response): Promise<void> {
+    if (TIMELESS_INGEST_DISABLED) {
+      res.status(200).json({ status: "ok" });
+      logger.warn(
+        { event: (req.body as { event?: string })?.event },
+        "timeless: webhook received but ingest DISABLED (v4 test mode) — acked, not processing",
+      );
+      return;
+    }
+
     const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
     const signature = req.headers["x-webhook-signature"] as string | undefined;
 
