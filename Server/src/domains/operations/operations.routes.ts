@@ -46,4 +46,11 @@ router.post(
   operationsController.runUnansweredEmails,
 );
 
+router.post(
+  "/leads-relevance/run",
+  authenticate,
+  authorize("admin"),
+  operationsController.runLeadsRelevance,
+);
+
 export default router;

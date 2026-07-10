@@ -15,6 +15,7 @@ vi.mock("../../../config/env.js", () => ({
     LEADS_SHEET_TAB: "לידים חדשים",
     LEADS_SHEET_TAB_NEW: "לידים חדשים",
     LEADS_SHEET_TAB_EXISTING: "לקוח קיים",
+    LEADS_SHEET_TAB_IRRELEVANT: "לא רלוונטי",
     LEADS_DRIVE_FOLDER_ID: "folder-id",
     NODE_ENV: "test",
   },
@@ -111,7 +112,7 @@ describe("mirrorLeadToSheet — 7-col row into the new-leads tab", () => {
     expect(row[5]).toBe(""); // F relevance (manual — always blank)
     expect(row[6]).toMatch(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/); // G creation date
     expect(tab).toBe("לידים חדשים");
-    expect(opts).toEqual({ setOnceColumns: [6] });
+    expect(opts).toEqual({ setOnceColumns: [5, 6] });
   });
 
   it("col B is empty when full_name equals the phone (never echoes the phone)", async () => {

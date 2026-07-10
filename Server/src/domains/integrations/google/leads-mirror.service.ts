@@ -87,7 +87,9 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
       nowIsraelString(),
     ];
 
-    await upsertLeadRow(row, tab, { setOnceColumns: [6] });
+    // F = relevance is human-owned (dropdown) and must survive re-mirrors fired on every
+    // intake slot advance; G = creation date.
+    await upsertLeadRow(row, tab, { setOnceColumns: [5, 6] });
   } catch (err) {
     logger.error({ err, clientId }, "leads-mirror: unexpected error");
   }

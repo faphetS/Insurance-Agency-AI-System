@@ -90,6 +90,9 @@ const envSchema = z.object({
   LEADS_SHEET_TAB: z.string().default("לידים חדשים"),
   LEADS_SHEET_TAB_NEW: z.string().default("לידים חדשים"),
   LEADS_SHEET_TAB_EXISTING: z.string().default("לקוח קיים"),
+  // Tab names are trim-matched against the live sheet titles; F (relevance) drives the
+  // 5-min relevance mover between these 3 tabs.
+  LEADS_SHEET_TAB_IRRELEVANT: z.string().default("לא רלוונטי"),
   LEADS_DRIVE_FOLDER_ID: z
     .string()
     .default("1iwvNhMS2982JhzEemEJdq0-XQdqwGOXv"),

@@ -11,6 +11,7 @@ import { sendMorningDigest } from "./domains/operations/morning-digest.service.j
 import { runStaffEmailNotify } from "./domains/operations/email-mentions.service.js";
 import { runUnansweredEmailNotify } from "./domains/operations/unanswered-emails.service.js";
 import { sweepUnanswered, sendUnansweredFollowups } from "./domains/operations/unanswered-wa.service.js";
+import { applyRelevanceDropdowns, sweepRelevanceMoves } from "./domains/integrations/google/leads-relevance.service.js";
 // v4: disabled — booking-sync + calendar reminders gated off (services kept dormant).
 // import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 // import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
@@ -180,6 +181,9 @@ const server = app.listen(env.PORT, () => {
         sendUnansweredFollowups().catch((err: unknown) =>
           logger.error({ err }, "unanswered-wa: daily follow-up run failed"),
         );
+        applyRelevanceDropdowns().catch((err: unknown) =>
+          logger.error({ err }, "leads-relevance: daily dropdown re-apply failed"),
+        );
       },
       { timezone: "Asia/Jerusalem" },
     );
@@ -214,6 +218,19 @@ const server = app.listen(env.PORT, () => {
     setInterval(() => {
       sweepUnanswered().catch((err: unknown) =>
         logger.error({ err }, "unanswered-wa: scheduled sweep failed"),
+      );
+    }, 5 * 60 * 1000);
+
+    // Leads relevance — F-column dropdowns applied at boot (idempotent), rows moved every 5 min.
+    setTimeout(() => {
+      applyRelevanceDropdowns().catch((err: unknown) =>
+        logger.error({ err }, "leads-relevance: boot dropdown apply failed"),
+      );
+    }, 30 * 1000);
+
+    setInterval(() => {
+      sweepRelevanceMoves().catch((err: unknown) =>
+        logger.error({ err }, "leads-relevance: scheduled sweep failed"),
       );
     }, 5 * 60 * 1000);
   } else {

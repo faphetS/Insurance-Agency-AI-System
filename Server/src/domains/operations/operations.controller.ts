@@ -6,6 +6,7 @@ import { sendMorningDigest } from "./morning-digest.service.js";
 import { runStaffEmailNotify } from "./email-mentions.service.js";
 import { runUnansweredEmailNotify } from "./unanswered-emails.service.js";
 import { sweepUnanswered, sendUnansweredFollowups } from "./unanswered-wa.service.js";
+import { applyRelevanceDropdowns, sweepRelevanceMoves } from "../integrations/google/leads-relevance.service.js";
 
 export const operationsController = {
   async runCallReminder(_req: Request, res: Response): Promise<void> {
@@ -43,5 +44,12 @@ export const operationsController = {
     logger.info("operations: manual unanswered-emails trigger");
     const counts = await runUnansweredEmailNotify();
     res.json({ status: "success", ...counts });
+  },
+
+  async runLeadsRelevance(_req: Request, res: Response): Promise<void> {
+    logger.info("operations: manual leads-relevance trigger");
+    const dropdowns = await applyRelevanceDropdowns();
+    const sweep = await sweepRelevanceMoves();
+    res.json({ status: "success", dropdowns, sweep });
   },
 };
