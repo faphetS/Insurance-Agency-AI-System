@@ -639,11 +639,13 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   ⚠️ **No WhatsApp number connected yet → bot OFFLINE**; outbound crons `502` harmlessly until the team
   scans the QR (**944 → Didi `972547725826`**; **945 → a separate bot line**, ≠ Didi & ≠ 944). On scan it
   goes live automatically — no restart / no `setSettings` needed.
-- **TEST config in production (as of the v4 deploy, 2026-07-09):** `SUMMARY_RECIPIENT_PHONE` and
-  `REPLY_ALLOWLIST` point at **test numbers, not Didi** — only the allowlisted test phone can trigger
-  intake, and all owner alerts (callback/stall/digest) go to the test summary number. **Go-live restore:**
-  set both to Didi's real number, and flip `STAFF_EMAIL_NOTIFY_MODE` from `log` (dry-run — the current
-  value; staff lead emails + mention reminders + handoff emails all compose to pm2 logs only) to `send`.
+- **Env is at FULL go-live values (since 2026-07-10 evening):** `REPLY_ALLOWLIST=` blank → intake **open
+  to everyone**; `SUMMARY_RECIPIENT_PHONE=972547725826` (real Didi); **`STAFF_EMAIL_NOTIFY_MODE=send`** —
+  all four gated email paths (intake staff notify §3.1a, mention reminders §5.3, unanswered-emails
+  self-notify §5.4, meeting-handoff) send REAL emails now. The only remaining go-live steps are physical:
+  QR-scan the three instances (944 → Didi's real phone, 945 → bot line, 7591 → notify; **clear each
+  instance's message queue immediately before its scan** — queues refill from the daily crons) and the
+  Zadarma telephony setup below.
 - **v4 removed the department pings and the old slots** — routing is the 9-button menu (§3.1); the
   `client_type` fork survives only inside the button-9 meeting flow.
 - **Zadarma telephony pending (owner action required):** `POST /api/zadarma/call-webhook` is deployed and
