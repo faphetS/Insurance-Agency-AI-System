@@ -6,7 +6,13 @@ import { google } from "googleapis";
 import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { getAuthenticatedClient } from "./google.auth.js";
-import { resolveLeadsTabTitle, resolveLeadsSheetId, appendLeadRow, quoteA1Title } from "./google.sheets.js";
+import {
+  resolveLeadsTabTitle,
+  resolveLeadsSheetId,
+  appendLeadRow,
+  quoteA1Title,
+  relevanceValidationRule,
+} from "./google.sheets.js";
 import { withSheetLock } from "./sheets-lock.js";
 
 interface RelevanceTab {
@@ -77,14 +83,6 @@ export async function applyRelevanceDropdowns(): Promise<{ tabsApplied: number }
       return { tabsApplied: 0 };
     }
 
-    // Stable 3-value list regardless of which tabs resolved, so the dropdown never shrinks
-    // just because one tab was briefly unresolvable.
-    const allTrimmedNames = [
-      env.LEADS_SHEET_TAB_NEW.trim(),
-      env.LEADS_SHEET_TAB_EXISTING.trim(),
-      env.LEADS_SHEET_TAB_IRRELEVANT.trim(),
-    ];
-
     const sheets = google.sheets({ version: "v4", auth: client });
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: env.LEADS_SPREADSHEET_ID,
@@ -97,14 +95,7 @@ export async function applyRelevanceDropdowns(): Promise<{ tabsApplied: number }
               startColumnIndex: 5,
               endColumnIndex: 6,
             },
-            rule: {
-              condition: {
-                type: "ONE_OF_LIST",
-                values: allTrimmedNames.map((value) => ({ userEnteredValue: value })),
-              },
-              strict: true,
-              showCustomUi: true,
-            },
+            rule: relevanceValidationRule(),
           },
         })),
       },

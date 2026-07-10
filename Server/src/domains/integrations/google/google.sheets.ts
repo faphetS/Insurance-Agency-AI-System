@@ -124,6 +124,19 @@ export async function resolveLeadsSheetId(exactTitle: string): Promise<number | 
   }
 }
 
+// F-column relevance dropdown rule — must stay identical to the tab-wide rule applied by
+// applyRelevanceDropdowns; appended rows inherit properties from the row above (a fresh
+// tab's first row inherits from the HEADER, i.e. nothing), so each appended row gets the
+// rule stamped in the same batchUpdate as its format repaint.
+export function relevanceValidationRule() {
+  const names = [env.LEADS_SHEET_TAB_NEW, env.LEADS_SHEET_TAB_EXISTING, env.LEADS_SHEET_TAB_IRRELEVANT];
+  return {
+    condition: { type: "ONE_OF_LIST", values: names.map((n) => ({ userEnteredValue: n.trim() })) },
+    strict: true,
+    showCustomUi: true,
+  };
+}
+
 // Data rows (as opposed to the header) must be 13pt / not bold / white — Sheets
 // otherwise has values.append inherit whatever formatting sits on the row above.
 async function formatDataRow(
@@ -151,6 +164,18 @@ async function formatDataRow(
               },
             },
             fields: "userEnteredFormat(backgroundColor,textFormat.fontSize,textFormat.bold)",
+          },
+        },
+        {
+          setDataValidation: {
+            range: {
+              sheetId,
+              startRowIndex: rowIndex1Based - 1,
+              endRowIndex: rowIndex1Based,
+              startColumnIndex: 5,
+              endColumnIndex: 6,
+            },
+            rule: relevanceValidationRule(),
           },
         },
       ],

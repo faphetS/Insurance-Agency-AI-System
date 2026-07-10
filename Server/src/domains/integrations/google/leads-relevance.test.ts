@@ -41,12 +41,18 @@ vi.mock("./google.auth.js", () => ({
   getAuthenticatedClient: mockGetAuthenticatedClient,
 }));
 
-vi.mock("./google.sheets.js", () => ({
-  resolveLeadsTabTitle: mockResolveLeadsTabTitle,
-  resolveLeadsSheetId: mockResolveLeadsSheetId,
-  appendLeadRow: mockAppendLeadRow,
-  quoteA1Title: (title: string) => `'${title.replace(/'/g, "''")}'`,
-}));
+// Use the REAL relevanceValidationRule (so this test stays honest about the rule the two
+// call sites must share); mock the rest as before.
+vi.mock("./google.sheets.js", async () => {
+  const actual = await vi.importActual<typeof import("./google.sheets.js")>("./google.sheets.js");
+  return {
+    resolveLeadsTabTitle: mockResolveLeadsTabTitle,
+    resolveLeadsSheetId: mockResolveLeadsSheetId,
+    appendLeadRow: mockAppendLeadRow,
+    quoteA1Title: (title: string) => `'${title.replace(/'/g, "''")}'`,
+    relevanceValidationRule: actual.relevanceValidationRule,
+  };
+});
 
 vi.mock("googleapis", () => ({
   google: {

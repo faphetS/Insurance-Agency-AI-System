@@ -489,10 +489,29 @@ describe("row formatting on append", () => {
               fields: string;
             };
           },
+          {
+            setDataValidation: {
+              range: {
+                sheetId: number;
+                startRowIndex: number;
+                endRowIndex: number;
+                startColumnIndex: number;
+                endColumnIndex: number;
+              };
+              rule: {
+                condition: { type: string; values: Array<{ userEnteredValue: string }> };
+                strict: boolean;
+                showCustomUi: boolean;
+              };
+            };
+          },
         ];
       };
     };
-    const repeatCell = batchArg.requestBody.requests[0].repeatCell;
+    const requests = batchArg.requestBody.requests;
+    expect(requests).toHaveLength(2);
+
+    const repeatCell = requests[0].repeatCell;
     expect(repeatCell.range.sheetId).toBe(SHEETID_NEW);
     expect(repeatCell.range.startRowIndex).toBe(2);
     expect(repeatCell.range.endRowIndex).toBe(3);
@@ -501,6 +520,21 @@ describe("row formatting on append", () => {
     expect(repeatCell.cell.userEnteredFormat.textFormat).toEqual({ fontSize: 13, bold: false });
     expect(repeatCell.cell.userEnteredFormat.backgroundColor).toEqual({ red: 1, green: 1, blue: 1 });
     expect(repeatCell.fields).toBe("userEnteredFormat(backgroundColor,textFormat.fontSize,textFormat.bold)");
+
+    const setDataValidation = requests[1].setDataValidation;
+    expect(setDataValidation.range.sheetId).toBe(SHEETID_NEW);
+    expect(setDataValidation.range.startRowIndex).toBe(2);
+    expect(setDataValidation.range.endRowIndex).toBe(3);
+    expect(setDataValidation.range.startColumnIndex).toBe(5);
+    expect(setDataValidation.range.endColumnIndex).toBe(6);
+    expect(setDataValidation.rule.condition.type).toBe("ONE_OF_LIST");
+    expect(setDataValidation.rule.condition.values).toEqual([
+      { userEnteredValue: TAB_NEW },
+      { userEnteredValue: TAB_EXISTING },
+      { userEnteredValue: TAB_IRRELEVANT },
+    ]);
+    expect(setDataValidation.rule.strict).toBe(true);
+    expect(setDataValidation.rule.showCustomUi).toBe(true);
   });
 
   it("upsertLeadRow append branch also triggers the repeatCell batchUpdate", async () => {
@@ -516,10 +550,25 @@ describe("row formatting on append", () => {
     expect(result).toBe(true);
     expect(mockSheetsBatchUpdate).toHaveBeenCalledOnce();
     const batchArg = mockSheetsBatchUpdate.mock.calls[0]?.[0] as {
-      requestBody: { requests: [{ repeatCell: { range: { startRowIndex: number; endRowIndex: number } } }] };
+      requestBody: {
+        requests: [
+          { repeatCell: { range: { startRowIndex: number; endRowIndex: number } } },
+          {
+            setDataValidation: {
+              range: { startRowIndex: number; endRowIndex: number; startColumnIndex: number; endColumnIndex: number };
+            };
+          },
+        ];
+      };
     };
-    expect(batchArg.requestBody.requests[0].repeatCell.range.startRowIndex).toBe(4);
-    expect(batchArg.requestBody.requests[0].repeatCell.range.endRowIndex).toBe(5);
+    const requests = batchArg.requestBody.requests;
+    expect(requests).toHaveLength(2);
+    expect(requests[0].repeatCell.range.startRowIndex).toBe(4);
+    expect(requests[0].repeatCell.range.endRowIndex).toBe(5);
+    expect(requests[1].setDataValidation.range.startRowIndex).toBe(4);
+    expect(requests[1].setDataValidation.range.endRowIndex).toBe(5);
+    expect(requests[1].setDataValidation.range.startColumnIndex).toBe(5);
+    expect(requests[1].setDataValidation.range.endColumnIndex).toBe(6);
   });
 
   it("missing updatedRange → no throw, no batchUpdate, still returns true", async () => {
