@@ -2,7 +2,8 @@
 
 > Canonical description of **how the system behaves**, re-traced from source on **2026-07-01**,
 > updated **2026-07-09** for the **conversational bot v4/v4.1** redesign (9-button menu + sheet-mirror
-> tab routing).
+> tab routing), and **2026-07-10** for the **CRM-sheet relevance dropdown + row mover** (§10) and the
+> unanswered-WA session-model rework (§6a).
 >
 > **📍 The two bots each have a dedicated deep-dive doc — read those for feature-level detail:**
 > - **`.claude/CONVERSATIONAL_BOT.md`** — the customer-facing WhatsApp intake bot (v4.1 state machine,
@@ -428,7 +429,8 @@ events to `POST /api/zadarma/call-webhook`.
 Admin-only (`authenticate` + `authorize("admin")`) POST endpoints under `/api/operations` mirror the
 scheduled jobs: `/call-reminder/run`, `/commitments/run`, `/morning-digest/run`, `/email-mentions/run`,
 `/unanswered/run` (WA sweeper + follow-ups), `/unanswered-emails/run` (⚠️ advances the watermark — the
-next 09:00 run then only covers mail received after the manual run).
+next 09:00 run then only covers mail received after the manual run), `/leads-relevance/run` (dropdown
+re-apply + relevance-mover sweep, returns both result objects — §10).
 
 ### 5.6 Biennial service meetings — **REMOVED from the schedule in v4** — `calendar/service-meeting.service.ts`
 **v4 (2026-07-09): the 08:10 cron block and its import were deleted from `server.ts`** (owner: "we
@@ -471,8 +473,9 @@ localhost) so dev boots never touch live lines or prod data.
 | Job | Trigger | Cadence | Source |
 |---|---|---|---|
 | Commitment timed reminders | `setInterval` (`startCommitmentCrons`) | every 15 min | `commitments.reminders.ts` |
-| Morning digest (commitments + calls) **and** email staff-mentions **and** unanswered-emails self-notify **and** unanswered-WA follow-ups | `cron` | `0 9 * * *` Asia/Jerusalem (moved from 08:00, 2026-07-10) | `morning-digest.service.ts` + `email-mentions.service.ts` + `unanswered-emails.service.ts` + `unanswered-wa.service.ts` |
+| Morning digest (commitments + calls) **and** email staff-mentions **and** unanswered-emails self-notify **and** unanswered-WA follow-ups **and** relevance-dropdown re-apply | `cron` | `0 9 * * *` Asia/Jerusalem (moved from 08:00, 2026-07-10) | `morning-digest.service.ts` + `email-mentions.service.ts` + `unanswered-emails.service.ts` + `unanswered-wa.service.ts` + `leads-relevance.service.ts` |
 | **Unanswered-WA sweeper (new 2026-07-10)** | `setInterval` | every 5 min | `operations/unanswered-wa.service.ts` |
+| **Leads relevance mover (new 2026-07-10)** | `setInterval` (+ one-shot `setTimeout` 30s boot dropdown-apply) | every 5 min | `integrations/google/leads-relevance.service.ts` |
 | **Intake stall watcher (v4)** | `setInterval` | every 10 min | `ai/intake-stall.service.ts` |
 
 **Disabled/removed in v4** (registrations commented out or deleted in `server.ts`; service code kept):
@@ -674,19 +677,42 @@ Refresh token in `system_settings.google_ws_refresh_token`. Routes
 
 **Lead row mirror — `mirrorLeadToSheet(clientId)`** (v4 rewrite; called on each slot advance + at
 `endFlow`, EVERY branch, best-effort, never blocks intake):
-- **ONE tab only:** the **`לידים חדשים `** tab (`LEADS_SHEET_TAB_NEW`, trailing space, sheetId 0) of the
-  CRM spreadsheet. The `לקוח קיים ` and `לא רלוונטי` tabs are **manual triage** — the bot never writes
-  them. Tab titles resolved against live metadata (trim-match) and cached in
-  `system_settings.leads_sheet_tab_resolved:<tab>`.
+- **Tab routing (v4.1):** buttons 1-8 + callback → **`לידים חדשים `** (`LEADS_SHEET_TAB_NEW`, trailing
+  space, sheetId 0); button-9 meeting + existing client → **`לקוח קיים `** (`LEADS_SHEET_TAB_EXISTING`).
+  The bot never *appends* to `לא רלוונטי` (`LEADS_SHEET_TAB_IRRELEVANT`, new env 2026-07-10) — rows only
+  arrive there via the relevance mover below. Tab titles resolved against live metadata (trim-match) and
+  cached in `system_settings.leads_sheet_tab_resolved:<tab>` (+ `leads_sheet_gid:<title>` for sheetIds).
 - **7 columns A→G:** phone · name (`displayName` — blank if the WA name is just the phone) · inquiry
   type (1-7 → Hebrew via `INQUIRY_TYPE_HE`; `callback` → `בקשת שיחה חוזרת`; `meeting` →
   `תיאום פגישה — לקוח קיים/חדש` per `client_type`; `general` → blank) · ID-photo Drive URL · ID number ·
-  רלוונטיות (always blank — manual) · creation date `DD/MM/YYYY HH:mm` Asia/Jerusalem (**set-once** —
-  preserved on updates via `upsertLeadRow`'s `setOnceColumns: [6]`).
-- **Idempotency is phone-based:** `upsertLeadRow` finds the row whose column-A phone (digit-normalised)
-  matches and updates it in place (overwriting B-F on return visits), else appends. (The
+  רלוונטיות (**human-owned dropdown**, bot writes blank — see mover below) · creation date
+  `DD/MM/YYYY HH:mm` Asia/Jerusalem. **Set-once columns `[5, 6]`** (2026-07-10, was `[6]`): a
+  manually-picked relevance value AND the creation date survive every re-mirror.
+- **Idempotency is phone-based across ALL 3 tabs** (2026-07-10): `upsertLeadRow` batch-reads column A of
+  `[target, new, existing, irrelevant]` (deduped by trim, target first) and updates the row **in the tab
+  where it lives** — a returning lead you already triaged into `לקוח קיים`/`לא רלוונטי` is updated in
+  place there, never duplicated into new-leads. Appends to the target tab only when the phone is found
+  nowhere. All same-process sheet writers are serialized by `withSheetLock` (`sheets-lock.ts`). (The
   `clients.mirrored_to_sheet_at` column is **not** used by this code.)
 - One-time restructure script (7 headers on all 3 tabs + test-row wipe):
   `scripts/oneoff/restructure-crm-sheet.mjs` (run on the VPS).
 
-**Modules:** `integrations/google/{google.auth,google.gmail,google.drive,google.sheets,leads-mirror.service}.ts`.
+**Relevance dropdown + row mover — `leads-relevance.service.ts` (new 2026-07-10, `bc3f0b8`; all legs
+live-tested same day):**
+- **Dropdown:** `applyRelevanceDropdowns()` sets a `ONE_OF_LIST` data-validation rule (strict +
+  `showCustomUi`) on **F2:F unbounded** of all 3 tabs, values = the 3 **trimmed** tab names. Idempotent;
+  runs at boot (+30s), inside the 09:00 cron bundle (heals rows appended into fresh tabs, which inherit
+  validation from the row above), and via the manual trigger. Blank cells are always allowed — the bot
+  keeps writing `""` and a human picks later.
+- **Mover:** `sweepRelevanceMoves()` every **5 min** (≈288 batched reads/day vs the 300-reads/**min**
+  Sheets quota). One `values.batchGet` of `A2:G` across the 3 tabs, then per row: `trim(F)` empty →
+  ignored; not a known tab name → ignored; equals the current tab → stable no-op; phone AND name both
+  empty → ignored (stray dropdown pick on an empty row); otherwise the row **moves** to the tab F names —
+  **symmetric across all 3 tabs** (a `לא רלוונטי` row can be resurrected by picking `לידים חדשים`).
+  Move = append the full 7-value row to the destination (**F kept as picked** → self-stable) + one
+  descending-sorted `deleteDimension` batch per source tab. Counters
+  `{scanned, moved, ignoredEmpty, ignoredInvalid, errors}`; re-entrancy-guarded, never throws, holds
+  `withSheetLock` for the whole scan→move so it can't race the intake mirror.
+- Manual: `POST /api/operations/leads-relevance/run` (§5.5) — dropdown re-apply + immediate sweep.
+
+**Modules:** `integrations/google/{google.auth,google.gmail,google.drive,google.sheets,leads-mirror.service,leads-relevance.service,sheets-lock}.ts`.
