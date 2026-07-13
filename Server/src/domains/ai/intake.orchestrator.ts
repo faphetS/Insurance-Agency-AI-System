@@ -381,8 +381,8 @@ async function handleIdPhoto(
   if (!ocrResult) return;
 
   if (!ocrResult.valid) {
-    const rePrompt = INTAKE_PROMPTS.id_photo_invalid.text.replace("{reason}", ocrResult.reason);
-    await sendText(conversationId, chatId, rePrompt);
+    logger.info({ hasIdCard: ocrResult.hasIdCard, hasAppendix: ocrResult.hasAppendix }, "intake: id_photo rejected");
+    await sendText(conversationId, chatId, INTAKE_PROMPTS.id_photo_invalid.text);
     return;
   }
 

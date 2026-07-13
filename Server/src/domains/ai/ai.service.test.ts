@@ -42,9 +42,13 @@ function makeCompletion(content: string) {
   return { choices: [{ message: { content } }] };
 }
 
-function mockLLMResponse(idNumber: string | null, valid = true) {
+function mockLLMResponse(
+  idNumber: string | null,
+  options: { hasIdCard?: boolean; hasAppendix?: boolean } = {},
+) {
+  const { hasIdCard = true, hasAppendix = true } = options;
   mockCreate.mockResolvedValue(
-    makeCompletion(JSON.stringify({ valid, reason: "תעודה תקינה", idNumber })),
+    makeCompletion(JSON.stringify({ hasIdCard, hasAppendix, idNumber })),
   );
 }
 
@@ -132,19 +136,18 @@ describe("validateIdPhoto — idNumber extraction and normalization", () => {
 
   it("returns null when model returns non-string for idNumber", async () => {
     mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ valid: true, reason: "ok", idNumber: 123456789 })),
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: 123456789 })),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.idNumber).toBeNull();
   });
 
-  it("preserves valid:false and reason from the model response", async () => {
+  it("derives valid:false when hasAppendix is false", async () => {
     mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ valid: false, reason: "לא ניתן לקרוא את התעודה", idNumber: null })),
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: false, idNumber: null })),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.valid).toBe(false);
-    expect(result.reason).toBe("לא ניתן לקרוא את התעודה");
     expect(result.idNumber).toBeNull();
   });
 
@@ -152,19 +155,50 @@ describe("validateIdPhoto — idNumber extraction and normalization", () => {
     mockCreate.mockResolvedValue(makeCompletion("not json at all"));
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.valid).toBe(false);
-    expect(result.reason).toBe("שגיאה בעיבוד תשובת המודל");
+    expect(result.hasIdCard).toBe(false);
+    expect(result.hasAppendix).toBe(false);
     expect(result.idNumber).toBeNull();
   });
 
   it("strips markdown code fences from model response before parsing", async () => {
     mockCreate.mockResolvedValue(
       makeCompletion(
-        "```json\n" + JSON.stringify({ valid: true, reason: "תקין", idNumber: "123456789" }) + "\n```",
+        "```json\n" + JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789" }) + "\n```",
       ),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.idNumber).toBe("123456789");
     expect(result.valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateIdPhoto — hasIdCard / hasAppendix → valid derivation
+// ---------------------------------------------------------------------------
+
+describe("validateIdPhoto — hasIdCard / hasAppendix → valid derivation", () => {
+  it("card-only (hasIdCard:true, hasAppendix:false) → invalid", async () => {
+    mockLLMResponse("123456789", { hasAppendix: false });
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.valid).toBe(false);
+    expect(result.hasIdCard).toBe(true);
+    expect(result.hasAppendix).toBe(false);
+  });
+
+  it("appendix-only (hasIdCard:false, hasAppendix:true) → invalid", async () => {
+    mockLLMResponse("123456789", { hasIdCard: false });
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.valid).toBe(false);
+    expect(result.hasIdCard).toBe(false);
+    expect(result.hasAppendix).toBe(true);
+  });
+
+  it("both card and appendix present → valid", async () => {
+    mockLLMResponse("123456789");
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.valid).toBe(true);
+    expect(result.hasIdCard).toBe(true);
+    expect(result.hasAppendix).toBe(true);
   });
 });
 
@@ -176,7 +210,7 @@ describe("validateIdPhoto — fullName extraction", () => {
   it("returns the printed full name (collapses whitespace, trims)", async () => {
     mockCreate.mockResolvedValue(
       makeCompletion(
-        JSON.stringify({ valid: true, reason: "תקין", idNumber: "123456789", fullName: "  יעל   כהן  " }),
+        JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: "  יעל   כהן  " }),
       ),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
@@ -185,7 +219,7 @@ describe("validateIdPhoto — fullName extraction", () => {
 
   it("returns null when the model omits fullName", async () => {
     mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ valid: true, reason: "תקין", idNumber: "123456789" })),
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789" })),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.fullName).toBeNull();
@@ -193,7 +227,7 @@ describe("validateIdPhoto — fullName extraction", () => {
 
   it("returns null when fullName is null", async () => {
     mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ valid: true, reason: "ok", idNumber: "123456789", fullName: null })),
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: null })),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.fullName).toBeNull();
@@ -201,7 +235,7 @@ describe("validateIdPhoto — fullName extraction", () => {
 
   it("returns null when fullName is under 2 chars", async () => {
     mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ valid: true, reason: "ok", idNumber: "123456789", fullName: "א" })),
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: "א" })),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.fullName).toBeNull();

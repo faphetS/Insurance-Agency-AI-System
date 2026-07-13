@@ -453,7 +453,7 @@ describe("id_photo slot", () => {
   }
 
   it("valid ID → Drive name from OCR name, full_name upgraded, terminal #11 + pause", async () => {
-    mockValidateIdPhoto.mockResolvedValue({ valid: true, reason: "תקין", idNumber: "123456789", fullName: "משה לוי" });
+    mockValidateIdPhoto.mockResolvedValue({ valid: true, hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: "משה לוי" });
     mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
     mockUploadLeadDocument.mockResolvedValue({ fileId: "d1", webViewLink: "https://drive/x" });
 
@@ -477,7 +477,7 @@ describe("id_photo slot", () => {
   });
 
   it("valid ID with no OCR name → Drive name falls back to phone digits", async () => {
-    mockValidateIdPhoto.mockResolvedValue({ valid: true, reason: "תקין", idNumber: null, fullName: null });
+    mockValidateIdPhoto.mockResolvedValue({ valid: true, hasIdCard: true, hasAppendix: true, idNumber: null, fullName: null });
     mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
     mockUploadLeadDocument.mockResolvedValue({ fileId: "d1", webViewLink: "https://drive/x" });
 
@@ -490,8 +490,8 @@ describe("id_photo slot", () => {
     expect((updatePhoto["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).not.toHaveProperty("full_name");
   });
 
-  it("invalid ID → re-prompt #10 with the reason, no upload", async () => {
-    mockValidateIdPhoto.mockResolvedValue({ valid: false, reason: "התמונה מטושטשת", idNumber: null, fullName: null });
+  it("invalid ID → generic re-ask, no upload", async () => {
+    mockValidateIdPhoto.mockResolvedValue({ valid: false, hasIdCard: true, hasAppendix: false, idNumber: null, fullName: null });
     setupFrom([
       makeBuilder(BOT_ENABLED),
       makeBuilder(CONV_ACTIVE),
@@ -502,8 +502,8 @@ describe("id_photo slot", () => {
     await handleIntake("conv", "client", "chat@c.us", imagePayload());
 
     const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sent).toContain("לא ניתן לאמת את תמונת תעודת הזהות");
-    expect(sent).toContain("התמונה מטושטשת");
+    expect(sent).toContain("הספח");
+    expect(sent).toContain("תעודת הזהות");
     expect(mockUploadLeadDocument).not.toHaveBeenCalled();
   });
 

@@ -78,44 +78,48 @@ function normalizeIdNumber(raw: string): string | null {
 
 /**
  * Single vision pass that validates the ID photo AND extracts the document's
- * primary ID number plus the printed full name. Lenient: any readable
- * government-issued identity document passes; the ספח (appendix) is welcome
- * but its absence must NOT cause invalid. Supports Israeli ת"ז (8–9 digits)
- * and foreign IDs/passports that may be alphanumeric with dashes.
+ * primary ID number plus the printed full name. Strict: the photo must show
+ * BOTH the Israeli תעודת זהות AND its ספח (appendix) — the model reports each
+ * part as its own boolean (hasIdCard, hasAppendix), which are logged by the
+ * caller for rollout diagnostics; valid is DERIVED in code as
+ * hasIdCard && hasAppendix.
  */
 export async function validateIdPhoto(imageUrl: string): Promise<{
   valid: boolean;
-  reason: string;
+  hasIdCard: boolean;
+  hasAppendix: boolean;
   idNumber: string | null;
   fullName: string | null;
 }> {
   const prompt =
-    'Does this image plausibly show a government-issued identity document ' +
-    '(passport, driver\'s license, national ID card, Israeli ת"ז, etc.)? ' +
-    'Be LENIENT: if it plausibly shows any readable government ID, mark it valid. ' +
-    'Do NOT judge authenticity or check expiration dates. ' +
-    'The ספח (appendix page) is welcome but its ABSENCE must NOT make the document invalid. ' +
-    'Also extract the document\'s primary ID/document number exactly as printed — ' +
-    'for an Israeli ID that is the 8–9 digit ת"ז number; for a foreign ID it may include letters and dashes. ' +
-    'Omit surrounding spaces. Set idNumber to null only if no ID number is readable. ' +
-    'Also extract the full name of the document holder exactly as printed; ' +
-    'if the name appears in both Hebrew and Latin scripts, prefer the Hebrew name. ' +
-    'Set fullName to null if no name is readable. ' +
+    'Look at this image of an Israeli identity document. ' +
+    'Report two things: ' +
+    '(1) hasIdCard — is the תעודת זהות itself visible? i.e. the biometric smart ID card, ' +
+    'or the main identity page of the ID booklet (holder\'s photo, name, ID number). ' +
+    '(2) hasAppendix — is its ספח visible? i.e. the appendix/attachment page headed "ספח לתעודת זהות" ' +
+    'that lists the holder\'s personal and family details. ' +
+    'Judge only whether each part is visible — do NOT judge authenticity or expiration. ' +
+    'Be tolerant of slight blur, glare or angle as long as a part stays identifiable; ' +
+    'if a part is not present at all, its flag is false. ' +
+    'Also extract the holder\'s 8–9 digit ת"ז number exactly as printed (appears on both the card and the ספח); ' +
+    'omit spaces; idNumber=null if unreadable. ' +
+    'Extract the holder\'s full name exactly as printed; prefer the Hebrew form if both Hebrew and Latin appear; ' +
+    'fullName=null if unreadable. ' +
     'Respond ONLY with JSON: ' +
-    '{"valid": true, "reason": "<short explanation IN HEBREW>", "idNumber": "<document number or null>", "fullName": "<name or null>"} ' +
-    'or {"valid": false, "reason": "<short explanation IN HEBREW>", "idNumber": null, "fullName": null}. ' +
-    'The "reason" value MUST be in Hebrew with gender-neutral phrasing (use infinitives like לשלוח, impersonal forms like נדרש, avoid אתה/את). ' +
-    '"idNumber" must be the exact character sequence of the ID number (letters, digits, dashes — no surrounding spaces), or null if not found/readable.';
+    '{"hasIdCard": true|false, "hasAppendix": true|false, "idNumber": "<number or null>", "fullName": "<name or null>"}. ' +
+    'idNumber must be the exact digit sequence with no surrounding spaces, or null.';
 
   const raw = await analyzeImage(imageUrl, prompt);
   try {
     const cleaned = raw.replace(/```json\n?|\n?```/g, "").trim();
     const parsed = JSON.parse(cleaned) as {
-      valid?: boolean;
-      reason?: string;
+      hasIdCard?: boolean;
+      hasAppendix?: boolean;
       idNumber?: string | null;
       fullName?: string | null;
     };
+    const hasIdCard = parsed.hasIdCard === true;
+    const hasAppendix = parsed.hasAppendix === true;
     const idNumber = typeof parsed.idNumber === "string" ? normalizeIdNumber(parsed.idNumber) : null;
     let fullName: string | null = null;
     if (typeof parsed.fullName === "string") {
@@ -123,13 +127,14 @@ export async function validateIdPhoto(imageUrl: string): Promise<{
       fullName = cleanedName.length >= 2 ? cleanedName : null;
     }
     return {
-      valid: parsed.valid === true,
-      reason: typeof parsed.reason === "string" ? parsed.reason : "",
+      valid: hasIdCard && hasAppendix,
+      hasIdCard,
+      hasAppendix,
       idNumber,
       fullName,
     };
   } catch {
-    return { valid: false, reason: "שגיאה בעיבוד תשובת המודל", idNumber: null, fullName: null };
+    return { valid: false, hasIdCard: false, hasAppendix: false, idNumber: null, fullName: null };
   }
 }
 

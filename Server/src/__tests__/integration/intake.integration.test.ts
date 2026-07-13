@@ -257,7 +257,8 @@ describe("intake v4 — meeting → new client → consent → ID", () => {
     const idWebViewLink = "https://drive.google.com/file/d/drive-id-1/view";
     mockValidateIdPhoto.mockResolvedValueOnce({
       valid: true,
-      reason: "תעודת זהות תקינה",
+      hasIdCard: true,
+      hasAppendix: true,
       idNumber: "123456789",
       fullName: "משה לוי",
     });
