@@ -2,8 +2,9 @@
 
 > Canonical description of **how the system behaves**, re-traced from source on **2026-07-01**,
 > updated **2026-07-09** for the **conversational bot v4/v4.1** redesign (9-button menu + sheet-mirror
-> tab routing), and **2026-07-10** for the **CRM-sheet relevance dropdown + row mover** (§10) and the
-> unanswered-WA session-model rework (§6a).
+> tab routing), **2026-07-10** for the **CRM-sheet relevance dropdown + row mover** (§10) and the
+> unanswered-WA session-model rework (§6a), and **2026-07-14** for the **intake email slot +
+> booking-sync re-enable (email-only matching)** (§3.1, §3.5).
 >
 > **📍 The two bots each have a dedicated deep-dive doc — read those for feature-level detail:**
 > - **`.claude/CONVERSATIONAL_BOT.md`** — the customer-facing WhatsApp intake bot (v4.1 state machine,
@@ -61,7 +62,9 @@ deleted (service kept dormant); lead mirror rewritten to a 7-column single-tab p
 **v4.1 (same day, `b0da7b3`): sheet mirror tab-routed — rows appear only after a definitive menu choice
 (buttons 1-8 → `לידים חדשים `; button 9 + existing → `לקוח קיים `; no flow-start phone-only rows);
 appended rows auto-formatted 13pt/not-bold/white; `meeting_didi` tap + fresh-restart now clear stale
-`inquiry_type`/`client_type`.**
+`inquiry_type`/`client_type`.** **2026-07-14: the button-9 path gains an `email` slot (both branches
+pass through it before their terminals) and the calendar booking-sync run-loop is re-enabled with
+email-only matching + a new thank-you (§3.5); the 24h/1h reminders stay off.**
 
 ---
 
@@ -147,8 +150,8 @@ are checked in order against both the Zod-parsed payload and the raw body).
 
 ### 3.1 Intake state machine (v4, 2026-07-09) — `ai/intake.orchestrator.ts`, prompts in `ai/intake.prompts.ts`
 
-**Slot order (`SLOT_ORDER`, DB CHECK enforces exactly these six):**
-`welcome → menu → meeting_type → consent → id_photo → done`.
+**Slot order (`SLOT_ORDER`, DB CHECK enforces exactly these seven):**
+`welcome → menu → meeting_type → email → consent → id_photo → done`.
 All prompts in Hebrew, masculine-generic (Didi's style), no emojis in client messages. Gated by
 `bot_settings.enabled` (singleton id=1) and the per-conversation pause (auto-resumes when
 `bot_paused_until` lapses). `intake_state='skipped'` is an operator escape hatch (bot ignores the chat).
@@ -167,10 +170,18 @@ All prompts in Hebrew, masculine-generic (Didi's style), no emojis in client mes
     (`notifyOwner` → `SUMMARY_RECIPIENT_PHONE`) → thank-you → `endFlow('new_lead')`.
   - **Button 9** (`meeting_didi`) → `inquiry_type='meeting'` → advance to `meeting_type`.
   - Free text / media → text-only re-prompt `"אנא בחר אחת מהאפשרויות בתפריט למעלה"` (nobody notified).
-- **meeting_type** — buttons `existing_client` "לקוח קיים" / `new_client` "לקוח חדש".
-  **Existing** → `client_type='old'` → booking-link message (`GOOGLE_CALENDAR_BOOKING_URL`) →
+- **meeting_type** — buttons `existing_client` "לקוח קיים" / `new_client` "לקוח חדש". Either tap saves
+  `client_type` (`'old'`/`'new'`) and advances to `email` — the old/new branch continues only after the
+  email is collected.
+- **email (v4.1, 2026-07-14)** — plain-text ask `"מה כתובת המייל שלך?"`. Free text only: the first
+  email-looking token anywhere in the message is accepted (lenient regex), **lowercased**, and saved to
+  `clients.email` (**DB-only** — no sheet column; booking-sync matches on this exact value, §3.5).
+  Images/documents, stale button taps, or text without an email → re-prompt
+  `"לא זיהינו כתובת מייל תקינה. נא לשלוח כתובת מייל, לדוגמה: name@example.com"` — the slot re-asks in a
+  loop until a valid address arrives. Then the branch continues:
+  **Existing** (`client_type='old'`) → booking-link message (`GOOGLE_CALENDAR_BOOKING_URL`) →
   `endFlow('meeting_scheduling')` — **no notification** (the calendar booking is the signal).
-  **New** → `client_type='new'` → advance to `consent`, stamp `clients.consent_prompted_at`
+  **New** → advance to `consent`, stamp `clients.consent_prompted_at`
   (starts the 3h stall clock, §3.6) and clear `stall_notified_at`.
 - **consent** — single button `consent_approve` "מאשר" (data-pull consent: מסלקה פנסיונית + הר הביטוח).
   Advances **only on a real button TAP** (`payload.isButtonReply` set by `extractPayload`'s
@@ -230,12 +241,27 @@ machine (§3.1) is the current replacement for routing an existing client to a r
 - All timed pauses auto-expire via `bot_paused_until` and auto-resume. Global kill switch: `bot_settings`.
   (The 2h escalation pause is **gone** — human escalation was removed, §3.3.)
 
-### 3.5 Booking → confirmation → reminders — **DISABLED in v4** (`calendar/booking-sync.service.ts`, `calendar/reminder.service.ts`)
+### 3.5 Booking sync → thank-you — **RE-ENABLED in v4.1 (2026-07-14)**; 24h/1h reminders stay DISABLED (`calendar/booking-sync.service.ts`, `calendar/reminder.service.ts`)
 Booking is still via the **Calendly link** sent at the button-9 terminals, and the booked Google
-Calendar event carries the Zoom link — but the backend no longer reacts to it: the **booking-sync
-(every 3 min) and 24h/1h reminder (every 10 min) run-loops are commented out in `server.ts`**
-(`// v4: disabled`; services + tests kept dormant, no confirmation message is sent). The booking
-simply appears in Didi's calendar. Re-enable by un-commenting the registrations.
+Calendar event carries the Zoom link. The **booking-sync run-loop is back on in `server.ts`** — first
+run 30s after boot, then **every 3 minutes** (public deployments only). Each run pulls events created
+since `system_settings.google_calendar_last_sync` and, per new event (skipped if a `meetings` row with
+that `calendar_event_id` already exists):
+- **Email-only matching:** attendee emails (non-self) are lowercased and compared against
+  `clients.email` — which the intake `email` slot stores lowercased (§3.1) — with
+  `status IN ('new','active')`. The old name-match / pending-booking fallbacks are **removed**
+  (nothing has created `pending_booking` rows since v4); no email match → the event is skipped
+  (logged, no row).
+- **`meetings` INSERT** (always an insert — the update-a-pending-row branch is gone): `client_id`, the
+  client's latest conversation (by `last_message_at`), `scheduled_at`, `calendar_event_id`,
+  `status='scheduled'`, `type='zoom'|'google_meet'`. Double-send-proof twice over: the per-event
+  SELECT skip + the `meetings_calendar_event_id_uidx` partial-unique index (an insert error → the
+  event is skipped, so the thank-you can never go out twice).
+- `clients.pipeline_stage='meeting_scheduled'`.
+- **WhatsApp thank-you** to the conversation's chat, persisted to `messages`:
+  `"תודה! הפגישה נקבעה בהצלחה לתאריך {date}. נתראה בפגישה."` plus, when the event has a Zoom link,
+  `"קישור לפגישת זום: {link}"`. (The pre-v4 copy promised a reminder — dropped, because the
+  **24h/1h reminder loop remains commented out** in `server.ts`; `reminder.service.ts` stays dormant.)
 
 ---
 
@@ -477,10 +503,12 @@ localhost) so dev boots never touch live lines or prod data.
 | **Unanswered-WA sweeper (new 2026-07-10)** | `setInterval` | every 5 min | `operations/unanswered-wa.service.ts` |
 | **Leads relevance mover (new 2026-07-10)** | `setInterval` (+ one-shot `setTimeout` 30s boot dropdown-apply) | every 5 min | `integrations/google/leads-relevance.service.ts` |
 | **Intake stall watcher (v4)** | `setInterval` | every 10 min | `ai/intake-stall.service.ts` |
+| **Calendar booking-sync (re-enabled v4.1, 2026-07-14)** | `setInterval` (+ one-shot `setTimeout` 30s boot run) | every 3 min | `calendar/booking-sync.service.ts` |
 
 **Disabled/removed in v4** (registrations commented out or deleted in `server.ts`; service code kept):
-calendar booking-sync (was +30s / 3 min), appointment 24h/1h reminders (was 10 min), biennial
-service-meeting cron (was `10 8 * * *` — **deleted**), Timeless hourly poll + webhook registration.
+appointment 24h/1h reminders (was 10 min), biennial service-meeting cron (was `10 8 * * *` —
+**deleted**), Timeless hourly poll + webhook registration. (Calendar booking-sync sat on this list
+from v4 until 2026-07-14, when v4.1 re-enabled it — see the table above.)
 
 Note: the **call reminder** is not independently scheduled — it ships inside the 09:00 digest.
 
@@ -507,8 +535,9 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
 - `clients`: `pipeline_stage`, `complexity` (dormant since v4), `id_number`, `policy_number`,
   `client_type` (`new`/`old`), `assigned_to` / `assigned_handler_id` (handler preferred),
   `last_service_date`, `last_service_reminder_at` (biennial re-arm — dormant, cron removed §5.6),
-  intake columns (`intake_state`, `intake_current_slot` — **v4 CHECK allows exactly:
-  `welcome`/`menu`/`meeting_type`/`consent`/`id_photo`/`done`** (migration `20260709120000_intake_v4`);
+  intake columns (`intake_state`, `intake_current_slot` — **v4.1 CHECK allows exactly:
+  `welcome`/`menu`/`meeting_type`/`email`/`consent`/`id_photo`/`done`** (migrations
+  `20260709120000_intake_v4` + `20260714120000_intake_email_slot`);
   `id_photo_url`, `poa_doc_url` (dormant), `id_validated`, `intake_completed_at`),
   **v4 stall-watcher columns `consent_prompted_at` + `stall_notified_at`** (timestamptz), and
   `mirrored_to_sheet_at` (column exists but is **not read/written by the lead-mirror code** — sheet
@@ -518,7 +547,9 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   (`pending_booking → scheduled → confirmed → done → cancelled`), `summary_draft`/`summary_final`,
   `summary_status` (`draft`→`sent`; `approved` unused), `client_confirmed` (vestigial),
   `timeless_meeting_id` (unique), idempotency claims `staff_summary_notified_at` /`staff_picker_sent_at` /
-  `client_summary_emailed_at`, reminder flags, `calendar_event_id`, `conversation_id`.
+  `client_summary_emailed_at`, reminder flags, `calendar_event_id` (**partial-unique since
+  `20260714120000_intake_email_slot` — `meetings_calendar_event_id_uidx`, the booking-sync
+  double-send guard**), `conversation_id`.
 - `commitments`: `chat_id`, `direction`, `source_message_id` (synthetic, partial-unique), `commitment_text`
   (Hebrew), `counterparty`, `due_date`/`due_time`, `kind` (`timed`/`date_only`/`floating`), `fire_at`,
   `status` (`pending`/`sent`/`cancelled`), `sent_at`.
@@ -553,6 +584,7 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   create/link → `clients`. **Pauses** → `conversations.bot_paused` / `bot_paused_until`. Settings read
   → `bot_settings` (id=1).
 - **Intake answers (v4)** → `clients` (`intake_state`, `intake_current_slot`, `client_type`,
+  `email` — **lowercased at the v4.1 `email` slot, DB-only, the booking-sync match key**,
   `inquiry_type` incl. `callback`/`meeting`, `consent_prompted_at`/`stall_notified_at`, `id_number`,
   `id_validated`, `full_name` upgraded to the OCR name, `pipeline_stage`, `intake_completed_at`).
   On each advance + at `endFlow` → **Google Sheet** row (every branch, single tab, §10).
@@ -562,9 +594,11 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   `bot_paused_until=now+24h`. No `meetings` insert, no POA path anymore. **Bot replies** → `messages`
   (`sent_by='bot'`). **Staff lead email** (buttons 1-7) → Gmail (or pm2 log in `log` mode); **callback/
   stall alerts** → Didi's WhatsApp (not stored as our `messages`).
-- **Booking sync** → `system_settings.google_calendar_last_sync`; `meetings` (`calendar_event_id`,
-  `scheduled_at`, `status='scheduled'`, `type=zoom|google_meet`); `clients` (email backfill,
-  `pipeline_stage='meeting_scheduled'`); `messages` (confirmation incl. Zoom link). **Reminders** →
+- **Booking sync (re-enabled v4.1)** → `system_settings.google_calendar_last_sync`; `meetings` —
+  always a fresh INSERT per event (`calendar_event_id` partial-unique, `scheduled_at`,
+  `status='scheduled'`, `type=zoom|google_meet`, latest conversation attached); `clients`
+  (`pipeline_stage='meeting_scheduled'` only — the old email backfill is gone, matching is
+  email-only); `messages` (the thank-you incl. Zoom link). **Reminders (loop still disabled)** →
   `meetings.reminder_24h_sent`/`reminder_1h_sent` + `messages`.
 - **Timeless** → `meetings` (`timeless_meeting_id`, `transcript`, `summary_draft`, `recording_url`,
   `summary_final`, `summary_status`, and `staff_picker_sent_at` / `client_summary_emailed_at` idempotency

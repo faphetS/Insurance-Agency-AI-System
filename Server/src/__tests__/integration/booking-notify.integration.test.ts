@@ -1,15 +1,17 @@
 /**
- * Integration test: booking-sync.service — meeting placement + lead notification
+ * Integration test: booking-sync.service — email-only matching + thank-you (v4.1)
  *
- * Seeds a client in meeting_scheduling stage with a pending_booking meeting
- * row, then mocks the Google Calendar wrapper to return one synthetic event
- * whose attendee email matches the client. Runs syncNewBookings() and asserts:
- *   - The pending meeting row is updated to status='scheduled' with the
- *     calendar_event_id and scheduled_at from the synthetic event.
+ * Seeds a client in meeting_scheduling stage whose email was stored LOWERCASED
+ * by the intake email slot, then mocks the Google Calendar wrapper to return one
+ * synthetic event whose attendee email is MIXED-CASE (proving the matcher
+ * lowercases before comparing). Runs syncNewBookings() and asserts:
+ *   - Exactly one meetings row is INSERTED for the calendar_event_id
+ *     (status='scheduled', type, scheduled_at, client_id, conversation_id).
  *   - client.pipeline_stage advances to 'meeting_scheduled'.
- *   - A WhatsApp confirmation was sent (mocked sendMessageWithTyping called
- *     with the conversation's whatsapp_chat_id and a Hebrew confirmation text).
- *   - A message row is persisted for the outbound confirmation.
+ *   - The WhatsApp thank-you (mocked sendMessageWithTyping) uses the new v4.1
+ *     copy and no longer promises a reminder (reminders stay disabled).
+ *   - A message row is persisted for the outbound thank-you.
+ *   - Re-running does not duplicate the meeting or re-send.
  *   - No real Google or WhatsApp I/O occurred.
  */
 
@@ -57,7 +59,6 @@ interface Seeds {
   staffId: string;
   clientId: string;
   conversationId: string;
-  pendingMeetingId: string;
   eventId: string;
   scheduledAt: string;
   chatId: string;
@@ -67,7 +68,6 @@ async function seed(): Promise<Seeds> {
   const staffId = randomUUID();
   const clientId = randomUUID();
   const conversationId = randomUUID();
-  const pendingMeetingId = randomUUID();
   const eventId = `gcal_evt_${randomUUID()}`;
   const chatId = `9725011${clientId.slice(0, 6)}@c.us`;
 
@@ -80,6 +80,7 @@ async function seed(): Promise<Seeds> {
     [staffId, "Booking Agent", `booking-${staffId}@test.example`],
   );
 
+  // email is lowercase — exactly how the intake email slot stores it.
   await pool.query(
     `INSERT INTO clients
        (id, full_name, phone, email, inquiry_type, status, assigned_to,
@@ -98,14 +99,6 @@ async function seed(): Promise<Seeds> {
     [conversationId, chatId, clientId, "0501234999"],
   );
 
-  const now = new Date().toISOString();
-  await pool.query(
-    `INSERT INTO meetings
-       (id, client_id, conversation_id, type, scheduled_at, status, created_at, updated_at)
-     VALUES ($1, $2, $3, 'google_meet', $4, 'pending_booking', $5, $5)`,
-    [pendingMeetingId, clientId, conversationId, now, now],
-  );
-
   // Ensure bot_settings singleton exists
   await pool.query(`INSERT INTO bot_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
 
@@ -117,7 +110,7 @@ async function seed(): Promise<Seeds> {
     [new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()],
   );
 
-  return { staffId, clientId, conversationId, pendingMeetingId, eventId, scheduledAt, chatId };
+  return { staffId, clientId, conversationId, eventId, scheduledAt, chatId };
 }
 
 async function teardown(seeds: Seeds) {
@@ -132,20 +125,21 @@ async function teardown(seeds: Seeds) {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("syncNewBookings — Tier 1 email match", () => {
+describe("syncNewBookings — email-only match", () => {
   let seeds: Seeds;
 
   beforeAll(async () => {
     seeds = await seed();
 
-    // Synthetic Google Calendar event whose attendee email matches the client
+    // Synthetic Google Calendar event — attendee email deliberately MIXED-CASE
+    // while the seeded client email is lowercase (case-insensitive matching).
     const syntheticEvent = {
       id: seeds.eventId,
       summary: "Insurance consultation",
       created: new Date().toISOString(),
       start: { dateTime: seeds.scheduledAt },
       attendees: [
-        { email: "booklead@example.com", displayName: "Booking Test Lead", self: false },
+        { email: "BookLead@Example.com", displayName: "Booking Test Lead", self: false },
         { email: "agent@agency.example", displayName: "Agent", self: true },
       ],
     };
@@ -161,21 +155,23 @@ describe("syncNewBookings — Tier 1 email match", () => {
     // pool is a shared module singleton across test files — do not end it here
   });
 
-  it("updates the pending meeting to status=scheduled with calendar_event_id and scheduled_at", async () => {
+  it("inserts exactly one scheduled meetings row for the calendar event", async () => {
     const { rows } = await pool.query<{
+      client_id: string;
+      conversation_id: string | null;
       status: string;
-      calendar_event_id: string;
       scheduled_at: string;
       type: string;
     }>(
-      `SELECT status, calendar_event_id, scheduled_at, type
-       FROM meetings WHERE id = $1`,
-      [seeds.pendingMeetingId],
+      `SELECT client_id, conversation_id, status, scheduled_at, type
+       FROM meetings WHERE calendar_event_id = $1`,
+      [seeds.eventId],
     );
 
     expect(rows.length).toBe(1);
+    expect(rows[0]?.client_id).toBe(seeds.clientId);
+    expect(rows[0]?.conversation_id).toBe(seeds.conversationId);
     expect(rows[0]?.status).toBe("scheduled");
-    expect(rows[0]?.calendar_event_id).toBe(seeds.eventId);
     expect(rows[0]?.type).toBe("google_meet");
     // scheduled_at should be within a second of the event's start.dateTime
     const diff = Math.abs(
@@ -192,16 +188,18 @@ describe("syncNewBookings — Tier 1 email match", () => {
     expect(rows[0]?.pipeline_stage).toBe("meeting_scheduled");
   });
 
-  it("called sendMessageWithTyping with the conversation's chatId and a Hebrew confirmation", async () => {
+  it("sends the v4.1 thank-you to the conversation's chatId — no reminder promise", async () => {
     expect(mockSendMsg).toHaveBeenCalled();
 
     const [calledChatId, calledMsg] = mockSendMsg.mock.calls[0] as [string, string];
     expect(calledChatId).toBe(seeds.chatId);
-    // Confirmation message contains the Hebrew word for 'meeting' (הפגישה)
-    expect(calledMsg).toMatch(/הפגישה/);
+    expect(calledMsg).toContain("תודה! הפגישה נקבעה בהצלחה לתאריך");
+    expect(calledMsg).toContain("נתראה בפגישה.");
+    // The old copy promised a reminder — the 24h/1h reminder loops stay OFF.
+    expect(calledMsg).not.toMatch(/תזכורת/);
   });
 
-  it("persists an outbound message row for the confirmation", async () => {
+  it("persists an outbound message row for the thank-you", async () => {
     const { rows } = await pool.query(
       `SELECT direction, sent_by, status
        FROM messages
@@ -220,6 +218,12 @@ describe("syncNewBookings — Tier 1 email match", () => {
     await syncNewBookings();
     // No additional send calls — the `existing` check prevents re-processing
     expect(mockSendMsg.mock.calls.length).toBe(callsBefore);
+
+    const { rows } = await pool.query(
+      `SELECT id FROM meetings WHERE calendar_event_id = $1`,
+      [seeds.eventId],
+    );
+    expect(rows.length).toBe(1);
   });
 });
 
@@ -234,7 +238,7 @@ describe("syncNewBookings — no matching client produces no meeting row", () =>
     );
   });
 
-  it("skips an event with no matching client email/name/pending-meeting", async () => {
+  it("skips an event with no matching client email", async () => {
     const unknownEventId = `gcal_unknown_${randomUUID()}`;
     mockGetRecentEvents.mockResolvedValue([
       {

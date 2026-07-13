@@ -12,8 +12,8 @@ import { runStaffEmailNotify } from "./domains/operations/email-mentions.service
 import { runUnansweredEmailNotify } from "./domains/operations/unanswered-emails.service.js";
 import { sweepUnanswered, sendUnansweredFollowups } from "./domains/operations/unanswered-wa.service.js";
 import { applyRelevanceDropdowns, sweepRelevanceMoves } from "./domains/integrations/google/leads-relevance.service.js";
-// v4: disabled — booking-sync + calendar reminders gated off (services kept dormant).
-// import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
+import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
+// v4: disabled — calendar 24h/1h reminders stay gated off (service kept dormant).
 // import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import { checkIntakeStalls } from "./domains/ai/intake-stall.service.js";
 import helmet from "helmet";
@@ -188,17 +188,18 @@ const server = app.listen(env.PORT, () => {
       { timezone: "Asia/Jerusalem" },
     );
 
-    // v4: disabled — calendar booking-sync (services kept dormant).
-    // setTimeout(() => {
-    //   syncNewBookings().catch((err: unknown) =>
-    //     logger.error({ err }, "booking-sync: initial run failed"),
-    //   );
-    // }, 30_000);
-    // setInterval(() => {
-    //   syncNewBookings().catch((err: unknown) =>
-    //     logger.error({ err }, "booking-sync: scheduled run failed"),
-    //   );
-    // }, 3 * 60 * 1000);
+    // Booking-sync (v4.1): confirm new Google Calendar bookings over WhatsApp —
+    // first run 30s after boot, then every 3 minutes. Reminders stay OFF below.
+    setTimeout(() => {
+      syncNewBookings().catch((err: unknown) =>
+        logger.error({ err }, "booking-sync: initial run failed"),
+      );
+    }, 30_000);
+    setInterval(() => {
+      syncNewBookings().catch((err: unknown) =>
+        logger.error({ err }, "booking-sync: scheduled run failed"),
+      );
+    }, 3 * 60 * 1000);
 
     // v4: disabled — calendar 24h/1h reminder check (services kept dormant).
     // setInterval(() => {

@@ -1,7 +1,7 @@
 /**
- * Integration test: intake.orchestrator — v4 9-button menu flow.
+ * Integration test: intake.orchestrator — v4.1 9-button menu flow + email slot.
  *
- * Slot machine: welcome → menu → meeting_type → consent → id_photo → done.
+ * Slot machine: welcome → menu → meeting_type → email → consent → id_photo → done.
  *
  * Runs against a real throwaway Postgres DB (insurance_test). All external I/O is mocked:
  *   - ai.service              (validateIdPhoto)
@@ -225,7 +225,7 @@ describe("intake v4 — meeting → new client → consent → ID", () => {
     expect(rows[0]?.inquiry_type).toBe("meeting");
   });
 
-  it("meeting_type 'new_client' → consent + consent_prompted_at set", async () => {
+  it("meeting_type 'new_client' → email slot, client_type stored, consent NOT yet stamped", async () => {
     await handleIntake(seeds.conversationId, seeds.clientId, "97250b@c.us", buttonPayload("new_client"));
     const { rows } = await pool.query<{
       intake_current_slot: string;
@@ -235,8 +235,38 @@ describe("intake v4 — meeting → new client → consent → ID", () => {
       `SELECT intake_current_slot, client_type, consent_prompted_at FROM clients WHERE id = $1`,
       [seeds.clientId],
     );
-    expect(rows[0]?.intake_current_slot).toBe("consent");
+    expect(rows[0]?.intake_current_slot).toBe("email");
     expect(rows[0]?.client_type).toBe("new");
+    expect(rows[0]?.consent_prompted_at).toBeNull();
+  });
+
+  it("junk text at email → re-prompt, slot unchanged, no email stored", async () => {
+    await handleIntake(seeds.conversationId, seeds.clientId, "97250b@c.us", textPayload("אין לי כרגע"));
+    const { rows } = await pool.query<{ intake_current_slot: string; email: string | null }>(
+      `SELECT intake_current_slot, email FROM clients WHERE id = $1`,
+      [seeds.clientId],
+    );
+    expect(rows[0]?.intake_current_slot).toBe("email");
+    expect(rows[0]?.email).toBeNull();
+  });
+
+  it("valid email → stored lowercased, advances to consent + consent_prompted_at set", async () => {
+    await handleIntake(
+      seeds.conversationId,
+      seeds.clientId,
+      "97250b@c.us",
+      textPayload("המייל שלי: Test.Lead@Example.CO.IL"),
+    );
+    const { rows } = await pool.query<{
+      intake_current_slot: string;
+      email: string | null;
+      consent_prompted_at: string | null;
+    }>(
+      `SELECT intake_current_slot, email, consent_prompted_at FROM clients WHERE id = $1`,
+      [seeds.clientId],
+    );
+    expect(rows[0]?.intake_current_slot).toBe("consent");
+    expect(rows[0]?.email).toBe("test.lead@example.co.il");
     expect(rows[0]?.consent_prompted_at).not.toBeNull();
   });
 

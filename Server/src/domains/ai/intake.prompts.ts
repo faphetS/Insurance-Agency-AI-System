@@ -49,6 +49,13 @@ export const INTAKE_PROMPTS = {
       { buttonId: "new_client", buttonText: "לקוח חדש" },
     ],
   },
+  // Email step — both existing and new clients pass through it before their branch (v4.1).
+  email: {
+    text: "מה כתובת המייל שלך?",
+  },
+  email_reprompt: {
+    text: "לא זיהינו כתובת מייל תקינה. נא לשלוח כתובת מייל, לדוגמה: name@example.com",
+  },
   // Consent step (new client) — single מאשר button; only the TAP advances.
   consent: {
     text:
@@ -85,6 +92,7 @@ export const SLOT_ORDER = [
   "welcome",
   "menu",
   "meeting_type",
+  "email",
   "consent",
   "id_photo",
   "done",

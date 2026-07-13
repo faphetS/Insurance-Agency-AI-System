@@ -22,6 +22,9 @@ import { displayName } from "../whatsapp/whatsapp.util.js";
 
 const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
+/** Lenient: first email-looking token anywhere in the message text. */
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
 // ---------------------------------------------------------------------------
 // Type helpers — the DB types file predates the migration; cast as needed
 // ---------------------------------------------------------------------------
@@ -38,6 +41,7 @@ interface ClientIntakeUpdate {
   intake_completed_at?: string | null;
   pipeline_stage?: string | null;
   client_type?: string | null;
+  email?: string;
   consent_prompted_at?: string | null;
   stall_notified_at?: string | null;
 }
@@ -314,8 +318,46 @@ async function handleMeetingType(
     return;
   }
 
-  if (matched.buttonId === "existing_client") {
-    await updateClient(clientId, { client_type: "old" });
+  // Both branches: record the choice, then collect the email.
+  // The branch continuation (booking link vs consent) lives in handleEmail.
+  await updateClient(clientId, {
+    client_type: matched.buttonId === "existing_client" ? "old" : "new",
+  });
+  await advanceTo(conversationId, chatId, clientId, "email");
+}
+
+async function handleEmail(
+  conversationId: string,
+  chatId: string,
+  clientId: string,
+  payload: MessagePayload,
+): Promise<void> {
+  // Free text only: images/documents and (stale) button taps re-prompt.
+  const match =
+    payload.kind === "text" && !payload.isButtonReply
+      ? payload.text.match(EMAIL_RE)
+      : null;
+
+  if (!match) {
+    await sendTextPrompt(conversationId, chatId, "email_reprompt");
+    return;
+  }
+
+  // Lowercase is load-bearing: booking-sync lowercases calendar attendee
+  // emails and compares with a case-sensitive SQL IN().
+  const email = match[0].toLowerCase();
+  await updateClient(clientId, { email });
+
+  const { data } = await supabaseAdmin
+    .from("clients")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select("client_type" as any)
+    .eq("id", clientId)
+    .maybeSingle();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const clientType = (data as any as { client_type?: string | null } | null)?.client_type;
+
+  if (clientType === "old") {
     await sendText(
       conversationId,
       chatId,
@@ -325,8 +367,8 @@ async function handleMeetingType(
     return;
   }
 
-  // new_client
-  await updateClient(clientId, { client_type: "new" });
+  // 'new' (and defensively: null) → consent. Advance first, then stamp —
+  // same ordering as before so the stall window opens at prompt time.
   await advanceTo(conversationId, chatId, clientId, "consent");
   await updateClient(clientId, {
     consent_prompted_at: new Date().toISOString(),
@@ -533,6 +575,9 @@ export async function handleIntake(
       break;
     case "meeting_type":
       await handleMeetingType(conversationId, chatId, clientId, payload);
+      break;
+    case "email":
+      await handleEmail(conversationId, chatId, clientId, payload);
       break;
     case "consent":
       await handleConsent(conversationId, chatId, clientId, payload);

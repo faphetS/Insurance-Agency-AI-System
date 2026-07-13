@@ -1,9 +1,11 @@
 /**
- * Unit tests for the v4 intake flow (9-button menu):
+ * Unit tests for the v4.1 intake flow (9-button menu + email slot):
  *  - welcome → menu buttons + scheduled brand image
  *  - menu: free text / image → re-prompt #12; buttons 1-7 → staff email + thanks + endFlow;
  *    callback_didi → notifyOwner + thanks; meeting_didi → meeting_type sub-choice
- *  - meeting_type: existing → booking link + 24h pause; new → consent buttons + consent_prompted_at
+ *  - meeting_type: either tap saves client_type ('old'/'new') and advances to the email ask
+ *  - email: first email-looking token stored lowercased; old → booking link + 24h pause;
+ *    new → consent buttons + consent_prompted_at; junk/image/button-tap → re-prompt
  *  - consent: tap-only advance; typed מאשר re-prompts
  *  - id_photo: valid → Drive name from OCR name (phone fallback), full_name upgraded, terminal + pause
  *  - completed + unpaused → fresh menu restart
@@ -310,35 +312,35 @@ describe("menu slot — meeting_didi (button 9)", () => {
 // ---------------------------------------------------------------------------
 
 describe("meeting_type slot", () => {
-  it("existing → booking link + 24h pause, no notification", async () => {
+  it("existing → client_type 'old', advances to email prompt", async () => {
     const updateType = makeBuilder({ data: null, error: null });
-    const convPause = makeBuilder({ data: null, error: null });
+    const updateSlot = makeBuilder({ data: null, error: null });
+    const persist = makeBuilder({ data: null, error: null });
     setupFrom([
       makeBuilder(BOT_ENABLED),
       makeBuilder(CONV_ACTIVE),
       makeBuilder(clientState("meeting_type")),
-      updateType,
-      makeBuilder({ data: null, error: null }), // persist done_existing
-      makeBuilder({ data: null, error: null }), // endFlow client update
-      convPause,
+      updateType, // update client_type
+      updateSlot, // advanceTo email
+      persist,    // persist email prompt
     ]);
 
     const result = await handleIntake("conv", "client", "chat@c.us", buttonPayload("existing_client"));
 
     expect(result.consumed).toBe(true);
     expect((updateType["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ client_type: "old" });
+    expect((updateSlot["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ intake_current_slot: "email" });
     const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
-    expect(sent).toContain("https://example.com/book");
+    expect(sent).toBe("מה כתובת המייל שלך?");
+    expect(sent).not.toContain("https://example.com/book");
     expect(mockNotifyOwner).not.toHaveBeenCalled();
     expect(mockSendStaffLeadEmail).not.toHaveBeenCalled();
-    expect((convPause["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ bot_paused: true });
   });
 
-  it("new → consent buttons + consent_prompted_at set", async () => {
+  it("new → client_type 'new', advances to email prompt — NO consent stamp yet", async () => {
     const updateType = makeBuilder({ data: null, error: null });
     const updateSlot = makeBuilder({ data: null, error: null });
     const persist = makeBuilder({ data: null, error: null });
-    const updateConsent = makeBuilder({ data: null, error: null });
     setupFrom([
       makeBuilder(BOT_ENABLED),
       makeBuilder(CONV_ACTIVE),
@@ -346,24 +348,17 @@ describe("meeting_type slot", () => {
       updateType,
       updateSlot,
       persist,
-      updateConsent,
     ]);
 
     const result = await handleIntake("conv", "client", "chat@c.us", buttonPayload("new_client"));
 
     expect(result.consumed).toBe(true);
     expect((updateType["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ client_type: "new" });
-    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
-    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string; buttonText: string }[]];
-    expect(buttons[0]?.buttonId).toBe("consent_approve");
-    expect(buttons[0]?.buttonText).toBe("מאשר");
-
-    const consentArg = (updateConsent["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      consent_prompted_at: string;
-      stall_notified_at: null;
-    };
-    expect(typeof consentArg.consent_prompted_at).toBe("string");
-    expect(consentArg.stall_notified_at).toBeNull();
+    expect((updateSlot["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ intake_current_slot: "email" });
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("מה כתובת המייל שלך?");
+    // consent_prompted_at moved to handleEmail — the trailing builder (also the
+    // fallback for any extra .from() call) must never see an update here.
+    expect(persist["update"]).not.toHaveBeenCalled();
   });
 
   it("unmatched free text → menu re-prompt, no advance", async () => {
@@ -373,6 +368,126 @@ describe("meeting_type slot", () => {
     await handleIntake("conv", "client", "chat@c.us", textPayload("שלום"));
 
     expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
+    expect(client["update"]).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// email — free-text collection between meeting_type and the branch terminals
+// ---------------------------------------------------------------------------
+
+describe("email slot", () => {
+  it("valid email + old client → lowercased email stored, booking link + endFlow", async () => {
+    const updateEmail = makeBuilder({ data: null, error: null });
+    const typeSelect = makeBuilder({ data: { client_type: "old" }, error: null });
+    const persist = makeBuilder({ data: null, error: null });
+    const endUpdate = makeBuilder({ data: null, error: null });
+    const convPause = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("email")),
+      updateEmail, // update clients.email
+      typeSelect,  // select client_type
+      persist,     // persist done_existing
+      endUpdate,   // endFlow client update
+      convPause,   // endFlow conversation pause
+    ]);
+
+    const result = await handleIntake(
+      "conv",
+      "client",
+      "chat@c.us",
+      textPayload("המייל שלי: John.Doe@Example.COM "),
+    );
+
+    expect(result.consumed).toBe(true);
+    expect((updateEmail["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toEqual({
+      email: "john.doe@example.com",
+    });
+    const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+    expect(sent).toContain("לקביעת פגישה");
+    expect(sent).toContain("https://example.com/book");
+    expect((endUpdate["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      intake_state: "completed",
+      intake_current_slot: "done",
+      pipeline_stage: "meeting_scheduling",
+    });
+    expect((convPause["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ bot_paused: true });
+  });
+
+  it("valid email + new client → consent buttons + consent_prompted_at stamped", async () => {
+    const updateEmail = makeBuilder({ data: null, error: null });
+    const typeSelect = makeBuilder({ data: { client_type: "new" }, error: null });
+    const updateSlot = makeBuilder({ data: null, error: null });
+    const persist = makeBuilder({ data: null, error: null });
+    const updateConsent = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("email")),
+      updateEmail,
+      typeSelect,
+      updateSlot,    // advanceTo consent
+      persist,       // persist consent buttons
+      updateConsent, // consent_prompted_at stamp
+    ]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("name@example.co.il"));
+
+    expect(result.consumed).toBe(true);
+    expect((updateEmail["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toEqual({
+      email: "name@example.co.il",
+    });
+    expect((updateSlot["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      intake_current_slot: "consent",
+    });
+    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
+    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
+    expect(buttons[0]?.buttonId).toBe("consent_approve");
+
+    const consentArg = (updateConsent["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      consent_prompted_at: string;
+      stall_notified_at: null;
+    };
+    expect(typeof consentArg.consent_prompted_at).toBe("string");
+    expect(consentArg.stall_notified_at).toBeNull();
+  });
+
+  it("junk text with no email → email re-prompt, no client update", async () => {
+    const client = makeBuilder(clientState("email"));
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), client, makeBuilder({ data: null, error: null })]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", textPayload("אין לי כרגע"));
+
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe(
+      "לא זיהינו כתובת מייל תקינה. נא לשלוח כתובת מייל, לדוגמה: name@example.com",
+    );
+    expect(client["update"]).not.toHaveBeenCalled();
+  });
+
+  it("image at email → re-prompt", async () => {
+    const client = makeBuilder(clientState("email"));
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), client, makeBuilder({ data: null, error: null })]);
+
+    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe(
+      "לא זיהינו כתובת מייל תקינה. נא לשלוח כתובת מייל, לדוגמה: name@example.com",
+    );
+    expect(client["update"]).not.toHaveBeenCalled();
+  });
+
+  it("stale button tap (isButtonReply) → re-prompt", async () => {
+    const client = makeBuilder(clientState("email"));
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), client, makeBuilder({ data: null, error: null })]);
+
+    await handleIntake("conv", "client", "chat@c.us", buttonPayload("existing_client"));
+
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe(
+      "לא זיהינו כתובת מייל תקינה. נא לשלוח כתובת מייל, לדוגמה: name@example.com",
+    );
     expect(client["update"]).not.toHaveBeenCalled();
   });
 });

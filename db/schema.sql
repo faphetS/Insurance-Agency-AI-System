@@ -85,10 +85,11 @@ CREATE TABLE public.clients (
   -- Default amended to 'welcome' by 20260429120000_intake_welcome_slot
   intake_state         text        NOT NULL DEFAULT 'collecting'
                        CHECK (intake_state IN ('collecting', 'completed', 'skipped')),
-  -- Slot list replaced by 20260709120000_intake_v4 (v4 9-button menu flow)
+  -- Slot list replaced by 20260709120000_intake_v4 (v4 9-button menu flow);
+  -- 'email' slot added by 20260714120000_intake_email_slot (v4.1)
   intake_current_slot  text        DEFAULT 'welcome'
                        CHECK (intake_current_slot IN (
-                         'welcome', 'menu', 'meeting_type', 'consent', 'id_photo', 'done'
+                         'welcome', 'menu', 'meeting_type', 'email', 'consent', 'id_photo', 'done'
                        )),
   intake_completed_at  timestamptz,
   mirrored_to_sheet_at timestamptz,                                    -- set once when the lead has been appended to the Google leads sheet (idempotency)
@@ -483,6 +484,12 @@ CREATE UNIQUE INDEX idx_messages_whatsapp_message_id_unique
 -- From 20260429140000_meetings_conversation_id
 CREATE INDEX idx_meetings_conversation_id
   ON public.meetings (conversation_id);
+
+-- From 20260714120000_intake_email_slot — booking-sync thank-you dedupe:
+-- at most one meetings row per Google Calendar event.
+CREATE UNIQUE INDEX meetings_calendar_event_id_uidx
+  ON public.meetings (calendar_event_id)
+  WHERE calendar_event_id IS NOT NULL;
 
 -- From 20260519100000_bafi_extend_clients — only the handler index is kept
 -- (bafi_file_number column is excluded, so its index is omitted)

@@ -32,12 +32,13 @@ describe("INQUIRY_TYPE_HE", () => {
   });
 });
 
-describe("SLOT_ORDER — v4 slot machine", () => {
-  it("is exactly the six v4 slots in order", () => {
+describe("SLOT_ORDER — v4.1 slot machine", () => {
+  it("is exactly the seven v4.1 slots in order (email between meeting_type and consent)", () => {
     expect([...SLOT_ORDER]).toEqual([
       "welcome",
       "menu",
       "meeting_type",
+      "email",
       "consent",
       "id_photo",
       "done",
@@ -122,6 +123,10 @@ describe("INTAKE_PROMPTS — terminal + re-prompt copy", () => {
     );
     expect(INTAKE_PROMPTS.menu_reprompt.text).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
     expect(INTAKE_PROMPTS.consent_reprompt.text).toBe('כדי להמשיך, יש ללחוץ על כפתור "מאשר"');
+    expect(INTAKE_PROMPTS.email.text).toBe("מה כתובת המייל שלך?");
+    expect(INTAKE_PROMPTS.email_reprompt.text).toBe(
+      "לא זיהינו כתובת מייל תקינה. נא לשלוח כתובת מייל, לדוגמה: name@example.com",
+    );
     expect(INTAKE_PROMPTS.id_photo.text).toBe(
       "תודה, לצורך הזמנת הנתונים נשמח לקבל צילום תעודת הזהות שלך (כולל ספח)",
     );

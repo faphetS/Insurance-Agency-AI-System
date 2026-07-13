@@ -1,5 +1,4 @@
 import { supabaseAdmin } from "../../config/supabase.js";
-import { pool } from "../../lib/db.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { getAuthenticatedClient } from "./calendar.auth.js";
@@ -9,83 +8,40 @@ import type { calendar_v3 } from "googleapis";
 
 const TZ = "Asia/Jerusalem";
 
-interface MatchResult {
-  client: { id: string; full_name: string; email: string | null; pipeline_stage: string | null };
-  tier: 1 | 2 | 3;
-  pendingMeeting?: { id: string; conversation_id: string | null };
+// Booking thank-you (v4.1). The old text promised a reminder — the 24h/1h
+// reminder loops stay OFF, so the promise is gone with them.
+const buildThankYou = (formattedDate: string): string =>
+  `תודה! הפגישה נקבעה בהצלחה לתאריך ${formattedDate}. נתראה בפגישה.`;
+
+interface MatchedClient {
+  id: string;
+  full_name: string;
+  email: string | null;
+  pipeline_stage: string | null;
 }
 
-async function matchEventToClient(event: calendar_v3.Schema$Event): Promise<MatchResult | null> {
-  const attendees = (event.attendees ?? []).filter((a) => !a.self);
+/**
+ * Email-only matching (v4.1): the intake bot stores clients.email lowercased
+ * before handing out the booking link, so attendee-email equality is the
+ * single matching signal. The old name / pending-booking fallbacks were
+ * removed — nothing has created pending_booking rows since intake v4.
+ */
+async function matchEventToClient(
+  event: calendar_v3.Schema$Event,
+): Promise<MatchedClient | null> {
+  const attendeeEmails = (event.attendees ?? [])
+    .filter((a) => !a.self && a.email)
+    .map((a) => a.email!.toLowerCase());
+  if (attendeeEmails.length === 0) return null;
 
-  // Tier 1: email match
-  const attendeeEmails = attendees.filter((a) => a.email).map((a) => a.email!.toLowerCase());
-  if (attendeeEmails.length > 0) {
-    const { data: client } = await supabaseAdmin
-      .from("clients")
-      .select("id, full_name, email, pipeline_stage")
-      .in("email", attendeeEmails)
-      .in("status", ["new", "active"])
-      .limit(1)
-      .maybeSingle();
-    if (client) return { client, tier: 1 };
-  }
-
-  // Tier 2: name match (only for clients in meeting_scheduling stage)
-  const attendeeNames = attendees.filter((a) => a.displayName).map((a) => a.displayName!);
-  for (const name of attendeeNames) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: nameMatches } = await (supabaseAdmin as any)
-      .from("clients")
-      .select("id, full_name, email, pipeline_stage")
-      .ilike("full_name", name)
-      .eq("pipeline_stage", "meeting_scheduling");
-    if (nameMatches && nameMatches.length === 1) {
-      return { client: nameMatches[0], tier: 2 };
-    }
-  }
-
-  // Tier 3: pending booking time-proximity
-  const { rows: pendingMeetings } = await pool.query<{
-    id: string;
-    conversation_id: string | null;
-    created_at: string;
-    client_id: string;
-    c_id: string;
-    c_full_name: string;
-    c_email: string | null;
-    c_pipeline_stage: string | null;
-  }>(
-    `SELECT m.id, m.conversation_id, m.created_at, m.client_id,
-            c.id AS c_id, c.full_name AS c_full_name,
-            c.email AS c_email, c.pipeline_stage AS c_pipeline_stage
-     FROM meetings m
-     LEFT JOIN clients c ON c.id = m.client_id
-     WHERE m.status = $1
-       AND m.calendar_event_id IS NULL`,
-    ["pending_booking"],
-  );
-
-  if (pendingMeetings.length === 0) return null;
-
-  const toResult = (m: (typeof pendingMeetings)[0]): MatchResult => ({
-    client: { id: m.c_id, full_name: m.c_full_name, email: m.c_email, pipeline_stage: m.c_pipeline_stage },
-    tier: 3,
-    pendingMeeting: { id: m.id, conversation_id: m.conversation_id },
-  });
-
-  if (pendingMeetings.length === 1) {
-    return toResult(pendingMeetings[0]!);
-  }
-
-  const eventCreated = event.created ? new Date(event.created).getTime() : Date.now();
-  const closest = pendingMeetings.reduce((best, m) => {
-    const bestDiff = Math.abs(new Date(best.created_at).getTime() - eventCreated);
-    const mDiff = Math.abs(new Date(m.created_at).getTime() - eventCreated);
-    return mDiff < bestDiff ? m : best;
-  });
-
-  return toResult(closest);
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("id, full_name, email, pipeline_stage")
+    .in("email", attendeeEmails)
+    .in("status", ["new", "active"])
+    .limit(1)
+    .maybeSingle();
+  return (client as MatchedClient | null) ?? null;
 }
 
 function extractZoomLink(event: calendar_v3.Schema$Event): string | null {
@@ -124,7 +80,7 @@ export async function syncNewBookings(): Promise<void> {
   try {
     authClient = await getAuthenticatedClient();
   } catch {
-    logger.debug("booking-sync: Google Calendar not authorized yet — skipping");
+    logger.info("booking-sync: Google Calendar not authorized yet — skipping");
     return;
   }
 
@@ -156,86 +112,42 @@ export async function syncNewBookings(): Promise<void> {
 
     if (existing) continue;
 
-    const match = await matchEventToClient(event);
-    if (!match) {
-      logger.info({ eventId: event.id, summary: event.summary }, "booking-sync: no match found across all tiers");
+    const client = await matchEventToClient(event);
+    if (!client) {
+      logger.info({ eventId: event.id, summary: event.summary }, "booking-sync: no client with matching attendee email");
       continue;
     }
-    const client = match.client;
-    logger.info({ clientId: client.id, tier: match.tier }, "booking-sync: matched client");
-
-    // Backfill email when matched via Tier 2 or 3
-    if (match.tier > 1 && !client.email) {
-      const firstAttendeeEmail = (event.attendees ?? [])
-        .filter((a) => !a.self && a.email)
-        .map((a) => a.email!.toLowerCase())[0];
-      if (firstAttendeeEmail) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (supabaseAdmin as any)
-          .from("clients")
-          .update({ email: firstAttendeeEmail })
-          .eq("id", client.id);
-        client.email = firstAttendeeEmail;
-      }
-    }
-
-    // Use pending meeting from Tier 3 directly, or query for this client
-    let pendingMeeting = match.pendingMeeting ?? null;
-    if (!pendingMeeting) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data } = await (supabaseAdmin as any)
-        .from("meetings")
-        .select("id, conversation_id")
-        .eq("client_id", client.id)
-        .eq("status", "pending_booking")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      pendingMeeting = data;
-    }
+    logger.info({ clientId: client.id }, "booking-sync: matched client by email");
 
     const zoomLink = extractZoomLink(event);
 
-    const meetingUpdate = {
-      scheduled_at: event.start.dateTime,
-      calendar_event_id: event.id,
-      status: "scheduled",
-      type: zoomLink ? "zoom" : "google_meet",
-      updated_at: new Date().toISOString(),
-    };
+    const { data: conv } = await supabaseAdmin
+      .from("conversations")
+      .select("id, whatsapp_chat_id")
+      .eq("client_id", client.id)
+      .order("last_message_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (pendingMeeting) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: updateErr } = await (supabaseAdmin as any)
-        .from("meetings")
-        .update(meetingUpdate)
-        .eq("id", pendingMeeting.id);
-      if (updateErr) {
-        logger.error({ err: updateErr, meetingId: pendingMeeting.id }, "booking-sync: failed to update meeting");
-        continue;
-      }
-    } else {
-      const now = new Date().toISOString();
-      const { data: convRow } = await supabaseAdmin
-        .from("conversations")
-        .select("id")
-        .eq("client_id", client.id)
-        .order("last_message_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: insertErr } = await (supabaseAdmin as any)
-        .from("meetings")
-        .insert({
-          ...meetingUpdate,
-          client_id: client.id,
-          conversation_id: convRow?.id ?? null,
-          created_at: now,
-        });
-      if (insertErr) {
-        logger.error({ err: insertErr, clientId: client.id }, "booking-sync: failed to insert meeting");
-        continue;
-      }
+    const now = new Date().toISOString();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: insertErr } = await (supabaseAdmin as any)
+      .from("meetings")
+      .insert({
+        client_id: client.id,
+        conversation_id: conv?.id ?? null,
+        scheduled_at: event.start.dateTime,
+        calendar_event_id: event.id,
+        status: "scheduled",
+        type: zoomLink ? "zoom" : "google_meet",
+        created_at: now,
+        updated_at: now,
+      });
+    if (insertErr) {
+      // Also swallows the meetings_calendar_event_id_uidx race — the losing
+      // run skips the event entirely, so the thank-you can't double-send.
+      logger.error({ err: insertErr, clientId: client.id, eventId: event.id }, "booking-sync: failed to insert meeting");
+      continue;
     }
 
     // Update client pipeline
@@ -245,43 +157,23 @@ export async function syncNewBookings(): Promise<void> {
       .update({ pipeline_stage: "meeting_scheduled" })
       .eq("id", client.id);
 
-    // Send WhatsApp confirmation
-    let conversationId = pendingMeeting?.conversation_id ?? null;
-    if (!conversationId) {
-      const { data: convLookup } = await supabaseAdmin
-        .from("conversations")
-        .select("id")
-        .eq("client_id", client.id)
-        .order("last_message_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      conversationId = convLookup?.id ?? null;
-    }
-    if (conversationId) {
-      const { data: conv } = await supabaseAdmin
-        .from("conversations")
-        .select("whatsapp_chat_id")
-        .eq("id", conversationId)
-        .single();
+    // Send the WhatsApp thank-you (best-effort — the meeting row is already in)
+    if (conv?.whatsapp_chat_id) {
+      let confirmMsg = buildThankYou(formatDateTime(event.start.dateTime));
+      if (zoomLink) confirmMsg += `\n\nקישור לפגישת זום: ${zoomLink}`;
 
-      if (conv?.whatsapp_chat_id) {
-        const formattedDate = formatDateTime(event.start.dateTime);
-        let confirmMsg = `הפגישה אושרה לתאריך ${formattedDate}. תישלח תזכורת לפני המועד.`;
-        if (zoomLink) confirmMsg += `\n\nקישור לפגישת זום: ${zoomLink}`;
-
-        try {
-          const { idMessage } = await sendMessageWithTyping(conv.whatsapp_chat_id, confirmMsg);
-          await supabaseAdmin.from("messages").insert({
-            conversation_id: conversationId,
-            direction: "outbound",
-            sent_by: "bot",
-            body: confirmMsg,
-            status: "sent",
-            whatsapp_message_id: idMessage,
-          });
-        } catch (err) {
-          logger.error({ err, clientId: client.id }, "booking-sync: failed to send confirmation");
-        }
+      try {
+        const { idMessage } = await sendMessageWithTyping(conv.whatsapp_chat_id, confirmMsg);
+        await supabaseAdmin.from("messages").insert({
+          conversation_id: conv.id,
+          direction: "outbound",
+          sent_by: "bot",
+          body: confirmMsg,
+          status: "sent",
+          whatsapp_message_id: idMessage,
+        });
+      } catch (err) {
+        logger.error({ err, clientId: client.id }, "booking-sync: failed to send confirmation");
       }
     }
 
