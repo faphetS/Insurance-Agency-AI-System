@@ -4,19 +4,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vi.hoisted shared mock functions
 // ---------------------------------------------------------------------------
 const {
-  mockSendInteractiveButtons,
-  mockSendMessage,
+  mockSendInteractiveButtonsWith,
+  mockSendMessageWith,
+  mockNotifyCreds,
   mockSendOwnerEmail,
   mockFromImpl,
 } = vi.hoisted(() => {
-  const mockSendInteractiveButtons = vi.fn();
-  const mockSendMessage = vi.fn();
+  const mockSendInteractiveButtonsWith = vi.fn();
+  const mockSendMessageWith = vi.fn();
+  const mockNotifyCreds = vi.fn();
   const mockSendOwnerEmail = vi.fn();
   const mockFromImpl = vi.fn();
 
   return {
-    mockSendInteractiveButtons,
-    mockSendMessage,
+    mockSendInteractiveButtonsWith,
+    mockSendMessageWith,
+    mockNotifyCreds,
     mockSendOwnerEmail,
     mockFromImpl,
   };
@@ -58,8 +61,9 @@ vi.mock("../../ai/ai.service.js", () => ({
 }));
 
 vi.mock("../../whatsapp/whatsapp.service.js", () => ({
-  sendMessage: mockSendMessage,
-  sendInteractiveButtons: mockSendInteractiveButtons,
+  notifyCreds: mockNotifyCreds,
+  sendMessageWith: mockSendMessageWith,
+  sendInteractiveButtonsWith: mockSendInteractiveButtonsWith,
 }));
 
 // Use the REAL toChatId implementation so 639219909210 → 639219909210@c.us is genuinely exercised.
@@ -109,6 +113,8 @@ function setupFromSequence(builders: Builder[]): void {
 // ---------------------------------------------------------------------------
 import { sendStaffPickerToOwner, sendClientSummaryEmail } from "./timeless.service.js";
 
+const NOTIFY_CREDS = { idInstance: "notify-id", token: "notify-token", baseUrl: "https://notify.api.greenapi.com" };
+
 // ---------------------------------------------------------------------------
 // sendStaffPickerToOwner
 // ---------------------------------------------------------------------------
@@ -117,7 +123,8 @@ describe("sendStaffPickerToOwner", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSendInteractiveButtons.mockResolvedValue({ idMessage: "btn-msg" });
+    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
+    mockSendInteractiveButtonsWith.mockResolvedValue({ idMessage: "btn-msg" });
   });
 
   it("calls sendInteractiveButtons with chatId 639219909210@c.us and 5-button array when 5 active staff", async () => {
@@ -135,12 +142,14 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
-    const [chatId, body, buttons] = mockSendInteractiveButtons.mock.calls[0] as [
+    expect(mockSendInteractiveButtonsWith).toHaveBeenCalledOnce();
+    const [creds, chatId, body, buttons] = mockSendInteractiveButtonsWith.mock.calls[0] as [
+      unknown,
       string,
       string,
       { buttonId: string; buttonText: string }[],
     ];
+    expect(creds).toEqual(NOTIFY_CREDS);
     expect(chatId).toBe("639219909210@c.us");
     expect(body).toBe("👤 בחר/י את הגורם המטפל בלקוח:");
     expect(buttons).toHaveLength(5);
@@ -158,7 +167,8 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [
+    const [, , , buttons] = mockSendInteractiveButtonsWith.mock.calls[0] as [
+      unknown,
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -175,7 +185,8 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [
+    const [, , , buttons] = mockSendInteractiveButtonsWith.mock.calls[0] as [
+      unknown,
       string,
       string,
       { buttonId: string; buttonText: string }[],
@@ -190,7 +201,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
   });
 
   it("does NOT call sendInteractiveButtons when staff select returns null", async () => {
@@ -199,7 +210,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
   });
 
   it("does NOT call sendInteractiveButtons when idempotency claim returns null (already sent)", async () => {
@@ -210,7 +221,7 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
   });
 
   it("allows >3 buttons (7 staff members — no cap)", async () => {
@@ -224,7 +235,8 @@ describe("sendStaffPickerToOwner", () => {
 
     await sendStaffPickerToOwner(MEETING_ID);
 
-    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [
+    const [, , , buttons] = mockSendInteractiveButtonsWith.mock.calls[0] as [
+      unknown,
       string,
       string,
       { buttonId: string; buttonText: string }[],

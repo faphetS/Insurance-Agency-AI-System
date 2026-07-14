@@ -28,6 +28,7 @@ const {
 const envMock = {
   GREENAPI_WEBHOOK_TOKEN: "tok",
   GREENAPI_OP_ID_INSTANCE: undefined as string | undefined,
+  GREENAPI_NOTIFY_ID_INSTANCE: undefined as string | undefined,
   SUMMARY_RECIPIENT_PHONE: "639219909210",
   NODE_ENV: "test",
   FRONTEND_URL: "http://localhost:5173",
@@ -457,96 +458,76 @@ describe("whatsappController.handleWebhook — templateButtonsReplyMessage norma
 });
 
 // ---------------------------------------------------------------------------
-// Reply allowlist gate
+// NOTIFY-instance short-circuit — only incoming assign_staff taps are handled;
+// everything else on that instance is 200-acked and ignored.
+// (The allowlist / dedup / channel-stamp gate-chain cases live in
+// inbound.pipeline.test.ts.)
 // ---------------------------------------------------------------------------
 
-describe("whatsappController.handleWebhook — reply allowlist", () => {
-  const ALLOWED_PHONE = "972501111111";
-  const BLOCKED_PHONE = "972502222222";
-  const ALLOWED_CHAT_ID = `${ALLOWED_PHONE}@c.us`;
-  const BLOCKED_CHAT_ID = `${BLOCKED_PHONE}@c.us`;
+describe("whatsappController.handleWebhook — NOTIFY-instance short-circuit", () => {
+  const NOTIFY_ID_INSTANCE = "7107677591";
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsStaffChat.mockResolvedValue(null);
-    mockHandleIntake.mockResolvedValue({ consumed: true });
-    envMock.REPLY_ALLOWLIST = [ALLOWED_PHONE];
+    mockHandleIntake.mockResolvedValue({ consumed: false });
+    envMock.GREENAPI_NOTIFY_ID_INSTANCE = NOTIFY_ID_INSTANCE;
   });
 
   afterEach(() => {
-    envMock.REPLY_ALLOWLIST = [];
+    envMock.GREENAPI_NOTIFY_ID_INSTANCE = undefined;
   });
 
-  it("allowlisted sender dispatches intake", async () => {
-    const convUpsertBuilder = makeBuilder({ data: { id: "conv-allow" }, error: null });
-    const msgInsertBuilder = makeBuilder({ data: { id: "msg-allow" }, error: null });
-    const convSelectBuilder = makeBuilder({ data: { id: "conv-allow", client_id: "client-allow" }, error: null });
-
-    setupFrom([convUpsertBuilder, msgInsertBuilder, convSelectBuilder]);
-
-    const body = makeTextBody(ALLOWED_CHAT_ID, "hello");
+  it("incoming assign_staff tap on the notify line → assignStaffToMeeting, never handleIntake", async () => {
+    const body = {
+      ...makeButtonBody("972547725826@c.us", "assign_staff:meet-n:staff-n"),
+      instanceData: { idInstance: NOTIFY_ID_INSTANCE },
+    };
     const req = makeReq(body);
     const res = makeRes();
 
     await whatsappController.handleWebhook(req, res);
-    await new Promise<void>((r) => setImmediate(r));
 
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
-    expect(mockHandleIntake).toHaveBeenCalled();
-  });
 
-  it("non-allowlisted sender returns 200 but does NOT dispatch intake", async () => {
-    const convUpsertBuilder = makeBuilder({ data: { id: "conv-block" }, error: null });
-    const msgInsertBuilder = makeBuilder({ data: { id: "msg-block" }, error: null });
-
-    setupFrom([convUpsertBuilder, msgInsertBuilder]);
-
-    const body = makeTextBody(BLOCKED_CHAT_ID, "hello");
-    const req = makeReq(body);
-    const res = makeRes();
-
-    await whatsappController.handleWebhook(req, res);
     await new Promise<void>((r) => setImmediate(r));
 
-    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+    expect(mockAssignStaffToMeeting).toHaveBeenCalledOnce();
+    expect(mockAssignStaffToMeeting).toHaveBeenCalledWith("meet-n", "staff-n", "972547725826@c.us");
     expect(mockHandleIntake).not.toHaveBeenCalled();
+    expect(mockHandleOpInstanceEvent).not.toHaveBeenCalled();
   });
 
-  it("empty allowlist (default) does not block any sender", async () => {
-    envMock.REPLY_ALLOWLIST = [];
-
-    const convUpsertBuilder = makeBuilder({ data: { id: "conv-open" }, error: null });
-    const msgInsertBuilder = makeBuilder({ data: { id: "msg-open" }, error: null });
-    const convSelectBuilder = makeBuilder({ data: { id: "conv-open", client_id: "client-open" }, error: null });
-
-    setupFrom([convUpsertBuilder, msgInsertBuilder, convSelectBuilder]);
-
-    const body = makeTextBody(BLOCKED_CHAT_ID, "hello");
+  it("plain text on the notify line → 200 acked, nothing dispatched", async () => {
+    const body = {
+      ...makeTextBody("972500000000@c.us", "שלום"),
+      instanceData: { idInstance: NOTIFY_ID_INSTANCE },
+    };
     const req = makeReq(body);
     const res = makeRes();
 
     await whatsappController.handleWebhook(req, res);
     await new Promise<void>((r) => setImmediate(r));
 
-    expect(mockHandleIntake).toHaveBeenCalled();
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+    expect(mockAssignStaffToMeeting).not.toHaveBeenCalled();
+    expect(mockHandleIntake).not.toHaveBeenCalled();
+    expect(mockHandleOpInstanceEvent).not.toHaveBeenCalled();
   });
 
-  it("allowlist matching strips non-digit chars from both sides", async () => {
-    envMock.REPLY_ALLOWLIST = ["+972-50-1111111"];
-
-    const convUpsertBuilder = makeBuilder({ data: { id: "conv-fmt" }, error: null });
-    const msgInsertBuilder = makeBuilder({ data: { id: "msg-fmt" }, error: null });
-    const convSelectBuilder = makeBuilder({ data: { id: "conv-fmt", client_id: "client-fmt" }, error: null });
-
-    setupFrom([convUpsertBuilder, msgInsertBuilder, convSelectBuilder]);
-
-    const body = makeTextBody(ALLOWED_CHAT_ID, "hello");
+  it("non-incoming webhook types on the notify line are ignored", async () => {
+    const body = {
+      typeWebhook: "outgoingMessageReceived",
+      instanceData: { idInstance: NOTIFY_ID_INSTANCE },
+      senderData: { chatId: "972500000000@c.us" },
+      messageData: { typeMessage: "interactiveButtonsResponseMessage", interactiveButtonsResponse: { selectedId: "assign_staff:m:s" } },
+    };
     const req = makeReq(body);
     const res = makeRes();
 
     await whatsappController.handleWebhook(req, res);
     await new Promise<void>((r) => setImmediate(r));
 
-    expect(mockHandleIntake).toHaveBeenCalled();
+    expect(mockAssignStaffToMeeting).not.toHaveBeenCalled();
   });
 });

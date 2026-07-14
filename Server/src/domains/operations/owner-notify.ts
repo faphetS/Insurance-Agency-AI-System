@@ -1,24 +1,14 @@
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
-import { notifyCreds, sendMessage, sendMessageWith } from "../whatsapp/whatsapp.service.js";
+import { notifyCreds, sendMessageWith } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 
-// Send an operational reminder to the owner (Didi) via the conversational GreenAPI instance.
-// Returns false and sends nothing if the owner number is unset or creds are blank (no-op guard
-// is inside sendMessage).
+// Send an operational reminder to the owner (Didi). Delegates to the dedicated
+// NOTIFY line — the owner never messages the conversational bot, so on Meta the
+// conversational line is permanently outside the 24h window. Export kept so
+// existing callers/mocks are untouched.
 export async function notifyOwner(text: string): Promise<boolean> {
-  const chatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
-  if (!chatId) {
-    logger.warn("owner-notify: SUMMARY_RECIPIENT_PHONE not set — skipping");
-    return false;
-  }
-  try {
-    await sendMessage(chatId, text);
-    return true;
-  } catch (err) {
-    logger.warn({ err }, "owner-notify: sendMessage failed");
-    return false;
-  }
+  return notifyOwnerOps(text);
 }
 
 // Send an operational reminder to the owner via the dedicated notify GreenAPI instance

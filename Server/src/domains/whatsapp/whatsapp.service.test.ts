@@ -15,12 +15,31 @@ const envWithCreds = {
   GREENAPI_SCAN_ID_INSTANCE: undefined as string | undefined,
   GREENAPI_SCAN_API_TOKEN: undefined as string | undefined,
   GREENAPI_SCAN_BASE_URL: undefined as string | undefined,
+  META_ACCESS_TOKEN: undefined as string | undefined,
+  META_PHONE_NUMBER_ID: undefined as string | undefined,
+  WHATSAPP_PROVIDER: undefined as string | undefined,
 };
 
 vi.mock("../../config/env.js", () => ({ get env() { return envWithCreds; } }));
 
 vi.mock("../../config/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+const { mockMetaSendText, mockMetaSendInteractive } = vi.hoisted(() => ({
+  mockMetaSendText: vi.fn(),
+  mockMetaSendInteractive: vi.fn(),
+}));
+
+// Intercepts the dispatcher's lazy import — greenapi-path tests must never reach it.
+vi.mock("./meta/meta.transport.js", () => ({
+  sendText: mockMetaSendText,
+  sendInteractive: mockMetaSendInteractive,
+  sendImage: vi.fn(),
+  sendTypingAndRead: vi.fn(),
+  uploadMedia: vi.fn(),
+  metaConfigured: vi.fn(),
+  MetaSendError: class MetaSendError extends Error {},
 }));
 
 // ---------------------------------------------------------------------------
@@ -210,5 +229,65 @@ describe("sendTyping — creds guard", () => {
     expect(mockFetch).toHaveBeenCalledOnce();
     const [url] = mockFetch.mock.calls[0] as [string];
     expect(url).toContain("/sendTyping/test-conv-token");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dispatcher — meta channel routing
+// ---------------------------------------------------------------------------
+
+describe("dispatcher — meta channel routing", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("meta creds set + greenapi creds blank → sendMessage routes to the meta transport (no DB lookup)", async () => {
+    const saved = { ...envWithCreds };
+    envWithCreds.GREENAPI_ID_INSTANCE = undefined as unknown as string;
+    envWithCreds.GREENAPI_API_TOKEN = undefined as unknown as string;
+    envWithCreds.GREENAPI_BASE_URL = undefined as unknown as string;
+    envWithCreds.META_ACCESS_TOKEN = "meta-token";
+    envWithCreds.META_PHONE_NUMBER_ID = "1252996454555154";
+
+    mockMetaSendText.mockResolvedValue({ idMessage: "wamid.TEST" });
+    const mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await sendMessage("972500000000@c.us", "שלום");
+
+    expect(result.idMessage).toBe("wamid.TEST");
+    expect(mockMetaSendText).toHaveBeenCalledOnce();
+    expect(mockMetaSendText).toHaveBeenCalledWith("972500000000", "שלום");
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    Object.assign(envWithCreds, saved);
+  });
+
+  it("meta creds set + greenapi creds blank → buttons route to the meta interactive transport", async () => {
+    const saved = { ...envWithCreds };
+    envWithCreds.GREENAPI_ID_INSTANCE = undefined as unknown as string;
+    envWithCreds.GREENAPI_API_TOKEN = undefined as unknown as string;
+    envWithCreds.GREENAPI_BASE_URL = undefined as unknown as string;
+    envWithCreds.META_ACCESS_TOKEN = "meta-token";
+    envWithCreds.META_PHONE_NUMBER_ID = "1252996454555154";
+
+    mockMetaSendInteractive.mockResolvedValue({ idMessage: "wamid.BTN" });
+
+    const buttons = [{ buttonId: "a", buttonText: "A" }];
+    const result = await sendInteractiveButtons("972500000000@c.us", "pick", buttons, "foot");
+
+    expect(result.idMessage).toBe("wamid.BTN");
+    expect(mockMetaSendInteractive).toHaveBeenCalledWith("972500000000", "pick", buttons, "foot");
+
+    Object.assign(envWithCreds, saved);
+  });
+
+  it("meta creds blank → greenapi fast path never touches the meta transport", async () => {
+    const mockFetch = mockFetchOk({ idMessage: "green-1" });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await sendMessage("972500000000@c.us", "hi");
+
+    expect(result.idMessage).toBe("green-1");
+    expect(mockMetaSendText).not.toHaveBeenCalled();
   });
 });

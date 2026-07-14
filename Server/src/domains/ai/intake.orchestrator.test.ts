@@ -577,6 +577,12 @@ describe("id_photo slot", () => {
     const result = await handleIntake("conv", "client", "chat@c.us", imagePayload());
 
     expect(result.consumed).toBe(true);
+    // Download-first: one fetch feeds both the OCR (as a data URL) and Drive.
+    expect(mockFetchRemoteFile).toHaveBeenCalledOnce();
+    expect(mockFetchRemoteFile).toHaveBeenCalledWith("https://example.com/img.jpg");
+    expect(mockValidateIdPhoto).toHaveBeenCalledWith(
+      `data:image/jpeg;base64,${Buffer.from("bytes").toString("base64")}`,
+    );
     expect(mockUploadLeadDocument.mock.calls[0]?.[0]).toMatchObject({ name: "משה לוי - ID" });
     expect((updatePhoto["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
       id_photo_url: "https://drive/x",
@@ -607,6 +613,7 @@ describe("id_photo slot", () => {
 
   it("invalid ID → generic re-ask, no upload", async () => {
     mockValidateIdPhoto.mockResolvedValue({ valid: false, hasIdCard: true, hasAppendix: false, idNumber: null, fullName: null });
+    mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
     setupFrom([
       makeBuilder(BOT_ENABLED),
       makeBuilder(CONV_ACTIVE),
@@ -619,6 +626,22 @@ describe("id_photo slot", () => {
     const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
     expect(sent).toContain("הספח");
     expect(sent).toContain("תעודת הזהות");
+    expect(mockUploadLeadDocument).not.toHaveBeenCalled();
+  });
+
+  it("media download failure → resend request, OCR never runs", async () => {
+    mockFetchRemoteFile.mockResolvedValue(null);
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("id_photo")),
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toContain("לא הצלחנו לשמור את הקובץ");
+    expect(mockValidateIdPhoto).not.toHaveBeenCalled();
     expect(mockUploadLeadDocument).not.toHaveBeenCalled();
   });
 

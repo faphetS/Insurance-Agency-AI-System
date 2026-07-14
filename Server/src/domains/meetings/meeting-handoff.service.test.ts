@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockSendMessage, mockSendOwnerEmail, mockFromImpl, mockEnv } = vi.hoisted(() => {
-  const mockSendMessage = vi.fn();
+const { mockNotifyOwnerOps, mockSendOwnerEmail, mockFromImpl, mockEnv } = vi.hoisted(() => {
+  const mockNotifyOwnerOps = vi.fn();
   const mockSendOwnerEmail = vi.fn();
   const mockFromImpl = vi.fn();
   const mockEnv = { STAFF_EMAIL_NOTIFY_MODE: "send" as "send" | "log" };
-  return { mockSendMessage, mockSendOwnerEmail, mockFromImpl, mockEnv };
+  return { mockNotifyOwnerOps, mockSendOwnerEmail, mockFromImpl, mockEnv };
 });
 
-vi.mock("../whatsapp/whatsapp.service.js", () => ({
-  sendMessage: mockSendMessage,
+vi.mock("../operations/owner-notify.js", () => ({
+  notifyOwnerOps: mockNotifyOwnerOps,
 }));
 
 vi.mock("../../config/supabase.js", () => ({
@@ -55,7 +55,7 @@ function setupFromSequence(builders: Builder[]): void {
   });
 }
 
-import { notifyStaffHandoff } from "./meeting-handoff.service.js";
+import { notifyStaffHandoff, assignStaffToMeeting } from "./meeting-handoff.service.js";
 
 describe("notifyStaffHandoff — email handoff", () => {
   const MEETING_ID = "meeting-handoff-1";
@@ -65,7 +65,7 @@ describe("notifyStaffHandoff — email handoff", () => {
     vi.clearAllMocks();
     mockEnv.STAFF_EMAIL_NOTIFY_MODE = "send";
     mockSendOwnerEmail.mockResolvedValue({ id: "msg-1" });
-    mockSendMessage.mockResolvedValue({ idMessage: "msg-wa" });
+    mockNotifyOwnerOps.mockResolvedValue(true);
   });
 
   it("sends an email containing the assignment line and the summary", async () => {
@@ -195,5 +195,47 @@ describe("notifyStaffHandoff — email handoff", () => {
     await notifyStaffHandoff(MEETING_ID);
 
     expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe("assignStaffToMeeting — owner acks ride the NOTIFY line", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockNotifyOwnerOps.mockResolvedValue(true);
+  });
+
+  it("meeting not found → acks via notifyOwnerOps", async () => {
+    const meetingBuilder = makeBuilder({ data: null, error: null });
+    setupFromSequence([meetingBuilder]);
+
+    await assignStaffToMeeting("missing-meeting", "staff-1", "972500000000@c.us");
+
+    expect(mockNotifyOwnerOps).toHaveBeenCalledOnce();
+    expect(mockNotifyOwnerOps).toHaveBeenCalledWith("❌ הפגישה לא נמצאה.");
+  });
+
+  it("staff not found → acks via notifyOwnerOps", async () => {
+    const meetingBuilder = makeBuilder({ data: { id: "m1", client_id: "c1" }, error: null });
+    const staffBuilder = makeBuilder({ data: null, error: null });
+    setupFromSequence([meetingBuilder, staffBuilder]);
+
+    await assignStaffToMeeting("m1", "missing-staff", "972500000000@c.us");
+
+    expect(mockNotifyOwnerOps).toHaveBeenCalledOnce();
+    expect(mockNotifyOwnerOps).toHaveBeenCalledWith("❌ העובד לא נמצא.");
+  });
+
+  it("already assigned → acks the current handler via notifyOwnerOps", async () => {
+    const meetingBuilder = makeBuilder({ data: { id: "m1", client_id: "c1" }, error: null });
+    const staffBuilder = makeBuilder({ data: { full_name: "דנה לוי", phone: null }, error: null });
+    const claimBuilder = makeBuilder({ data: null, error: null });
+    const currentBuilder = makeBuilder({ data: { assigned_handler_id: "staff-9" }, error: null });
+    const curStaffBuilder = makeBuilder({ data: { full_name: "משה כהן" }, error: null });
+    setupFromSequence([meetingBuilder, staffBuilder, claimBuilder, currentBuilder, curStaffBuilder]);
+
+    await assignStaffToMeeting("m1", "staff-1", "972500000000@c.us");
+
+    expect(mockNotifyOwnerOps).toHaveBeenCalledOnce();
+    expect(mockNotifyOwnerOps).toHaveBeenCalledWith("✅ כבר הוקצה למשה כהן");
   });
 });

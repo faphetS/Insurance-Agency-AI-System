@@ -53,6 +53,17 @@ const envSchema = z.object({
   GREENAPI_BASE_URL: z.string().optional(),
   GREENAPI_WEBHOOK_TOKEN: z.string().optional(),
 
+  // Conversational transport default when both GreenAPI and Meta creds are set
+  // and the conversation has no stamped channel yet.
+  WHATSAPP_PROVIDER: z.enum(["greenapi", "meta"]).default("greenapi"),
+
+  // Meta WhatsApp Cloud API — conversational transport (all blank keeps it dormant)
+  META_VERIFY_TOKEN: z.string().optional(),
+  META_ACCESS_TOKEN: z.string().optional(),
+  META_PHONE_NUMBER_ID: z.string().optional(),
+  META_APP_SECRET: z.string().optional(),
+  META_GRAPH_API_VERSION: z.string().default("v24.0"),
+
   // GreenAPI instance #2: scanning / operational bot (leave blank until provisioned)
   GREENAPI_SCAN_ID_INSTANCE: z.string().optional(),
   GREENAPI_SCAN_API_TOKEN: z.string().optional(),

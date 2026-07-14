@@ -225,7 +225,10 @@ CREATE TABLE public.conversations (
   bot_paused_until      timestamptz,
 
   -- Added for CLIX gateway: tags the connected WhatsApp line that received the message
-  whatsapp_instance_id  uuid        REFERENCES public.whatsapp_instances(id)
+  whatsapp_instance_id  uuid        REFERENCES public.whatsapp_instances(id),
+
+  -- Added by 20260714130000_add_conversations_channel: transport that received inbound
+  channel               text        CHECK (channel IN ('greenapi', 'meta'))
 );
 
 -- ============================================================

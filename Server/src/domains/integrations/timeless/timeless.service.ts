@@ -4,7 +4,7 @@ import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { AppError } from "../../../lib/errors.js";
 import { ensureHebrew } from "../../ai/ai.service.js";
-import { sendMessage, sendInteractiveButtons } from "../../whatsapp/whatsapp.service.js";
+import { notifyCreds, sendMessageWith, sendInteractiveButtonsWith } from "../../whatsapp/whatsapp.service.js";
 import { toChatId } from "../../whatsapp/whatsapp.util.js";
 import { sendOwnerEmail } from "../google/google.gmail.js";
 import {
@@ -317,8 +317,15 @@ export async function sendSummaryToOwner(meetingId: string, clientId: string): P
   }
 
   try {
-    await sendMessage(chatId, body);
-    logger.info({ meetingId, clientId }, "timeless: owner summary sent");
+    // Owner sends ride the NOTIFY line — the owner never messages the
+    // conversational bot, so on Meta that line is permanently out-of-window.
+    const creds = notifyCreds();
+    if (creds) {
+      await sendMessageWith(creds, chatId, body);
+      logger.info({ meetingId, clientId }, "timeless: owner summary sent");
+    } else {
+      logger.warn({ meetingId }, "timeless.sendSummaryToOwner: notify GreenAPI creds not set — skipping send");
+    }
   } catch (err) {
     logger.error({ err, meetingId }, "timeless.sendSummaryToOwner: send failed — reverting claim");
     // Revert claim so next poll/event can retry
@@ -367,7 +374,15 @@ export async function sendStaffPickerToOwner(meetingId: string): Promise<void> {
     buttonText: String(s.full_name).slice(0, 25),
   }));
 
-  await sendInteractiveButtons(chatId, "👤 בחר/י את הגורם המטפל בלקוח:", buttons);
+  // Staff picker rides the NOTIFY line (owner-facing; conversational line is
+  // out-of-window on Meta). Buttons on the NOTIFY instance are unverified —
+  // timeless is dormant, verify at revival.
+  const creds = notifyCreds();
+  if (!creds) {
+    logger.warn({ meetingId }, "timeless.sendStaffPickerToOwner: notify GreenAPI creds not set — skipping");
+    return;
+  }
+  await sendInteractiveButtonsWith(creds, chatId, "👤 בחר/י את הגורם המטפל בלקוח:", buttons);
 }
 
 export async function sendClientSummaryEmail(meetingId: string, clientId: string): Promise<void> {

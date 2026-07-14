@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
 import { env } from "../../config/env.js";
-import { sendMessage } from "../whatsapp/whatsapp.service.js";
+import { notifyOwnerOps } from "../operations/owner-notify.js";
 import { sendOwnerEmail } from "../integrations/google/google.gmail.js";
 
 // Gap between the two post-assignment sends (staff handoff, then the owner ack) so the
@@ -69,7 +69,9 @@ export async function notifyStaffHandoff(meetingId: string): Promise<void> {
 export async function assignStaffToMeeting(
   meetingId: string,
   staffId: string,
-  ownerChatId: string,
+  // Owner acks now ride the NOTIFY line (notifyOwnerOps resolves the owner
+  // number itself); the param is kept so callers stay untouched.
+  _ownerChatId: string,
 ): Promise<void> {
   const { data: meeting } = await supabaseAdmin
     .from("meetings")
@@ -78,7 +80,7 @@ export async function assignStaffToMeeting(
     .maybeSingle();
 
   if (!meeting) {
-    await sendMessage(ownerChatId, "❌ הפגישה לא נמצאה.");
+    await notifyOwnerOps("❌ הפגישה לא נמצאה.");
     return;
   }
 
@@ -89,7 +91,7 @@ export async function assignStaffToMeeting(
     .maybeSingle();
 
   if (!staff) {
-    await sendMessage(ownerChatId, "❌ העובד לא נמצא.");
+    await notifyOwnerOps("❌ העובד לא נמצא.");
     return;
   }
 
@@ -121,7 +123,7 @@ export async function assignStaffToMeeting(
         .maybeSingle();
       currentName = (curStaff?.full_name as string | null) ?? "";
     }
-    await sendMessage(ownerChatId, currentName ? `✅ כבר הוקצה ל${currentName}` : "✅ כבר הוקצה");
+    await notifyOwnerOps(currentName ? `✅ כבר הוקצה ל${currentName}` : "✅ כבר הוקצה");
     return;
   }
 
@@ -135,5 +137,5 @@ export async function assignStaffToMeeting(
 
   await notifyStaffHandoff(meetingId);
   await new Promise((resolve) => setTimeout(resolve, HANDOFF_ACK_GAP_MS));
-  await sendMessage(ownerChatId, `✅ הוקצה ל${fullName}`);
+  await notifyOwnerOps(`✅ הוקצה ל${fullName}`);
 }

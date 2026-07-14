@@ -97,7 +97,9 @@ app.use(cookieParser());
 // 7. HTTP parameter pollution protection
 app.use(hpp());
 
-// 8. Rate limiting
+// 8. Rate limiting — webhook routes are exempt (token/HMAC-gated; Meta sends
+// ~3 status webhooks per outbound plus retry storms that would trip 429s).
+// Mounted at /api, so req.path here excludes the /api prefix.
 app.use(
   "/api",
   rateLimit({
@@ -106,6 +108,7 @@ app.use(
     standardHeaders: true,
     legacyHeaders: false,
     message: { status: "error", code: "RATE_LIMITED", message: "Too many requests" },
+    skip: (req) => req.path === "/whatsapp/webhook" || req.path === "/whatsapp/meta-webhook",
   }),
 );
 

@@ -4,7 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vi.hoisted shared mock functions
 // ---------------------------------------------------------------------------
 const {
-  mockSendMessage,
+  mockSendMessageWith,
+  mockNotifyCreds,
   mockGenerateReply,
   mockGetDocument,
   mockGetTranscript,
@@ -12,7 +13,8 @@ const {
   mockGetMeeting,
   mockFromImpl,
 } = vi.hoisted(() => {
-  const mockSendMessage = vi.fn();
+  const mockSendMessageWith = vi.fn();
+  const mockNotifyCreds = vi.fn();
   const mockGenerateReply = vi.fn();
   const mockGetDocument = vi.fn();
   const mockGetTranscript = vi.fn();
@@ -21,7 +23,8 @@ const {
   const mockFromImpl = vi.fn();
 
   return {
-    mockSendMessage,
+    mockSendMessageWith,
+    mockNotifyCreds,
     mockGenerateReply,
     mockGetDocument,
     mockGetTranscript,
@@ -80,8 +83,9 @@ vi.mock("../../ai/ai.service.js", () => {
 });
 
 vi.mock("../../whatsapp/whatsapp.service.js", () => ({
-  sendMessage: mockSendMessage,
-  sendInteractiveButtons: vi.fn().mockResolvedValue({ idMessage: "btn-msg" }),
+  notifyCreds: mockNotifyCreds,
+  sendMessageWith: mockSendMessageWith,
+  sendInteractiveButtonsWith: vi.fn().mockResolvedValue({ idMessage: "btn-msg" }),
 }));
 
 vi.mock("../../whatsapp/whatsapp.util.js", () => ({
@@ -125,6 +129,8 @@ function setupFromSequence(builders: Builder[]): void {
 // Imports under test (after mocks)
 // ---------------------------------------------------------------------------
 import { sendSummaryToOwner, resolveSummaryDoc } from "./timeless.service.js";
+
+const NOTIFY_CREDS = { idInstance: "notify-id", token: "notify-token", baseUrl: "https://notify.api.greenapi.com" };
 import { isHebrew } from "../../ai/ai.service.js";
 
 // ---------------------------------------------------------------------------
@@ -230,10 +236,11 @@ describe("sendSummaryToOwner — Scenario A: Hebrew summary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
     mockGenerateReply.mockImplementation(() => {
       throw new Error("generateReply MUST NOT be called for already-Hebrew input");
     });
-    mockSendMessage.mockResolvedValue({ idMessage: "msg-a" });
+    mockSendMessageWith.mockResolvedValue({ idMessage: "msg-a" });
   });
 
   it("sends to owner chatId derived from SUMMARY_RECIPIENT_PHONE without translation", async () => {
@@ -251,9 +258,10 @@ describe("sendSummaryToOwner — Scenario A: Hebrew summary", () => {
     await sendSummaryToOwner("meet-a", "client-a");
 
     expect(mockGenerateReply).not.toHaveBeenCalled();
-    expect(mockSendMessage).toHaveBeenCalledOnce();
+    expect(mockSendMessageWith).toHaveBeenCalledOnce();
 
-    const [chatId, body] = mockSendMessage.mock.calls[0] as [string, string];
+    const [creds, chatId, body] = mockSendMessageWith.mock.calls[0] as [unknown, string, string];
+    expect(creds).toEqual(NOTIFY_CREDS);
     expect(chatId).toBe("639219909210@c.us");
     expect(body).toContain(hebrewContent);
     expect(body).toContain("📋 סיכום פגישה");
@@ -275,7 +283,7 @@ describe("sendSummaryToOwner — Scenario A: Hebrew summary", () => {
 
     await sendSummaryToOwner("meet-a2", "client-a2");
 
-    const [, body] = mockSendMessage.mock.calls[0] as [string, string];
+    const [, , body] = mockSendMessageWith.mock.calls[0] as [unknown, string, string];
     expect(body).toContain(recordingUrl);
   });
 });
@@ -289,8 +297,9 @@ describe("sendSummaryToOwner — Scenario B: English summary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
     mockGenerateReply.mockResolvedValue(hebrewTranslation);
-    mockSendMessage.mockResolvedValue({ idMessage: "msg-b" });
+    mockSendMessageWith.mockResolvedValue({ idMessage: "msg-b" });
   });
 
   it("calls generateReply with model 'google/gemini-2.5-flash' and sends Hebrew translation", async () => {
@@ -312,8 +321,9 @@ describe("sendSummaryToOwner — Scenario B: English summary", () => {
     expect(model).toBe("google/gemini-2.5-flash");
     expect(history[0].text).toBe(englishContent);
 
-    expect(mockSendMessage).toHaveBeenCalledOnce();
-    const [chatId, body] = mockSendMessage.mock.calls[0] as [string, string];
+    expect(mockSendMessageWith).toHaveBeenCalledOnce();
+    const [creds, chatId, body] = mockSendMessageWith.mock.calls[0] as [unknown, string, string];
+    expect(creds).toEqual(NOTIFY_CREDS);
     expect(chatId).toBe("639219909210@c.us");
     expect(body).toContain(hebrewTranslation);
   });
@@ -355,8 +365,9 @@ describe("sendSummaryToOwner — Scenario B: English summary", () => {
 describe("sendSummaryToOwner — idempotency (already sent)", () => {
   it("does not call sendMessage when claim returns null data", async () => {
     vi.clearAllMocks();
+    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
     mockGenerateReply.mockResolvedValue("הסיכום בעברית.");
-    mockSendMessage.mockResolvedValue({ idMessage: "msg-idem" });
+    mockSendMessageWith.mockResolvedValue({ idMessage: "msg-idem" });
 
     const hebrewContent = "סיכום כבר קיים.";
     const meetingSelectBuilder = makeBuilder({
@@ -370,7 +381,7 @@ describe("sendSummaryToOwner — idempotency (already sent)", () => {
 
     await sendSummaryToOwner("meet-idem", "client-idem");
 
-    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendMessageWith).not.toHaveBeenCalled();
   });
 });
 
@@ -380,11 +391,12 @@ describe("sendSummaryToOwner — idempotency (already sent)", () => {
 describe("sendSummaryToOwner — error handling", () => {
   it("reverts claim and re-throws when sendMessage fails", async () => {
     vi.clearAllMocks();
+    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
     mockGenerateReply.mockImplementation(() => {
       throw new Error("generateReply must not be called for Hebrew");
     });
     const sendError = new Error("WhatsApp send failed");
-    mockSendMessage.mockRejectedValue(sendError);
+    mockSendMessageWith.mockRejectedValue(sendError);
 
     const hebrewContent = "סיכום הפגישה בעברית.";
 
@@ -410,13 +422,14 @@ describe("sendSummaryToOwner — error handling", () => {
 describe("sendSummaryToOwner — no SUMMARY_RECIPIENT_PHONE", () => {
   it("returns early without DB calls when env var is absent", async () => {
     vi.clearAllMocks();
+    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
     const { env } = await import("../../../config/env.js");
     const originalPhone = (env as Record<string, unknown>)["SUMMARY_RECIPIENT_PHONE"];
     (env as Record<string, unknown>)["SUMMARY_RECIPIENT_PHONE"] = undefined;
 
     await sendSummaryToOwner("meet-nophone", "client-nophone");
 
-    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendMessageWith).not.toHaveBeenCalled();
     expect(mockFromImpl).not.toHaveBeenCalled();
 
     (env as Record<string, unknown>)["SUMMARY_RECIPIENT_PHONE"] = originalPhone;

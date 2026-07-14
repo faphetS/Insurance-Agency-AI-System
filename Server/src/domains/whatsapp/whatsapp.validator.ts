@@ -106,8 +106,10 @@ export type MessagePayload =
   | { kind: "text"; text: string; isButtonReply?: true }
   | {
       kind: "image" | "document";
-      // GreenAPI delivers a remote download URL.
-      fileUrl: string;
+      // GreenAPI delivers a remote download URL; Meta delivers a media id.
+      // Exactly one of the two is set.
+      fileUrl?: string;
+      mediaId?: string;
       mimeType?: string;
       fileName?: string;
       caption?: string;

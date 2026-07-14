@@ -14,6 +14,7 @@ import {
 } from "./intake.prompts.js";
 import { validateIdPhoto } from "./ai.service.js";
 import { fetchRemoteFile } from "../../lib/storage.js";
+import { downloadMetaMedia } from "../whatsapp/meta/meta.media.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
 import { notifyOwner } from "../operations/owner-notify.js";
@@ -394,6 +395,19 @@ async function handleConsent(
   await sendTextPrompt(conversationId, chatId, "consent_reprompt");
 }
 
+/** Resolve inbound media bytes: GreenAPI delivers a fileUrl, Meta a mediaId. */
+async function resolveInboundMedia(payload: MessagePayload): Promise<Buffer | null> {
+  if (payload.kind === "text") return null;
+  if (payload.fileUrl) {
+    return fetchRemoteFile(payload.fileUrl);
+  }
+  if (payload.mediaId) {
+    const media = await downloadMetaMedia(payload.mediaId);
+    return media?.bytes ?? null;
+  }
+  return null;
+}
+
 async function handleIdPhoto(
   conversationId: string,
   chatId: string,
@@ -405,8 +419,18 @@ async function handleIdPhoto(
     return;
   }
 
+  const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את תעודת הזהות.";
+
+  // Download once — the same bytes feed the vision pass (as a data URL, since
+  // Meta media URLs need a Bearer header OpenRouter can't send) AND the Drive upload.
+  const bytes = await resolveInboundMedia(payload);
+  if (!bytes) {
+    await sendText(conversationId, chatId, resendText);
+    return;
+  }
+
   // Combined vision pass: validate the ID photo AND extract id number + name.
-  const imageUrl = payload.fileUrl;
+  const imageUrl = `data:${payload.mimeType ?? "image/jpeg"};base64,${bytes.toString("base64")}`;
   let ocrResult: Awaited<ReturnType<typeof validateIdPhoto>> | undefined;
   try {
     ocrResult = await validateIdPhoto(imageUrl);
@@ -434,14 +458,6 @@ async function handleIdPhoto(
   const { phone } = await loadContact(clientId);
   const phoneDigits = phone.replace(/\D/g, "");
   const fileBase = ocrName ?? phoneDigits ?? clientId;
-
-  const resendText = "לא הצלחנו לשמור את הקובץ, נא לשלוח מחדש את תעודת הזהות.";
-
-  const bytes = await fetchRemoteFile(payload.fileUrl);
-  if (!bytes) {
-    await sendText(conversationId, chatId, resendText);
-    return;
-  }
 
   const up = await uploadLeadDocument({
     name: `${fileBase} - ID`,
