@@ -24,6 +24,9 @@ export type ConversationalOutbound = (
   // GreenAPI executor supplied by whatsapp.service — keeps this module free of
   // GreenAPI request code and avoids a service<->dispatcher import cycle.
   greenapi: () => Promise<{ idMessage: string }>;
+  // Agent-forwarded replies already exist in Chatwoot as the agent's own
+  // message — mirroring the delivery back would duplicate it in the thread.
+  skipMirror?: boolean;
 };
 
 function metaConfigured(): boolean {
@@ -161,9 +164,11 @@ export async function dispatchConversationalSend(
   const result =
     channel === "meta" ? await sendViaMeta(chatId, outbound) : await outbound.greenapi();
 
-  void mirrorOutboundHook(chatId, outbound, channel).catch((err: unknown) =>
-    logger.warn({ err, chatId }, "mirrorOutboundHook failed — continuing"),
-  );
+  if (!outbound.skipMirror) {
+    void mirrorOutboundHook(chatId, outbound, channel).catch((err: unknown) =>
+      logger.warn({ err, chatId }, "mirrorOutboundHook failed — continuing"),
+    );
+  }
 
   return result;
 }

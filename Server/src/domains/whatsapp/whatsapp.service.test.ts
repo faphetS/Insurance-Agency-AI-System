@@ -26,9 +26,15 @@ vi.mock("../../config/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { mockMetaSendText, mockMetaSendInteractive } = vi.hoisted(() => ({
+const { mockMetaSendText, mockMetaSendInteractive, mockMirrorOutbound } = vi.hoisted(() => ({
   mockMetaSendText: vi.fn(),
   mockMetaSendInteractive: vi.fn(),
+  mockMirrorOutbound: vi.fn(),
+}));
+
+vi.mock("../chatwoot/chatwoot.service.js", () => ({
+  mirrorInbound: vi.fn(),
+  mirrorOutbound: mockMirrorOutbound,
 }));
 
 // Intercepts the dispatcher's lazy import — greenapi-path tests must never reach it.
@@ -289,5 +295,29 @@ describe("dispatcher — meta channel routing", () => {
 
     expect(result.idMessage).toBe("green-1");
     expect(mockMetaSendText).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatcher — chatwoot mirror suppression", () => {
+  beforeEach(() => {
+    mockMirrorOutbound.mockClear();
+  });
+
+  it("default send mirrors the outbound to chatwoot", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({ idMessage: "green-2" }));
+
+    await sendMessage("972500000000@c.us", "bot reply");
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockMirrorOutbound).toHaveBeenCalledWith("972500000000@c.us", "bot reply");
+  });
+
+  it("skipMirror suppresses the mirror-back (agent-forwarded replies)", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({ idMessage: "green-3" }));
+
+    await sendMessage("972500000000@c.us", "agent reply", { skipMirror: true });
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockMirrorOutbound).not.toHaveBeenCalled();
   });
 });

@@ -199,7 +199,9 @@ describe("handleCallback — agent takeover", () => {
 
     expect((res.sendStatus as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
     expect(mockSendMessage).toHaveBeenCalledOnce();
-    expect(mockSendMessage).toHaveBeenCalledWith("972501112233@c.us", "תשובה מהסוכן");
+    expect(mockSendMessage).toHaveBeenCalledWith("972501112233@c.us", "תשובה מהסוכן", {
+      skipMirror: true,
+    });
 
     expect(mockFromImpl).toHaveBeenCalledWith("conversations");
     const updateArg = (pauseBuilder["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
@@ -221,7 +223,9 @@ describe("handleCallback — agent takeover", () => {
     chatwootController.handleCallback(makeReq("hush-hush", body), res);
     await flushImmediates();
 
-    expect(mockSendMessage).toHaveBeenCalledWith("972549998877@c.us", "תשובה מהסוכן");
+    expect(mockSendMessage).toHaveBeenCalledWith("972549998877@c.us", "תשובה מהסוכן", {
+      skipMirror: true,
+    });
   });
 
   it("ignores when neither identifier nor phone_number yields a chatId", async () => {

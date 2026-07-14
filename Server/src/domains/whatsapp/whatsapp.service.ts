@@ -103,10 +103,12 @@ function interactiveButtonsBody(
 export async function sendMessage(
   chatId: string,
   text: string,
+  opts?: { skipMirror?: boolean },
 ): Promise<{ idMessage: string }> {
   return dispatchConversationalSend(chatId, {
     type: "text",
     text,
+    skipMirror: opts?.skipMirror,
     greenapi: async () => {
       const creds = envCreds();
       if (!creds) {

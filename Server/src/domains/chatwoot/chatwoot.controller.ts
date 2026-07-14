@@ -53,7 +53,7 @@ async function processCallback(body: ChatwootCallback): Promise<void> {
     return;
   }
 
-  await sendMessage(chatId, content);
+  await sendMessage(chatId, content, { skipMirror: true });
 
   const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   const { error } = await supabaseAdmin
