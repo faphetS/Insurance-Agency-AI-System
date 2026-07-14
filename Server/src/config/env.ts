@@ -64,6 +64,18 @@ const envSchema = z.object({
   META_APP_SECRET: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default("v24.0"),
 
+  // Chatwoot staff inbox — conversation mirror + human-takeover callback.
+  // All blank keeps the mirror and the callback fully dormant.
+  CHATWOOT_BASE_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.replace(/\/+$/, "") : v)),
+  CHATWOOT_ACCOUNT_ID: z.string().optional(),
+  CHATWOOT_INBOX_ID: z.string().optional(),
+  CHATWOOT_BOT_TOKEN: z.string().optional(),
+  CHATWOOT_BOT_USER_ID: z.string().optional(),
+  CHATWOOT_CALLBACK_SECRET: z.string().optional(),
+
   // GreenAPI instance #2: scanning / operational bot (leave blank until provisioned)
   GREENAPI_SCAN_ID_INSTANCE: z.string().optional(),
   GREENAPI_SCAN_API_TOKEN: z.string().optional(),

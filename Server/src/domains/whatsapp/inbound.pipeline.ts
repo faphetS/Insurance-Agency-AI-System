@@ -216,7 +216,7 @@ export async function processInboundCustomerMessage(
     );
   }
 
-  void mirrorInboundHook(chatId, payload).catch((err: unknown) =>
+  void mirrorInboundHook(chatId, payload, senderName).catch((err: unknown) =>
     logger.warn({ err, chatId }, "mirrorInboundHook failed — continuing"),
   );
 

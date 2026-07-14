@@ -1,5 +1,6 @@
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+import { mirrorInbound, mirrorOutbound } from "../chatwoot/chatwoot.service.js";
 import type { MessagePayload } from "./whatsapp.validator.js";
 
 export type ConversationalChannel = "greenapi" | "meta";
@@ -167,19 +168,41 @@ export async function dispatchConversationalSend(
   return result;
 }
 
-// Phase B (Chatwoot mirror) hook stubs — wired here so the seam already exists;
-// implementations land with the chatwoot module.
+function inboundMirrorText(payload: MessagePayload): string | null {
+  if (payload.kind === "text") return payload.text;
+  const label = payload.kind === "image" ? "[תמונה]" : "[מסמך]";
+  return payload.caption ? `${label}\n${payload.caption}` : label;
+}
+
+function outboundMirrorText(outbound: ConversationalOutbound): string | null {
+  switch (outbound.type) {
+    case "text":
+      return outbound.text;
+    case "buttons":
+      return [outbound.body, ...outbound.buttons.map((b) => `▫️ ${b.buttonText}`)].join("\n");
+    case "file":
+      return outbound.caption ? `[תמונה]\n${outbound.caption}` : "[תמונה]";
+    case "typing":
+      return null;
+  }
+}
+
 export async function mirrorInboundHook(
-  _chatId: string,
-  _payload: MessagePayload,
+  chatId: string,
+  payload: MessagePayload,
+  senderName?: string | null,
 ): Promise<void> {
-  // no-op until Phase B
+  const text = inboundMirrorText(payload);
+  if (!text) return;
+  await mirrorInbound(chatId, text, senderName ?? undefined);
 }
 
 export async function mirrorOutboundHook(
-  _chatId: string,
-  _outbound: ConversationalOutbound,
+  chatId: string,
+  outbound: ConversationalOutbound,
   _channel: ConversationalChannel,
 ): Promise<void> {
-  // no-op until Phase B
+  const text = outboundMirrorText(outbound);
+  if (!text) return;
+  await mirrorOutbound(chatId, text);
 }

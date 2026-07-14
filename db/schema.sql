@@ -228,7 +228,11 @@ CREATE TABLE public.conversations (
   whatsapp_instance_id  uuid        REFERENCES public.whatsapp_instances(id),
 
   -- Added by 20260714130000_add_conversations_channel: transport that received inbound
-  channel               text        CHECK (channel IN ('greenapi', 'meta'))
+  channel               text        CHECK (channel IN ('greenapi', 'meta')),
+
+  -- Added by 20260715090000_add_chatwoot_columns: Chatwoot mirror id cache
+  chatwoot_contact_id       bigint,
+  chatwoot_conversation_id  bigint
 );
 
 -- ============================================================
