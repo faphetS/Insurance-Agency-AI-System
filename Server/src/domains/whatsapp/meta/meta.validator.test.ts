@@ -42,7 +42,12 @@ describe("extractMetaPayload", () => {
         interactive: { type: "list_reply", list_reply: { id: "meeting_didi", title: "בקשת תיאום פגישה עם דידי" } },
       }),
     );
-    expect(payload).toEqual({ kind: "text", text: "meeting_didi", isButtonReply: true });
+    expect(payload).toEqual({
+      kind: "text",
+      text: "meeting_didi",
+      isButtonReply: true,
+      buttonTitle: "בקשת תיאום פגישה עם דידי",
+    });
   });
 
   it("button_reply → kind:text with the button id + isButtonReply", () => {
@@ -52,7 +57,12 @@ describe("extractMetaPayload", () => {
         interactive: { type: "button_reply", button_reply: { id: "consent_approve", title: "מאשר" } },
       }),
     );
-    expect(payload).toEqual({ kind: "text", text: "consent_approve", isButtonReply: true });
+    expect(payload).toEqual({
+      kind: "text",
+      text: "consent_approve",
+      isButtonReply: true,
+      buttonTitle: "מאשר",
+    });
   });
 
   it("image → kind:image with mediaId (no fileUrl)", () => {

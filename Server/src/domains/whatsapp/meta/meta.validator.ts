@@ -133,7 +133,7 @@ export function extractMetaPayload(msg: MetaMessage): MessagePayload | null {
   if (msg.type === "interactive") {
     const reply = msg.interactive?.list_reply ?? msg.interactive?.button_reply;
     if (reply) {
-      return { kind: "text", text: reply.id, isButtonReply: true };
+      return { kind: "text", text: reply.id, isButtonReply: true, buttonTitle: reply.title };
     }
     return null;
   }

@@ -103,7 +103,7 @@ export type IncomingMessagePayload = z.infer<typeof incomingMessageSchema>;
 // ---------------------------------------------------------------------------
 
 export type MessagePayload =
-  | { kind: "text"; text: string; isButtonReply?: true }
+  | { kind: "text"; text: string; isButtonReply?: true; buttonTitle?: string }
   | {
       kind: "image" | "document";
       // GreenAPI delivers a remote download URL; Meta delivers a media id.
