@@ -99,33 +99,6 @@ vi.mock("../../whatsapp/whatsapp.util.js", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Helpers: build supabase-shim builder chains
-// ---------------------------------------------------------------------------
-
-type Builder = Record<string, unknown>;
-
-function makeBuilder(result: unknown): Builder {
-  const terminal = vi.fn().mockResolvedValue(result);
-  const builder: Builder = {};
-  const chainMethods = ["select", "eq", "neq", "is", "not", "in", "gte", "lte", "order", "insert", "upsert", "update"];
-  for (const m of chainMethods) {
-    builder[m] = vi.fn().mockReturnValue(builder);
-  }
-  builder["maybeSingle"] = terminal;
-  builder["single"] = terminal;
-  return builder;
-}
-
-function setupFromSequence(builders: Builder[]): void {
-  let callIndex = 0;
-  mockFromImpl.mockImplementation(() => {
-    const b = builders[callIndex] ?? builders[builders.length - 1];
-    callIndex++;
-    return b;
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Imports under test (after mocks)
 // ---------------------------------------------------------------------------
 import { sendSummaryToOwner, resolveSummaryDoc } from "./timeless.service.js";
@@ -229,209 +202,20 @@ describe("resolveSummaryDoc (F6)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Scenario A — sendSummaryToOwner with Hebrew summary (no translation needed)
+// sendSummaryToOwner — DISABLED (2026-07-15): no-ops before any DB read/claim
+// or WhatsApp send. Owner sends are no longer needed.
 // ---------------------------------------------------------------------------
-describe("sendSummaryToOwner — Scenario A: Hebrew summary", () => {
-  const hebrewContent = "סיכום הפגישה: הלקוח מעוניין בביטוח חיים.";
-
+describe("sendSummaryToOwner — disabled (no-op)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
-    mockGenerateReply.mockImplementation(() => {
-      throw new Error("generateReply MUST NOT be called for already-Hebrew input");
-    });
-    mockSendMessageWith.mockResolvedValue({ idMessage: "msg-a" });
   });
 
-  it("sends to owner chatId derived from SUMMARY_RECIPIENT_PHONE without translation", async () => {
-    const scheduledAt = new Date("2026-06-07T10:00:00Z").toISOString();
-
-    const meetingSelectBuilder = makeBuilder({
-      data: { summary_draft: hebrewContent, scheduled_at: scheduledAt, recording_url: null },
-      error: null,
-    });
-    const clientSelectBuilder = makeBuilder({ data: { full_name: "דני לוי" }, error: null });
-    const claimUpdateBuilder = makeBuilder({ data: { id: "meet-a" }, error: null });
-
-    setupFromSequence([meetingSelectBuilder, clientSelectBuilder, claimUpdateBuilder]);
-
+  it("does not call sendMessage, generateReply, or touch the DB", async () => {
     await sendSummaryToOwner("meet-a", "client-a");
 
+    expect(mockSendMessageWith).not.toHaveBeenCalled();
     expect(mockGenerateReply).not.toHaveBeenCalled();
-    expect(mockSendMessageWith).toHaveBeenCalledOnce();
-
-    const [creds, chatId, body] = mockSendMessageWith.mock.calls[0] as [unknown, string, string];
-    expect(creds).toEqual(NOTIFY_CREDS);
-    expect(chatId).toBe("639219909210@c.us");
-    expect(body).toContain(hebrewContent);
-    expect(body).toContain("📋 סיכום פגישה");
-    expect(body).toContain("דני לוי");
-  });
-
-  it("includes recording URL when present", async () => {
-    const scheduledAt = new Date("2026-06-07T10:00:00Z").toISOString();
-    const recordingUrl = "https://timeless.day/recordings/abc123";
-
-    const meetingSelectBuilder = makeBuilder({
-      data: { summary_draft: hebrewContent, scheduled_at: scheduledAt, recording_url: recordingUrl },
-      error: null,
-    });
-    const clientSelectBuilder = makeBuilder({ data: { full_name: "רחל כהן" }, error: null });
-    const claimUpdateBuilder = makeBuilder({ data: { id: "meet-a2" }, error: null });
-
-    setupFromSequence([meetingSelectBuilder, clientSelectBuilder, claimUpdateBuilder]);
-
-    await sendSummaryToOwner("meet-a2", "client-a2");
-
-    const [, , body] = mockSendMessageWith.mock.calls[0] as [unknown, string, string];
-    expect(body).toContain(recordingUrl);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Scenario B — sendSummaryToOwner with English summary (translation needed)
-// ---------------------------------------------------------------------------
-describe("sendSummaryToOwner — Scenario B: English summary", () => {
-  const englishContent = "Meeting summary: the client is interested in life insurance.";
-  const hebrewTranslation = "סיכום הפגישה: הלקוח מעוניין בביטוח חיים.";
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
-    mockGenerateReply.mockResolvedValue(hebrewTranslation);
-    mockSendMessageWith.mockResolvedValue({ idMessage: "msg-b" });
-  });
-
-  it("calls generateReply with model 'google/gemini-2.5-flash' and sends Hebrew translation", async () => {
-    const scheduledAt = new Date("2026-06-07T10:00:00Z").toISOString();
-
-    const meetingSelectBuilder = makeBuilder({
-      data: { summary_draft: englishContent, scheduled_at: scheduledAt, recording_url: null },
-      error: null,
-    });
-    const clientSelectBuilder = makeBuilder({ data: { full_name: "John Smith" }, error: null });
-    const claimUpdateBuilder = makeBuilder({ data: { id: "meet-b" }, error: null });
-
-    setupFromSequence([meetingSelectBuilder, clientSelectBuilder, claimUpdateBuilder]);
-
-    await sendSummaryToOwner("meet-b", "client-b");
-
-    expect(mockGenerateReply).toHaveBeenCalledOnce();
-    const [history, , model] = mockGenerateReply.mock.calls[0] as [Array<{ role: string; text: string }>, string, string];
-    expect(model).toBe("google/gemini-2.5-flash");
-    expect(history[0].text).toBe(englishContent);
-
-    expect(mockSendMessageWith).toHaveBeenCalledOnce();
-    const [creds, chatId, body] = mockSendMessageWith.mock.calls[0] as [unknown, string, string];
-    expect(creds).toEqual(NOTIFY_CREDS);
-    expect(chatId).toBe("639219909210@c.us");
-    expect(body).toContain(hebrewTranslation);
-  });
-
-  it("sets summary_status='sent' in the atomic claim update", async () => {
-    const scheduledAt = new Date("2026-06-07T10:00:00Z").toISOString();
-
-    let capturedUpdateArg: unknown = null;
-    const claimBuilder: Builder = {};
-    const chainMethods = ["select", "eq", "neq", "is", "not", "in", "gte", "lte", "order", "insert", "upsert"];
-    for (const m of chainMethods) {
-      claimBuilder[m] = vi.fn().mockReturnValue(claimBuilder);
-    }
-    claimBuilder["update"] = vi.fn().mockImplementation((arg: unknown) => {
-      capturedUpdateArg = arg;
-      return claimBuilder;
-    });
-    claimBuilder["maybeSingle"] = vi.fn().mockResolvedValue({ data: { id: "meet-b2" }, error: null });
-    claimBuilder["single"] = vi.fn().mockResolvedValue({ data: { id: "meet-b2" }, error: null });
-
-    const meetingSelectBuilder = makeBuilder({
-      data: { summary_draft: englishContent, scheduled_at: scheduledAt, recording_url: null },
-      error: null,
-    });
-    const clientSelectBuilder = makeBuilder({ data: { full_name: "Test" }, error: null });
-
-    setupFromSequence([meetingSelectBuilder, clientSelectBuilder, claimBuilder]);
-
-    await sendSummaryToOwner("meet-b2", "client-b2");
-
-    expect(capturedUpdateArg).toMatchObject({ summary_status: "sent" });
-    expect(capturedUpdateArg).toMatchObject({ summary_final: hebrewTranslation });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Idempotency: claim returns null → already sent, skip send
-// ---------------------------------------------------------------------------
-describe("sendSummaryToOwner — idempotency (already sent)", () => {
-  it("does not call sendMessage when claim returns null data", async () => {
-    vi.clearAllMocks();
-    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
-    mockGenerateReply.mockResolvedValue("הסיכום בעברית.");
-    mockSendMessageWith.mockResolvedValue({ idMessage: "msg-idem" });
-
-    const hebrewContent = "סיכום כבר קיים.";
-    const meetingSelectBuilder = makeBuilder({
-      data: { summary_draft: hebrewContent, scheduled_at: new Date().toISOString(), recording_url: null },
-      error: null,
-    });
-    const clientSelectBuilder = makeBuilder({ data: { full_name: "לקוח" }, error: null });
-    const claimBuilder = makeBuilder({ data: null, error: null });
-
-    setupFromSequence([meetingSelectBuilder, clientSelectBuilder, claimBuilder]);
-
-    await sendSummaryToOwner("meet-idem", "client-idem");
-
-    expect(mockSendMessageWith).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Error handling: send failure reverts the claim
-// ---------------------------------------------------------------------------
-describe("sendSummaryToOwner — error handling", () => {
-  it("reverts claim and re-throws when sendMessage fails", async () => {
-    vi.clearAllMocks();
-    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
-    mockGenerateReply.mockImplementation(() => {
-      throw new Error("generateReply must not be called for Hebrew");
-    });
-    const sendError = new Error("WhatsApp send failed");
-    mockSendMessageWith.mockRejectedValue(sendError);
-
-    const hebrewContent = "סיכום הפגישה בעברית.";
-
-    const meetingSelectBuilder = makeBuilder({
-      data: { summary_draft: hebrewContent, scheduled_at: new Date().toISOString(), recording_url: null },
-      error: null,
-    });
-    const clientSelectBuilder = makeBuilder({ data: { full_name: "לקוח" }, error: null });
-    const claimUpdateBuilder = makeBuilder({ data: { id: "meet-err" }, error: null });
-    const revertBuilder = makeBuilder({ data: null, error: null });
-
-    setupFromSequence([meetingSelectBuilder, clientSelectBuilder, claimUpdateBuilder, revertBuilder]);
-
-    await expect(sendSummaryToOwner("meet-err", "client-err")).rejects.toThrow("WhatsApp send failed");
-
-    expect(mockFromImpl).toHaveBeenCalledTimes(4);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// No phone configured → early return
-// ---------------------------------------------------------------------------
-describe("sendSummaryToOwner — no SUMMARY_RECIPIENT_PHONE", () => {
-  it("returns early without DB calls when env var is absent", async () => {
-    vi.clearAllMocks();
-    mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
-    const { env } = await import("../../../config/env.js");
-    const originalPhone = (env as Record<string, unknown>)["SUMMARY_RECIPIENT_PHONE"];
-    (env as Record<string, unknown>)["SUMMARY_RECIPIENT_PHONE"] = undefined;
-
-    await sendSummaryToOwner("meet-nophone", "client-nophone");
-
-    expect(mockSendMessageWith).not.toHaveBeenCalled();
     expect(mockFromImpl).not.toHaveBeenCalled();
-
-    (env as Record<string, unknown>)["SUMMARY_RECIPIENT_PHONE"] = originalPhone;
   });
 });

@@ -3,11 +3,13 @@ import { logger } from "../../config/logger.js";
 import { mirrorInbound, mirrorOutbound } from "../chatwoot/chatwoot.service.js";
 import type { MessagePayload } from "./whatsapp.validator.js";
 
+// "greenapi" is kept only so historically-stamped conversations.channel values
+// and InboundCustomerMessage.channel (inbound.pipeline.ts) still type-check —
+// the 945 GreenAPI transport itself is gone; every send now goes via Meta.
 export type ConversationalChannel = "greenapi" | "meta";
 
-// The DB + meta modules are imported lazily so the greenapi fast path (Meta creds
-// blank) has zero import side effects — existing unit tests mock env with plain
-// objects that lack META_* keys and must never touch the pg pool.
+// The DB + meta modules are imported lazily so unit tests that mock env with
+// plain objects lacking META_* keys never touch the pg pool.
 
 export type ConversationalOutbound = (
   | { type: "text"; text: string; typingMs?: number }
@@ -21,41 +23,10 @@ export type ConversationalOutbound = (
     }
   | { type: "typing"; typingMs: number }
 ) & {
-  // GreenAPI executor supplied by whatsapp.service — keeps this module free of
-  // GreenAPI request code and avoids a service<->dispatcher import cycle.
-  greenapi: () => Promise<{ idMessage: string }>;
   // Agent-forwarded replies already exist in Chatwoot as the agent's own
   // message — mirroring the delivery back would duplicate it in the thread.
   skipMirror?: boolean;
 };
-
-function metaConfigured(): boolean {
-  return !!(env.META_ACCESS_TOKEN && env.META_PHONE_NUMBER_ID);
-}
-
-function greenapiConfigured(): boolean {
-  return !!(env.GREENAPI_ID_INSTANCE && env.GREENAPI_API_TOKEN && env.GREENAPI_BASE_URL);
-}
-
-export async function resolveChannel(chatId: string): Promise<ConversationalChannel> {
-  if (!metaConfigured()) return "greenapi";
-  if (!greenapiConfigured()) return "meta";
-
-  try {
-    const { supabaseAdmin } = await import("../../config/supabase.js");
-    const { data } = await supabaseAdmin
-      .from("conversations")
-      .select("channel")
-      .eq("whatsapp_chat_id", chatId)
-      .maybeSingle();
-    const channel = (data as { channel?: string | null } | null)?.channel;
-    if (channel === "greenapi" || channel === "meta") return channel;
-  } catch (err) {
-    logger.warn({ err, chatId }, "resolveChannel: conversation lookup failed — falling back to env provider");
-  }
-
-  return (env.WHATSAPP_PROVIDER as ConversationalChannel | undefined) ?? "greenapi";
-}
 
 async function metaTyping(
   chatId: string,
@@ -159,13 +130,10 @@ export async function dispatchConversationalSend(
   chatId: string,
   outbound: ConversationalOutbound,
 ): Promise<{ idMessage: string }> {
-  const channel = await resolveChannel(chatId);
-
-  const result =
-    channel === "meta" ? await sendViaMeta(chatId, outbound) : await outbound.greenapi();
+  const result = await sendViaMeta(chatId, outbound);
 
   if (!outbound.skipMirror) {
-    void mirrorOutboundHook(chatId, outbound, channel).catch((err: unknown) =>
+    void mirrorOutboundHook(chatId, outbound, "meta").catch((err: unknown) =>
       logger.warn({ err, chatId }, "mirrorOutboundHook failed — continuing"),
     );
   }

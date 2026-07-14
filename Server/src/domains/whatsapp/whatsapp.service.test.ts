@@ -4,10 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Module mocks — must precede subject import
 // ---------------------------------------------------------------------------
 
-const envWithCreds = {
-  GREENAPI_ID_INSTANCE: "7100000001",
-  GREENAPI_API_TOKEN: "test-conv-token",
-  GREENAPI_BASE_URL: "https://7100.api.greenapi.com",
+const envMock = {
   GREENAPI_WEBHOOK_TOKEN: "webhook-tok",
   GREENAPI_OP_ID_INSTANCE: undefined as string | undefined,
   GREENAPI_OP_API_TOKEN: undefined as string | undefined,
@@ -15,12 +12,12 @@ const envWithCreds = {
   GREENAPI_SCAN_ID_INSTANCE: undefined as string | undefined,
   GREENAPI_SCAN_API_TOKEN: undefined as string | undefined,
   GREENAPI_SCAN_BASE_URL: undefined as string | undefined,
-  META_ACCESS_TOKEN: undefined as string | undefined,
-  META_PHONE_NUMBER_ID: undefined as string | undefined,
-  WHATSAPP_PROVIDER: undefined as string | undefined,
+  GREENAPI_NOTIFY_ID_INSTANCE: undefined as string | undefined,
+  GREENAPI_NOTIFY_API_TOKEN: undefined as string | undefined,
+  GREENAPI_NOTIFY_BASE_URL: undefined as string | undefined,
 };
 
-vi.mock("../../config/env.js", () => ({ get env() { return envWithCreds; } }));
+vi.mock("../../config/env.js", () => ({ get env() { return envMock; } }));
 
 vi.mock("../../config/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -37,7 +34,7 @@ vi.mock("../chatwoot/chatwoot.service.js", () => ({
   mirrorOutbound: mockMirrorOutbound,
 }));
 
-// Intercepts the dispatcher's lazy import — greenapi-path tests must never reach it.
+// Intercepts the dispatcher's lazy import of the meta transport.
 vi.mock("./meta/meta.transport.js", () => ({
   sendText: mockMetaSendText,
   sendInteractive: mockMetaSendInteractive,
@@ -51,8 +48,21 @@ vi.mock("./meta/meta.transport.js", () => ({
 // ---------------------------------------------------------------------------
 // Subject imports (after mocks)
 // ---------------------------------------------------------------------------
-import { sendMessage, sendInteractiveButtons, sendTyping } from "./whatsapp.service.js";
-import { logger } from "../../config/logger.js";
+import {
+  sendMessage,
+  sendInteractiveButtons,
+  sendTyping,
+  sendMessageWithTyping,
+  sendInteractiveButtonsWithTyping,
+  scanCreds,
+  opCreds,
+  notifyCreds,
+  sendMessageWith,
+  sendInteractiveButtonsWith,
+  getChatHistoryWith,
+  lastIncomingMessagesWith,
+  lastOutgoingMessagesWith,
+} from "./whatsapp.service.js";
 
 // ---------------------------------------------------------------------------
 // Fetch helpers
@@ -68,56 +78,46 @@ function mockFetchOk(body: unknown) {
 }
 
 // ---------------------------------------------------------------------------
-// sendMessage
+// Senders — always dispatch via the Meta transport
 // ---------------------------------------------------------------------------
 
-describe("sendMessage — GreenAPI conversational instance", () => {
-  afterEach(() => vi.unstubAllGlobals());
+describe("sendMessage — Meta-only dispatch", () => {
+  beforeEach(() => vi.clearAllMocks());
 
-  it("POSTs to sendMessage endpoint with chatId + message", async () => {
-    const mockFetch = mockFetchOk({ idMessage: "msg-123" });
-    vi.stubGlobal("fetch", mockFetch);
+  it("routes to the meta transport", async () => {
+    mockMetaSendText.mockResolvedValue({ idMessage: "wamid.TEST" });
 
-    const result = await sendMessage("972500000000@c.us", "Hello");
+    const result = await sendMessage("972500000000@c.us", "שלום");
 
-    expect(result.idMessage).toBe("msg-123");
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain("/waInstance7100000001/sendMessage/test-conv-token");
-    const body = JSON.parse(init.body as string) as { chatId: string; message: string };
-    expect(body.chatId).toBe("972500000000@c.us");
-    expect(body.message).toBe("Hello");
+    expect(result.idMessage).toBe("wamid.TEST");
+    expect(mockMetaSendText).toHaveBeenCalledOnce();
+    expect(mockMetaSendText).toHaveBeenCalledWith("972500000000", "שלום");
   });
 
-  it("returns noop idMessage and logs warn when creds are blank", async () => {
-    const saved = { ...envWithCreds };
-    envWithCreds.GREENAPI_ID_INSTANCE = undefined as unknown as string;
-    envWithCreds.GREENAPI_API_TOKEN = undefined as unknown as string;
-    envWithCreds.GREENAPI_BASE_URL = undefined as unknown as string;
+  it("blank Meta creds → the meta transport's own noop (no throw)", async () => {
+    mockMetaSendText.mockResolvedValue({ idMessage: "noop:123" });
 
-    const mockFetch = mockFetchOk({});
-    vi.stubGlobal("fetch", mockFetch);
-
-    const result = await sendMessage("972500000000@c.us", "Hi");
+    const result = await sendMessage("972500000000@c.us", "hi");
 
     expect(result.idMessage).toMatch(/^noop:/);
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(vi.mocked(logger.warn)).toHaveBeenCalled();
-
-    Object.assign(envWithCreds, saved);
   });
 });
 
-// ---------------------------------------------------------------------------
-// sendInteractiveButtons — uncapped + GreenAPI shape
-// ---------------------------------------------------------------------------
+describe("sendInteractiveButtons — Meta interactive dispatch", () => {
+  beforeEach(() => vi.clearAllMocks());
 
-describe("sendInteractiveButtons — >3 buttons (uncapped)", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  it("routes to the meta interactive transport with buttons + footer", async () => {
+    mockMetaSendInteractive.mockResolvedValue({ idMessage: "wamid.BTN" });
 
-  it("accepts 7 buttons and POSTs to sendInteractiveButtonsReply with correct shape", async () => {
-    const mockFetch = mockFetchOk({ idMessage: "btn-msg-1" });
-    vi.stubGlobal("fetch", mockFetch);
+    const buttons = [{ buttonId: "a", buttonText: "A" }];
+    const result = await sendInteractiveButtons("972500000000@c.us", "pick", buttons, "foot");
+
+    expect(result.idMessage).toBe("wamid.BTN");
+    expect(mockMetaSendInteractive).toHaveBeenCalledWith("972500000000", "pick", buttons, "foot");
+  });
+
+  it("accepts 7 buttons (uncapped at this layer — Meta transport enforces its own list cap)", async () => {
+    mockMetaSendInteractive.mockResolvedValue({ idMessage: "wamid.BTN7" });
 
     const buttons = Array.from({ length: 7 }, (_, i) => ({
       buttonId: `opt_${i}`,
@@ -126,186 +126,45 @@ describe("sendInteractiveButtons — >3 buttons (uncapped)", () => {
 
     const result = await sendInteractiveButtons("972500000000@c.us", "Pick one", buttons);
 
-    expect(result.idMessage).toBe("btn-msg-1");
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain("/waInstance7100000001/sendInteractiveButtonsReply/test-conv-token");
-
-    const body = JSON.parse(init.body as string) as {
-      chatId: string;
-      body: string;
-      buttons: { buttonId: string; buttonText: string }[];
-    };
-    expect(body.chatId).toBe("972500000000@c.us");
-    expect(body.body).toBe("Pick one");
-    expect(body.buttons).toHaveLength(7);
-    expect(body.buttons[0]).toMatchObject({ buttonId: "opt_0", buttonText: "Option 0" });
-  });
-
-  it("includes optional footer when provided", async () => {
-    const mockFetch = mockFetchOk({ idMessage: "btn-msg-2" });
-    vi.stubGlobal("fetch", mockFetch);
-
-    const buttons = [{ buttonId: "a", buttonText: "A" }, { buttonId: "b", buttonText: "B" }];
-    await sendInteractiveButtons("972500000000@c.us", "body", buttons, "my footer");
-
-    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string) as Record<string, unknown>;
-    expect(body.footer).toBe("my footer");
-  });
-
-  it("omits footer key when not provided", async () => {
-    const mockFetch = mockFetchOk({ idMessage: "btn-msg-3" });
-    vi.stubGlobal("fetch", mockFetch);
-
-    const buttons = [{ buttonId: "a", buttonText: "A" }];
-    await sendInteractiveButtons("972500000000@c.us", "body", buttons);
-
-    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string) as Record<string, unknown>;
-    expect(body).not.toHaveProperty("footer");
-  });
-
-  it("throws AppError(400) when no buttons provided", async () => {
-    await expect(sendInteractiveButtons("972500000000@c.us", "body", [])).rejects.toMatchObject({
-      statusCode: 400,
-      code: "INVALID_BUTTONS",
-    });
-  });
-
-  it("throws AppError(400) when a buttonText exceeds 25 chars", async () => {
-    const buttons = [{ buttonId: "x", buttonText: "A".repeat(26) }];
-    await expect(sendInteractiveButtons("972500000000@c.us", "body", buttons)).rejects.toMatchObject({
-      statusCode: 400,
-      code: "INVALID_BUTTON_TEXT",
-    });
-  });
-
-  it("returns noop and logs warn when creds are blank", async () => {
-    const saved = { ...envWithCreds };
-    envWithCreds.GREENAPI_ID_INSTANCE = undefined as unknown as string;
-    envWithCreds.GREENAPI_API_TOKEN = undefined as unknown as string;
-    envWithCreds.GREENAPI_BASE_URL = undefined as unknown as string;
-
-    const mockFetch = mockFetchOk({});
-    vi.stubGlobal("fetch", mockFetch);
-
-    const buttons = [{ buttonId: "a", buttonText: "A" }];
-    const result = await sendInteractiveButtons("972500000000@c.us", "body", buttons);
-
-    expect(result.idMessage).toMatch(/^noop:/);
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(vi.mocked(logger.warn)).toHaveBeenCalled();
-
-    Object.assign(envWithCreds, saved);
+    expect(result.idMessage).toBe("wamid.BTN7");
+    expect(mockMetaSendInteractive).toHaveBeenCalledWith("972500000000", "Pick one", buttons, undefined);
   });
 });
 
-// ---------------------------------------------------------------------------
-// sendTyping — no-op when creds are blank
-// ---------------------------------------------------------------------------
-
-describe("sendTyping — creds guard", () => {
+describe("sendTyping / sendMessageWithTyping / sendInteractiveButtonsWithTyping", () => {
   beforeEach(() => vi.clearAllMocks());
-  afterEach(() => vi.unstubAllGlobals());
 
-  it("skips the fetch and logs warn when creds are blank", async () => {
-    const saved = { ...envWithCreds };
-    envWithCreds.GREENAPI_ID_INSTANCE = undefined as unknown as string;
-    envWithCreds.GREENAPI_API_TOKEN = undefined as unknown as string;
-    envWithCreds.GREENAPI_BASE_URL = undefined as unknown as string;
-
-    const mockFetch = vi.fn();
-    vi.stubGlobal("fetch", mockFetch);
-
-    await sendTyping("972500000000@c.us");
-
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(vi.mocked(logger.warn)).toHaveBeenCalled();
-
-    Object.assign(envWithCreds, saved);
+  it("sendTyping resolves without throwing", async () => {
+    await expect(sendTyping("972500000000@c.us")).resolves.toBeUndefined();
   });
 
-  it("fires fetch when creds are set", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("fetch", mockFetch);
+  it("sendMessageWithTyping routes to the meta transport", async () => {
+    mockMetaSendText.mockResolvedValue({ idMessage: "wamid.TYPED" });
 
-    await sendTyping("972500000000@c.us", 1000);
+    const result = await sendMessageWithTyping("972500000000@c.us", "hello", 10);
 
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const [url] = mockFetch.mock.calls[0] as [string];
-    expect(url).toContain("/sendTyping/test-conv-token");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Dispatcher — meta channel routing
-// ---------------------------------------------------------------------------
-
-describe("dispatcher — meta channel routing", () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("meta creds set + greenapi creds blank → sendMessage routes to the meta transport (no DB lookup)", async () => {
-    const saved = { ...envWithCreds };
-    envWithCreds.GREENAPI_ID_INSTANCE = undefined as unknown as string;
-    envWithCreds.GREENAPI_API_TOKEN = undefined as unknown as string;
-    envWithCreds.GREENAPI_BASE_URL = undefined as unknown as string;
-    envWithCreds.META_ACCESS_TOKEN = "meta-token";
-    envWithCreds.META_PHONE_NUMBER_ID = "1252996454555154";
-
-    mockMetaSendText.mockResolvedValue({ idMessage: "wamid.TEST" });
-    const mockFetch = vi.fn();
-    vi.stubGlobal("fetch", mockFetch);
-
-    const result = await sendMessage("972500000000@c.us", "שלום");
-
-    expect(result.idMessage).toBe("wamid.TEST");
-    expect(mockMetaSendText).toHaveBeenCalledOnce();
-    expect(mockMetaSendText).toHaveBeenCalledWith("972500000000", "שלום");
-    expect(mockFetch).not.toHaveBeenCalled();
-
-    Object.assign(envWithCreds, saved);
+    expect(result.idMessage).toBe("wamid.TYPED");
+    expect(mockMetaSendText).toHaveBeenCalledWith("972500000000", "hello");
   });
 
-  it("meta creds set + greenapi creds blank → buttons route to the meta interactive transport", async () => {
-    const saved = { ...envWithCreds };
-    envWithCreds.GREENAPI_ID_INSTANCE = undefined as unknown as string;
-    envWithCreds.GREENAPI_API_TOKEN = undefined as unknown as string;
-    envWithCreds.GREENAPI_BASE_URL = undefined as unknown as string;
-    envWithCreds.META_ACCESS_TOKEN = "meta-token";
-    envWithCreds.META_PHONE_NUMBER_ID = "1252996454555154";
-
-    mockMetaSendInteractive.mockResolvedValue({ idMessage: "wamid.BTN" });
+  it("sendInteractiveButtonsWithTyping routes to the meta interactive transport", async () => {
+    mockMetaSendInteractive.mockResolvedValue({ idMessage: "wamid.BTN.TYPED" });
 
     const buttons = [{ buttonId: "a", buttonText: "A" }];
-    const result = await sendInteractiveButtons("972500000000@c.us", "pick", buttons, "foot");
+    const result = await sendInteractiveButtonsWithTyping("972500000000@c.us", "pick", buttons, undefined, 10);
 
-    expect(result.idMessage).toBe("wamid.BTN");
-    expect(mockMetaSendInteractive).toHaveBeenCalledWith("972500000000", "pick", buttons, "foot");
-
-    Object.assign(envWithCreds, saved);
-  });
-
-  it("meta creds blank → greenapi fast path never touches the meta transport", async () => {
-    const mockFetch = mockFetchOk({ idMessage: "green-1" });
-    vi.stubGlobal("fetch", mockFetch);
-
-    const result = await sendMessage("972500000000@c.us", "hi");
-
-    expect(result.idMessage).toBe("green-1");
-    expect(mockMetaSendText).not.toHaveBeenCalled();
+    expect(result.idMessage).toBe("wamid.BTN.TYPED");
+    expect(mockMetaSendInteractive).toHaveBeenCalledWith("972500000000", "pick", buttons, undefined);
   });
 });
 
 describe("dispatcher — chatwoot mirror suppression", () => {
   beforeEach(() => {
-    mockMirrorOutbound.mockClear();
+    vi.clearAllMocks();
+    mockMetaSendText.mockResolvedValue({ idMessage: "wamid.MIRROR" });
   });
 
   it("default send mirrors the outbound to chatwoot", async () => {
-    vi.stubGlobal("fetch", mockFetchOk({ idMessage: "green-2" }));
-
     await sendMessage("972500000000@c.us", "bot reply");
     await new Promise((r) => setImmediate(r));
 
@@ -313,11 +172,131 @@ describe("dispatcher — chatwoot mirror suppression", () => {
   });
 
   it("skipMirror suppresses the mirror-back (agent-forwarded replies)", async () => {
-    vi.stubGlobal("fetch", mockFetchOk({ idMessage: "green-3" }));
-
     await sendMessage("972500000000@c.us", "agent reply", { skipMirror: true });
     await new Promise((r) => setImmediate(r));
 
     expect(mockMirrorOutbound).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Explicit-creds resolvers — scanCreds / opCreds / notifyCreds + `…With`
+// senders (used by op/notify/scan/timeless/commitments/unanswered-wa) —
+// untouched by the Meta-only conversational dispatch change.
+// ---------------------------------------------------------------------------
+
+describe("scanCreds / opCreds / notifyCreds", () => {
+  const saved = { ...envMock };
+  afterEach(() => Object.assign(envMock, saved));
+
+  it("scanCreds returns null when any of the three env vars is missing", () => {
+    expect(scanCreds()).toBeNull();
+  });
+
+  it("scanCreds returns creds when all three are set", () => {
+    envMock.GREENAPI_SCAN_ID_INSTANCE = "scan-id";
+    envMock.GREENAPI_SCAN_API_TOKEN = "scan-tok";
+    envMock.GREENAPI_SCAN_BASE_URL = "https://scan.api.greenapi.com";
+
+    expect(scanCreds()).toEqual({
+      idInstance: "scan-id",
+      token: "scan-tok",
+      baseUrl: "https://scan.api.greenapi.com",
+    });
+  });
+
+  it("opCreds returns null when any of the three env vars is missing", () => {
+    expect(opCreds()).toBeNull();
+  });
+
+  it("opCreds returns creds when all three are set", () => {
+    envMock.GREENAPI_OP_ID_INSTANCE = "op-id";
+    envMock.GREENAPI_OP_API_TOKEN = "op-tok";
+    envMock.GREENAPI_OP_BASE_URL = "https://op.api.greenapi.com";
+
+    expect(opCreds()).toEqual({
+      idInstance: "op-id",
+      token: "op-tok",
+      baseUrl: "https://op.api.greenapi.com",
+    });
+  });
+
+  it("notifyCreds returns null when any of the three env vars is missing", () => {
+    expect(notifyCreds()).toBeNull();
+  });
+
+  it("notifyCreds returns creds when all three are set", () => {
+    envMock.GREENAPI_NOTIFY_ID_INSTANCE = "notify-id";
+    envMock.GREENAPI_NOTIFY_API_TOKEN = "notify-tok";
+    envMock.GREENAPI_NOTIFY_BASE_URL = "https://notify.api.greenapi.com";
+
+    expect(notifyCreds()).toEqual({
+      idInstance: "notify-id",
+      token: "notify-tok",
+      baseUrl: "https://notify.api.greenapi.com",
+    });
+  });
+});
+
+const OP_CREDS = { idInstance: "op-id", token: "op-tok", baseUrl: "https://op.api.greenapi.com" };
+
+describe("…With helpers — explicit creds, no env lookup", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sendMessageWith POSTs to sendMessage with the given creds", async () => {
+    const mockFetch = mockFetchOk({ idMessage: "with-msg-1" });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await sendMessageWith(OP_CREDS, "972500000000@c.us", "hi");
+
+    expect(result.idMessage).toBe("with-msg-1");
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain(`/waInstance${OP_CREDS.idInstance}/sendMessage/${OP_CREDS.token}`);
+    const body = JSON.parse(init.body as string) as { chatId: string; message: string };
+    expect(body.chatId).toBe("972500000000@c.us");
+    expect(body.message).toBe("hi");
+  });
+
+  it("sendInteractiveButtonsWith POSTs the GreenAPI buttons shape", async () => {
+    const mockFetch = mockFetchOk({ idMessage: "with-btn-1" });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const buttons = [{ buttonId: "a", buttonText: "A" }];
+    const result = await sendInteractiveButtonsWith(OP_CREDS, "972500000000@c.us", "body", buttons, "footer");
+
+    expect(result.idMessage).toBe("with-btn-1");
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.footer).toBe("footer");
+  });
+
+  it("sendInteractiveButtonsWith throws AppError(400) for empty buttons", async () => {
+    await expect(
+      sendInteractiveButtonsWith(OP_CREDS, "972500000000@c.us", "body", []),
+    ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_BUTTONS" });
+  });
+
+  it("getChatHistoryWith POSTs getChatHistory with the given creds", async () => {
+    const mockFetch = mockFetchOk([]);
+    vi.stubGlobal("fetch", mockFetch);
+
+    await getChatHistoryWith(OP_CREDS, "972500000000@c.us", 5);
+
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/getChatHistory/");
+    const body = JSON.parse(init.body as string) as { chatId: string; count: number };
+    expect(body).toEqual({ chatId: "972500000000@c.us", count: 5 });
+  });
+
+  it("lastIncomingMessagesWith / lastOutgoingMessagesWith hit the journal endpoints", async () => {
+    const mockFetch = mockFetchOk([]);
+    vi.stubGlobal("fetch", mockFetch);
+
+    await lastIncomingMessagesWith(OP_CREDS, 60);
+    await lastOutgoingMessagesWith(OP_CREDS, 60);
+
+    const urls = mockFetch.mock.calls.map((c) => c[0] as string);
+    expect(urls[0]).toContain("/lastIncomingMessages/");
+    expect(urls[1]).toContain("/lastOutgoingMessages/");
   });
 });

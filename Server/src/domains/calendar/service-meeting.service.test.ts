@@ -46,64 +46,25 @@ vi.mock("../whatsapp/whatsapp.util.js", () => ({
 import { checkServiceMeetingEligibility } from "./service-meeting.service.js";
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests — the biennial reminder send is DISABLED (2026-07-15): the SELECT
+// still runs, but sendServiceDueToClient no-ops before any WhatsApp send or
+// UPDATE.
 // ---------------------------------------------------------------------------
 
-describe("checkServiceMeetingEligibility", () => {
+describe("checkServiceMeetingEligibility — disabled send (no-op)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("eligible client + successful send: calls sendMessageWithTyping and runs both UPDATEs", async () => {
-    // 1st call: SELECT
+  it("eligible client: no send, no UPDATEs — only the SELECT runs", async () => {
     mockPoolQuery.mockResolvedValueOnce({
       rows: [{ id: "client-1", full_name: "דני כהן", phone: "0501234567" }],
     });
-    // 2nd call: UPDATE clients
-    mockPoolQuery.mockResolvedValueOnce({ rows: [] });
-    // 3rd call: UPDATE conversations
-    mockPoolQuery.mockResolvedValueOnce({ rows: [] });
-
-    mockSendMessageWithTyping.mockResolvedValueOnce(undefined);
 
     await checkServiceMeetingEligibility();
 
-    // sendMessageWithTyping called with correct chatId
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
-    const [chatId, body] = mockSendMessageWithTyping.mock.calls[0] as [string, string];
-    expect(chatId).toBe("0501234567@c.us");
-
-    // Body contains the 2-year line and NOT a reply nudge or 📅
-    expect(body).toContain("עברו שנתיים");
-    expect(body).not.toContain("📅");
-    expect(body).not.toContain("תשיב");
-    expect(body).not.toContain("מתי נוח");
-
-    // pool.query called 3 times total
-    expect(mockPoolQuery).toHaveBeenCalledTimes(3);
-
-    // 2nd call is the clients UPDATE
-    const [clientsUpdateSql] = mockPoolQuery.mock.calls[1] as [string, unknown[]];
-    expect(clientsUpdateSql).toContain("last_service_reminder_at = CURRENT_DATE");
-    expect(clientsUpdateSql).toContain("intake_state");
-
-    // 3rd call is the conversations UPDATE
-    const [convUpdateSql] = mockPoolQuery.mock.calls[2] as [string, unknown[]];
-    expect(convUpdateSql).toContain("bot_paused = false");
-  });
-
-  it("send fails: no UPDATE queries are issued after the failed send", async () => {
-    mockPoolQuery.mockResolvedValueOnce({
-      rows: [{ id: "client-2", full_name: "שרה לוי", phone: "0509876543" }],
-    });
-
-    mockSendMessageWithTyping.mockRejectedValueOnce(new Error("network error"));
-
-    await checkServiceMeetingEligibility();
-
-    // Only SELECT ran; no UPDATEs
+    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
     expect(mockPoolQuery).toHaveBeenCalledOnce();
-    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
   });
 
   it("no eligible rows: no sends and no updates", async () => {
@@ -112,7 +73,20 @@ describe("checkServiceMeetingEligibility", () => {
     await checkServiceMeetingEligibility();
 
     expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
-    // Only the SELECT
+    expect(mockPoolQuery).toHaveBeenCalledOnce();
+  });
+
+  it("multiple eligible clients: still no sends, no updates for any of them", async () => {
+    mockPoolQuery.mockResolvedValueOnce({
+      rows: [
+        { id: "client-1", full_name: "דני כהן", phone: "0501234567" },
+        { id: "client-2", full_name: "שרה לוי", phone: "0509876543" },
+      ],
+    });
+
+    await checkServiceMeetingEligibility();
+
+    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
     expect(mockPoolQuery).toHaveBeenCalledOnce();
   });
 });

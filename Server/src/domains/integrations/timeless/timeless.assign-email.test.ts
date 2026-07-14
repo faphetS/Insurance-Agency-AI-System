@@ -116,133 +116,22 @@ import { sendStaffPickerToOwner, sendClientSummaryEmail } from "./timeless.servi
 const NOTIFY_CREDS = { idInstance: "notify-id", token: "notify-token", baseUrl: "https://notify.api.greenapi.com" };
 
 // ---------------------------------------------------------------------------
-// sendStaffPickerToOwner
+// sendStaffPickerToOwner — DISABLED (2026-07-15): no-ops before any DB read/
+// claim or WhatsApp send. Owner sends are no longer needed.
 // ---------------------------------------------------------------------------
-describe("sendStaffPickerToOwner", () => {
+describe("sendStaffPickerToOwner — disabled (no-op)", () => {
   const MEETING_ID = "meeting-picker-1";
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockNotifyCreds.mockReturnValue(NOTIFY_CREDS);
-    mockSendInteractiveButtonsWith.mockResolvedValue({ idMessage: "btn-msg" });
   });
 
-  it("calls sendInteractiveButtons with chatId 639219909210@c.us and 5-button array when 5 active staff", async () => {
-    const staffList = [
-      { id: "s1", full_name: "אריאל כהן" },
-      { id: "s2", full_name: "דנה לוי" },
-      { id: "s3", full_name: "יוסי ברק" },
-      { id: "s4", full_name: "נועה פרץ" },
-      { id: "s5", full_name: "מיכל שאול" },
-    ];
-
-    const staffBuilder = makeBuilder({ data: staffList, error: null });
-    const claimBuilder = makeBuilder({ data: { id: MEETING_ID }, error: null });
-    setupFromSequence([staffBuilder, claimBuilder]);
-
-    await sendStaffPickerToOwner(MEETING_ID);
-
-    expect(mockSendInteractiveButtonsWith).toHaveBeenCalledOnce();
-    const [creds, chatId, body, buttons] = mockSendInteractiveButtonsWith.mock.calls[0] as [
-      unknown,
-      string,
-      string,
-      { buttonId: string; buttonText: string }[],
-    ];
-    expect(creds).toEqual(NOTIFY_CREDS);
-    expect(chatId).toBe("639219909210@c.us");
-    expect(body).toBe("👤 בחר/י את הגורם המטפל בלקוח:");
-    expect(buttons).toHaveLength(5);
-    expect(buttons[0]).toMatchObject({
-      buttonId: `assign_staff:${MEETING_ID}:s1`,
-      buttonText: "אריאל כהן",
-    });
-  });
-
-  it("buttonId format is assign_staff:<meetingId>:<staffId>", async () => {
-    const staffList = [{ id: "staff-abc", full_name: "Test Staff" }];
-    const staffBuilder = makeBuilder({ data: staffList, error: null });
-    const claimBuilder = makeBuilder({ data: { id: MEETING_ID }, error: null });
-    setupFromSequence([staffBuilder, claimBuilder]);
-
-    await sendStaffPickerToOwner(MEETING_ID);
-
-    const [, , , buttons] = mockSendInteractiveButtonsWith.mock.calls[0] as [
-      unknown,
-      string,
-      string,
-      { buttonId: string; buttonText: string }[],
-    ];
-    expect(buttons[0].buttonId).toBe(`assign_staff:${MEETING_ID}:staff-abc`);
-  });
-
-  it("truncates full_name >25 chars to 25 in buttonText", async () => {
-    const longName = "א".repeat(30);
-    const staffList = [{ id: "s-long", full_name: longName }];
-    const staffBuilder = makeBuilder({ data: staffList, error: null });
-    const claimBuilder = makeBuilder({ data: { id: MEETING_ID }, error: null });
-    setupFromSequence([staffBuilder, claimBuilder]);
-
-    await sendStaffPickerToOwner(MEETING_ID);
-
-    const [, , , buttons] = mockSendInteractiveButtonsWith.mock.calls[0] as [
-      unknown,
-      string,
-      string,
-      { buttonId: string; buttonText: string }[],
-    ];
-    expect(buttons[0].buttonText).toHaveLength(25);
-    expect(buttons[0].buttonText).toBe(longName.slice(0, 25));
-  });
-
-  it("does NOT call sendInteractiveButtons when staff list is empty", async () => {
-    const staffBuilder = makeBuilder({ data: [], error: null });
-    setupFromSequence([staffBuilder]);
-
+  it("does not call sendInteractiveButtons or touch the DB", async () => {
     await sendStaffPickerToOwner(MEETING_ID);
 
     expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
-  });
-
-  it("does NOT call sendInteractiveButtons when staff select returns null", async () => {
-    const staffBuilder = makeBuilder({ data: null, error: null });
-    setupFromSequence([staffBuilder]);
-
-    await sendStaffPickerToOwner(MEETING_ID);
-
-    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
-  });
-
-  it("does NOT call sendInteractiveButtons when idempotency claim returns null (already sent)", async () => {
-    const staffList = [{ id: "s1", full_name: "Test" }];
-    const staffBuilder = makeBuilder({ data: staffList, error: null });
-    const claimBuilder = makeBuilder({ data: null, error: null });
-    setupFromSequence([staffBuilder, claimBuilder]);
-
-    await sendStaffPickerToOwner(MEETING_ID);
-
-    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
-  });
-
-  it("allows >3 buttons (7 staff members — no cap)", async () => {
-    const staffList = Array.from({ length: 7 }, (_, i) => ({
-      id: `s${i}`,
-      full_name: `Staff ${i}`,
-    }));
-    const staffBuilder = makeBuilder({ data: staffList, error: null });
-    const claimBuilder = makeBuilder({ data: { id: MEETING_ID }, error: null });
-    setupFromSequence([staffBuilder, claimBuilder]);
-
-    await sendStaffPickerToOwner(MEETING_ID);
-
-    const [, , , buttons] = mockSendInteractiveButtonsWith.mock.calls[0] as [
-      unknown,
-      string,
-      string,
-      { buttonId: string; buttonText: string }[],
-    ];
-    expect(buttons.length).toBeGreaterThan(3);
-    expect(buttons).toHaveLength(7);
+    expect(mockFromImpl).not.toHaveBeenCalled();
   });
 });
 

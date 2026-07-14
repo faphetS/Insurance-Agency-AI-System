@@ -1,5 +1,7 @@
 import { pool } from "../../lib/db.js";
 import { logger } from "../../config/logger.js";
+// Only referenced from the commented-out body of the disabled send below.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { sendMessageWithTyping } from "../whatsapp/whatsapp.service.js";
 import { toChatId } from "../whatsapp/whatsapp.util.js";
 
@@ -8,6 +10,12 @@ async function sendServiceDueToClient(client: {
   full_name: string | null;
   phone: string | null;
 }): Promise<boolean> {
+  // DISABLED (owner sends not needed 2026-07-15) — remove this early return
+  // (and uncomment the body below) to restore.
+  logger.info({ clientId: client.id }, "sendServiceDueToClient: disabled — skipping");
+  return false;
+
+  /*
   try {
     const chatId = toChatId(client.phone ?? null);
     if (!chatId) {
@@ -29,6 +37,7 @@ async function sendServiceDueToClient(client: {
     logger.error({ err, clientId: client.id }, "sendServiceDueToClient: unexpected error");
     return false;
   }
+  */
 }
 
 export async function checkServiceMeetingEligibility(): Promise<void> {

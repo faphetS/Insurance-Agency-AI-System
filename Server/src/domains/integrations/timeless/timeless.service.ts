@@ -3,8 +3,13 @@ import { supabaseAdmin } from "../../../config/supabase.js";
 import { env } from "../../../config/env.js";
 import { logger } from "../../../config/logger.js";
 import { AppError } from "../../../lib/errors.js";
+// Only referenced from the commented-out bodies of the disabled owner sends below
+// (sendSummaryToOwner / sendStaffPickerToOwner) — kept imported for a quick restore.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { ensureHebrew } from "../../ai/ai.service.js";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { notifyCreds, sendMessageWith, sendInteractiveButtonsWith } from "../../whatsapp/whatsapp.service.js";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { toChatId } from "../../whatsapp/whatsapp.util.js";
 import { sendOwnerEmail } from "../google/google.gmail.js";
 import {
@@ -238,6 +243,8 @@ export function resolveSummaryDoc(
   return undefined;
 }
 
+// Only referenced from the commented-out body of the disabled sendSummaryToOwner below.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function formatMeetingDate(iso: string): string {
   return new Intl.DateTimeFormat("he-IL", {
     timeZone: TZ,
@@ -251,6 +258,12 @@ function formatMeetingDate(iso: string): string {
 }
 
 export async function sendSummaryToOwner(meetingId: string, clientId: string): Promise<void> {
+  // DISABLED (owner sends not needed 2026-07-15) — remove this early return
+  // (and uncomment the body below) to restore.
+  logger.info({ meetingId, clientId }, "timeless.sendSummaryToOwner: disabled — skipping");
+  return;
+
+  /*
   const chatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
   if (!env.SUMMARY_RECIPIENT_PHONE || !chatId) {
     logger.warn({ meetingId }, "timeless: no SUMMARY_RECIPIENT_PHONE configured — skipping owner send");
@@ -335,9 +348,16 @@ export async function sendSummaryToOwner(meetingId: string, clientId: string): P
       .eq("id", meetingId);
     throw err;
   }
+  */
 }
 
 export async function sendStaffPickerToOwner(meetingId: string): Promise<void> {
+  // DISABLED (owner sends not needed 2026-07-15) — remove this early return
+  // (and uncomment the body below) to restore.
+  logger.info({ meetingId }, "timeless.sendStaffPickerToOwner: disabled — skipping");
+  return;
+
+  /*
   const chatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
   if (!chatId) {
     logger.warn({ meetingId }, "timeless.sendStaffPickerToOwner: no SUMMARY_RECIPIENT_PHONE configured");
@@ -383,6 +403,7 @@ export async function sendStaffPickerToOwner(meetingId: string): Promise<void> {
     return;
   }
   await sendInteractiveButtonsWith(creds, chatId, "👤 בחר/י את הגורם המטפל בלקוח:", buttons);
+  */
 }
 
 export async function sendClientSummaryEmail(meetingId: string, clientId: string): Promise<void> {
