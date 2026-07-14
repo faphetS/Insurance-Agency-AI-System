@@ -48,58 +48,6 @@ async function requestWith<T>(
   return data;
 }
 
-function envCreds(): GreenApiCreds | null {
-  const id = env.GREENAPI_ID_INSTANCE;
-  const tok = env.GREENAPI_API_TOKEN;
-  const url = env.GREENAPI_BASE_URL;
-  if (!id || !tok || !url) return null;
-  return { idInstance: id, token: tok, baseUrl: url };
-}
-
-async function request<T>(
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<T> {
-  const creds = envCreds();
-  if (!creds) {
-    throw new AppError(503, "Conversational GreenAPI creds not configured", "GREENAPI_NOT_CONFIGURED");
-  }
-  return requestWith<T>(creds, method, path, body);
-}
-
-function validateGreenapiButtons(buttons: { buttonId: string; buttonText: string }[]): void {
-  if (buttons.length === 0) {
-    throw new AppError(400, "buttons must have at least 1 item", "INVALID_BUTTONS");
-  }
-  for (const btn of buttons) {
-    if (btn.buttonText.length > 25) {
-      throw new AppError(
-        400,
-        `buttonText "${btn.buttonText}" exceeds 25 characters`,
-        "INVALID_BUTTON_TEXT",
-      );
-    }
-  }
-}
-
-function interactiveButtonsBody(
-  chatId: string,
-  body: string,
-  buttons: { buttonId: string; buttonText: string }[],
-  footer?: string,
-): Record<string, unknown> {
-  return {
-    chatId,
-    body,
-    ...(footer ? { footer } : {}),
-    buttons: buttons.map((b) => ({
-      buttonId: b.buttonId,
-      buttonText: b.buttonText,
-    })),
-  };
-}
-
 export async function sendMessage(
   chatId: string,
   text: string,
@@ -109,17 +57,6 @@ export async function sendMessage(
     type: "text",
     text,
     skipMirror: opts?.skipMirror,
-    greenapi: async () => {
-      const creds = envCreds();
-      if (!creds) {
-        logger.warn({ chatId }, "sendMessage: conversational GreenAPI creds not set — skipping");
-        return { idMessage: `noop:${Date.now()}` };
-      }
-      return requestWith<{ idMessage: string }>(creds, "POST", "sendMessage", {
-        chatId,
-        message: text,
-      });
-    },
   });
 }
 
@@ -134,63 +71,6 @@ export async function sendFileByUrl(
     url: urlFile,
     fileName,
     caption,
-    greenapi: async () => {
-      const creds = envCreds();
-      if (!creds) {
-        logger.warn({ chatId }, "sendFileByUrl: conversational GreenAPI creds not set — skipping");
-        return { idMessage: `noop:${Date.now()}` };
-      }
-      return requestWith<{ idMessage: string }>(creds, "POST", "sendFileByUrl", {
-        chatId,
-        urlFile,
-        fileName,
-        ...(caption ? { caption } : {}),
-      });
-    },
-  });
-}
-
-export async function getState(): Promise<{ stateInstance: string }> {
-  return request<{ stateInstance: string }>("GET", "getStateInstance");
-}
-
-export async function getQrCode(): Promise<{
-  type: "qrCode" | "alreadyLogged" | "error";
-  message: string;
-}> {
-  return request<{ type: "qrCode" | "alreadyLogged" | "error"; message: string }>(
-    "GET",
-    "qr",
-  );
-}
-
-export async function sendButtons(
-  chatId: string,
-  body: string,
-  buttons: { buttonId: string; buttonText: string }[],
-  footer?: string,
-): Promise<{ idMessage: string }> {
-  if (buttons.length === 0) {
-    throw new AppError(400, "buttons must have at least 1 item", "INVALID_BUTTONS");
-  }
-  for (const btn of buttons) {
-    if (btn.buttonText.length > 25) {
-      throw new AppError(
-        400,
-        `buttonText "${btn.buttonText}" exceeds 25 characters`,
-        "INVALID_BUTTON_TEXT",
-      );
-    }
-  }
-
-  return request<{ idMessage: string }>("POST", "sendInteractiveButtonsReply", {
-    chatId,
-    body,
-    ...(footer ? { footer } : {}),
-    buttons: buttons.map((b) => ({
-      buttonId: b.buttonId,
-      buttonText: b.buttonText,
-    })),
   });
 }
 
@@ -205,61 +85,13 @@ export async function sendInteractiveButtons(
     body,
     buttons,
     footer,
-    greenapi: async () => {
-      const creds = envCreds();
-      if (!creds) {
-        logger.warn({ chatId, buttonCount: buttons.length }, "sendInteractiveButtons: conversational GreenAPI creds not set — skipping");
-        return { idMessage: `noop:${Date.now()}` };
-      }
-      validateGreenapiButtons(buttons);
-      return requestWith<{ idMessage: string }>(
-        creds,
-        "POST",
-        "sendInteractiveButtonsReply",
-        interactiveButtonsBody(chatId, body, buttons, footer),
-      );
-    },
   });
-}
-
-export async function setWebhookSettings(webhookUrl: string): Promise<void> {
-  await request<unknown>("POST", "setSettings", {
-    webhookUrl,
-    webhookUrlToken: env.GREENAPI_WEBHOOK_TOKEN,
-    incomingWebhook: "yes",
-    stateWebhook: "yes",
-    outgoingMessageWebhook: "yes",
-    outgoingAPIMessageWebhook: "no",
-    markIncomingMessagesReadedOnReply: "yes",
-  });
-}
-
-async function greenapiTyping(chatId: string, typingTimeMs: number): Promise<void> {
-  const creds = envCreds();
-  if (!creds) {
-    logger.warn({ chatId }, "sendTyping: conversational GreenAPI creds not set — skipping");
-    return;
-  }
-  const url = `${creds.baseUrl}/waInstance${creds.idInstance}/sendTyping/${creds.token}`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatId, typingTime: typingTimeMs }),
-    });
-  } catch (err) {
-    logger.warn({ err, chatId }, "sendTyping failed — continuing");
-  }
 }
 
 export async function sendTyping(chatId: string, typingTimeMs = 2000): Promise<void> {
   await dispatchConversationalSend(chatId, {
     type: "typing",
     typingMs: typingTimeMs,
-    greenapi: async () => {
-      await greenapiTyping(chatId, typingTimeMs);
-      return { idMessage: `noop:${Date.now()}` };
-    },
   });
 }
 
@@ -272,19 +104,6 @@ export async function sendMessageWithTyping(
     type: "text",
     text: message,
     typingMs,
-    greenapi: async () => {
-      const creds = envCreds();
-      if (!creds) {
-        logger.warn({ chatId }, "sendMessageWithTyping: conversational GreenAPI creds not set — skipping");
-        return { idMessage: `noop:${Date.now()}` };
-      }
-      await greenapiTyping(chatId, typingMs);
-      await new Promise((r) => setTimeout(r, typingMs));
-      return requestWith<{ idMessage: string }>(creds, "POST", "sendMessage", {
-        chatId,
-        message,
-      });
-    },
   });
 }
 
@@ -301,22 +120,6 @@ export async function sendInteractiveButtonsWithTyping(
     buttons,
     footer,
     typingMs,
-    greenapi: async () => {
-      const creds = envCreds();
-      if (!creds) {
-        logger.warn({ chatId, buttonCount: buttons.length }, "sendInteractiveButtonsWithTyping: conversational GreenAPI creds not set — skipping");
-        return { idMessage: `noop:${Date.now()}` };
-      }
-      await greenapiTyping(chatId, typingMs);
-      await new Promise((r) => setTimeout(r, typingMs));
-      validateGreenapiButtons(buttons);
-      return requestWith<{ idMessage: string }>(
-        creds,
-        "POST",
-        "sendInteractiveButtonsReply",
-        interactiveButtonsBody(chatId, body, buttons, footer),
-      );
-    },
   });
 }
 
@@ -347,29 +150,6 @@ async function journalGetWith(creds: GreenApiCreds, endpoint: string, minutes: n
   return (await res.json()) as GreenApiHistoryMessage[];
 }
 
-async function journalGet(endpoint: string, minutes: number): Promise<GreenApiHistoryMessage[]> {
-  const creds = envCreds();
-  if (!creds) {
-    throw new AppError(503, "Conversational GreenAPI creds not configured", "GREENAPI_NOT_CONFIGURED");
-  }
-  return journalGetWith(creds, endpoint, minutes);
-}
-
-export async function lastIncomingMessages(minutes = 1440): Promise<GreenApiHistoryMessage[]> {
-  return journalGet("lastIncomingMessages", minutes);
-}
-
-export async function lastOutgoingMessages(minutes = 1440): Promise<GreenApiHistoryMessage[]> {
-  return journalGet("lastOutgoingMessages", minutes);
-}
-
-export async function getChatHistory(
-  chatId: string,
-  count = 20,
-): Promise<GreenApiHistoryMessage[]> {
-  return request<GreenApiHistoryMessage[]>("POST", "getChatHistory", { chatId, count });
-}
-
 export async function getChatHistoryWith(
   creds: GreenApiCreds,
   chatId: string,
@@ -384,14 +164,6 @@ export async function lastIncomingMessagesWith(creds: GreenApiCreds, minutes = 1
 
 export async function lastOutgoingMessagesWith(creds: GreenApiCreds, minutes = 1440): Promise<GreenApiHistoryMessage[]> {
   return journalGetWith(creds, "lastOutgoingMessages", minutes);
-}
-
-export async function ensureHistorySettings(): Promise<void> {
-  await request<unknown>("POST", "setSettings", {
-    incomingWebhook: "yes",
-    outgoingMessageWebhook: "yes",
-    outgoingWebhook: "yes",
-  });
 }
 
 // Instance #2 is the operational line — shared with the channel scanner.
@@ -491,7 +263,7 @@ export async function sendInteractiveButtonsWith(
   });
 }
 
-// Staff-facing text — sent via the conversational GreenAPI instance. Staff numbers
+// Staff-facing text — sent via the Meta conversational transport. Staff numbers
 // are blocklisted from the lead/intake flow (isStaffChat), so reusing this line is safe.
 export async function sendStaffMessage(
   chatId: string,
@@ -500,7 +272,7 @@ export async function sendStaffMessage(
   return sendMessageWithTyping(chatId, text);
 }
 
-// Staff-facing buttons — sent via the conversational GreenAPI instance; staff numbers
+// Staff-facing buttons — sent via the Meta conversational transport; staff numbers
 // are blocklisted from intake, so reusing this line is safe.
 export async function sendStaffButtons(
   chatId: string,

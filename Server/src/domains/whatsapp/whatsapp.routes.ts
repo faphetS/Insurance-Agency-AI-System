@@ -22,8 +22,6 @@ router.patch(
   authorize("admin"),
   whatsappController.setBotPause,
 );
-router.get("/state", authenticate, authorize("admin"), whatsappController.getState);
-router.get("/qr", authenticate, authorize("admin"), whatsappController.getQrCode);
 router.post(
   "/send",
   authenticate,

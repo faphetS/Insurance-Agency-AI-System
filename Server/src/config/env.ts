@@ -46,18 +46,11 @@ const envSchema = z.object({
     .default("")
     .transform((v) => (v.trim() === "" ? [] : v.split(",").map((s) => s.trim()))),
 
-  // GreenAPI (WhatsApp gateway) — conversational bot instance (creds supplied when provisioned)
-  // All four are optional so the app boots with blank values during staged rollout.
-  GREENAPI_ID_INSTANCE: z.string().optional(),
-  GREENAPI_API_TOKEN: z.string().optional(),
-  GREENAPI_BASE_URL: z.string().optional(),
+  // Shared inbound webhook auth for POST /api/whatsapp/webhook — used by the
+  // operational (GREENAPI_OP_*) and NOTIFY (GREENAPI_NOTIFY_*) lines.
   GREENAPI_WEBHOOK_TOKEN: z.string().optional(),
 
-  // Conversational transport default when both GreenAPI and Meta creds are set
-  // and the conversation has no stamped channel yet.
-  WHATSAPP_PROVIDER: z.enum(["greenapi", "meta"]).default("greenapi"),
-
-  // Meta WhatsApp Cloud API — conversational transport (all blank keeps it dormant)
+  // Meta WhatsApp Cloud API — sole conversational transport (all blank keeps it dormant)
   META_VERIFY_TOKEN: z.string().optional(),
   META_ACCESS_TOKEN: z.string().optional(),
   META_PHONE_NUMBER_ID: z.string().optional(),
