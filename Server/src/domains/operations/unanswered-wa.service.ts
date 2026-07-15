@@ -203,7 +203,16 @@ interface OpWebhookBody {
   typeWebhook?: string;
   senderData?: { chatId?: string; senderName?: string };
   timestamp?: number; // unix seconds
+  messageData?: {
+    typeMessage?: string;
+    textMessageData?: { textMessage?: string };
+    extendedTextMessageData?: { text?: string };
+  };
 }
+
+// Matches exactly one full emoji (incl. ZWJ sequences, skin tones, flags).
+// Constructor form because the "v" flag needs a runtime regex under our TS target.
+const SINGLE_EMOJI_RE = new RegExp("^\\p{RGI_Emoji}$", "v");
 
 export async function handleOpInstanceEvent(rawBody: unknown): Promise<void> {
   const body = rawBody as OpWebhookBody;
@@ -215,8 +224,11 @@ export async function handleOpInstanceEvent(rawBody: unknown): Promise<void> {
   const chatId = body.senderData?.chatId;
   if (!chatId) return;
 
-  const typeMessage = (rawBody as { messageData?: { typeMessage?: string } }).messageData?.typeMessage;
-  const isReaction = typeMessage === "reactionMessage";
+  const typeMessage = body.messageData?.typeMessage;
+  const text =
+    body.messageData?.textMessageData?.textMessage ?? body.messageData?.extendedTextMessageData?.text ?? "";
+  // A lone typed emoji is a reaction in spirit ("👍" sent as a message) — owner rule.
+  const isReaction = typeMessage === "reactionMessage" || SINGLE_EMOJI_RE.test(text.trim());
 
   // Didi sent anything (text, media, or a reaction) on his own phone — he's handling
   // it himself, so cancel the watch and day-block the chat's automation.

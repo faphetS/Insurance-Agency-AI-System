@@ -236,6 +236,41 @@ describe("handleOpInstanceEvent — new chat, no active row", () => {
     expect(insertCall).toBeUndefined();
   });
 
+  it.each(["👍", "🙏", "❤️", "👍🏽", " 😂 "])(
+    "a typed single-emoji message (%s) with no active row is never tracked",
+    async (emoji) => {
+      await handleOpInstanceEvent({
+        typeWebhook: "incomingMessageReceived",
+        senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+        messageData: { typeMessage: "textMessage", textMessageData: { textMessage: emoji } },
+        timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000),
+      });
+
+      const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
+        String(sql).includes("INSERT INTO public.wa_unanswered"),
+      );
+      expect(insertCall).toBeUndefined();
+    },
+  );
+
+  it("a text message containing more than a lone emoji still starts tracking", async () => {
+    mockPoolQuery
+      .mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })) // getActiveRow -> none
+      .mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })); // isChatBlockedToday -> not blocked
+
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+      messageData: { typeMessage: "textMessage", textMessageData: { textMessage: "תודה 👍" } },
+      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000),
+    });
+
+    const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO public.wa_unanswered"),
+    );
+    expect(insertCall).toBeDefined();
+  });
+
   it("does not create a watching row when the chat is day-blocked", async () => {
     mockPoolQuery
       .mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })) // getActiveRow -> none
