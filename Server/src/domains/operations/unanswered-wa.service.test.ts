@@ -221,6 +221,37 @@ describe("handleOpInstanceEvent — new chat, no active row", () => {
       (env as Record<string, unknown>)["UNANSWERED_WINDOW_DISABLED"] = undefined;
     }
   });
+
+  it("a reaction with no active row is never tracked (no watching row created)", async () => {
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+      messageData: { typeMessage: "reactionMessage" },
+      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000), // 13:00 IST summer
+    });
+
+    const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO public.wa_unanswered"),
+    );
+    expect(insertCall).toBeUndefined();
+  });
+
+  it("does not create a watching row when the chat is day-blocked", async () => {
+    mockPoolQuery
+      .mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })) // getActiveRow -> none
+      .mockImplementationOnce(() => Promise.resolve({ rows: [{ x: 1 }], rowCount: 1 })); // isChatBlockedToday -> blocked
+
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000), // 13:00 IST summer
+    });
+
+    const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO public.wa_unanswered"),
+    );
+    expect(insertCall).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -247,7 +278,7 @@ describe("handleOpInstanceEvent — state transitions", () => {
     expect(mockPoolQuery).toHaveBeenCalledTimes(1); // only the active-row select
   });
 
-  it("awaiting_reply + incoming message: resolves the row (any reply cancels follow-up)", async () => {
+  it("awaiting_reply + incoming message: resolves the row WITH day-block (any reply cancels follow-up)", async () => {
     mockPoolQuery.mockImplementationOnce(() =>
       Promise.resolve({ rows: [{ id: "row-2", chat_id: "972501111111@c.us", state: "awaiting_reply" }] }),
     );
@@ -257,22 +288,61 @@ describe("handleOpInstanceEvent — state transitions", () => {
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
     });
 
-    const resolveCall = mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("state='resolved'"));
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+    );
     expect(resolveCall).toBeDefined();
     expect(resolveCall![1]).toEqual(["row-2"]);
   });
 
-  it("outgoingMessageReceived (Didi typed manually): resolves the active row for the chat", async () => {
+  it("awaiting_reply + a reaction: also resolves the row WITH day-block", async () => {
+    mockPoolQuery.mockImplementationOnce(() =>
+      Promise.resolve({ rows: [{ id: "row-2b", chat_id: "972501111111@c.us", state: "awaiting_reply" }] }),
+    );
+
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+      messageData: { typeMessage: "reactionMessage" },
+    });
+
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+    );
+    expect(resolveCall).toBeDefined();
+    expect(resolveCall![1]).toEqual(["row-2b"]);
+  });
+
+  it("outgoingMessageReceived (Didi typed manually): resolves the active row for the chat WITH day-block", async () => {
     await handleOpInstanceEvent({
       typeWebhook: "outgoingMessageReceived",
       senderData: { chatId: "972501111111@c.us" },
     });
 
     const resolveCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("chat_id=$1"),
+      ([sql]) =>
+        String(sql).includes("state='resolved'") &&
+        String(sql).includes("chat_id=$1") &&
+        String(sql).includes("blocks_rest_of_day=true"),
     );
     expect(resolveCall).toBeDefined();
     expect(mockExtractButtonId).not.toHaveBeenCalled();
+  });
+
+  it("outgoingMessageReceived with a reactionMessage: also resolves the active row WITH day-block", async () => {
+    await handleOpInstanceEvent({
+      typeWebhook: "outgoingMessageReceived",
+      senderData: { chatId: "972501111111@c.us" },
+      messageData: { typeMessage: "reactionMessage" },
+    });
+
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) =>
+        String(sql).includes("state='resolved'") &&
+        String(sql).includes("chat_id=$1") &&
+        String(sql).includes("blocks_rest_of_day=true"),
+    );
+    expect(resolveCall).toBeDefined();
   });
 
   it("outgoingAPIMessageReceived is ignored completely — no DB queries", async () => {
@@ -285,7 +355,7 @@ describe("handleOpInstanceEvent — state transitions", () => {
     expect(mockFromImpl).not.toHaveBeenCalled();
   });
 
-  it("pending_followup + ua_ok: resolves WITHOUT alerting Didi", async () => {
+  it("pending_followup + ua_ok: resolves WITH day-block, WITHOUT alerting Didi", async () => {
     mockPoolQuery.mockImplementationOnce(() =>
       Promise.resolve({ rows: [{ id: "row-3", chat_id: "972501111111@c.us", state: "pending_followup" }] }),
     );
@@ -297,12 +367,14 @@ describe("handleOpInstanceEvent — state transitions", () => {
     });
 
     expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
-    const resolveCall = mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("state='resolved'"));
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+    );
     expect(resolveCall).toBeDefined();
     expect(resolveCall![1]).toEqual(["row-3"]);
   });
 
-  it("pending_followup + ua_callback: alerts Didi via notifyOwnerOps, then resolves", async () => {
+  it("pending_followup + ua_callback: alerts Didi via notifyOwnerOps, then resolves WITH day-block", async () => {
     mockPoolQuery.mockImplementationOnce(() =>
       Promise.resolve({ rows: [{ id: "row-4", chat_id: "972501111111@c.us", state: "pending_followup" }] }),
     );
@@ -317,12 +389,14 @@ describe("handleOpInstanceEvent — state transitions", () => {
     const [text] = mockNotifyOwnerOps.mock.calls[0] as [string];
     expect(text).toContain("Yossi");
     expect(text).toContain("972501111111");
-    const resolveCall = mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("state='resolved'"));
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+    );
     expect(resolveCall).toBeDefined();
     expect(resolveCall![1]).toEqual(["row-4"]);
   });
 
-  it("pending_followup + non-button message: ignored, no state change", async () => {
+  it("pending_followup + free-text message: resolves WITH day-block, silently (no owner notify)", async () => {
     mockPoolQuery.mockImplementationOnce(() =>
       Promise.resolve({ rows: [{ id: "row-5", chat_id: "972501111111@c.us", state: "pending_followup" }] }),
     );
@@ -334,7 +408,31 @@ describe("handleOpInstanceEvent — state transitions", () => {
     });
 
     expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
-    expect(mockPoolQuery).toHaveBeenCalledTimes(1); // only the active-row select
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+    );
+    expect(resolveCall).toBeDefined();
+    expect(resolveCall![1]).toEqual(["row-5"]);
+  });
+
+  it("pending_followup + a reaction: also resolves WITH day-block, silently", async () => {
+    mockPoolQuery.mockImplementationOnce(() =>
+      Promise.resolve({ rows: [{ id: "row-6", chat_id: "972501111111@c.us", state: "pending_followup" }] }),
+    );
+    mockExtractButtonId.mockReturnValue("");
+
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+      messageData: { typeMessage: "reactionMessage" },
+    });
+
+    expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+    );
+    expect(resolveCall).toBeDefined();
+    expect(resolveCall![1]).toEqual(["row-6"]);
   });
 });
 
@@ -437,7 +535,7 @@ describe("sweepUnanswered", () => {
     expect(mockSendMessageWith).toHaveBeenCalledWith(CREDS, "972501111111@c.us", AUTO_REPLY_TEXT);
   });
 
-  it("skips (does not re-send) when an auto-reply was already sent today for that chat", async () => {
+  it("resolves WITH day-block (no follow-up eligibility) when an auto-reply was already sent today for that chat", async () => {
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'watching'")) {
         return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
@@ -456,6 +554,11 @@ describe("sweepUnanswered", () => {
     expect(result.skipped).toBe(1);
     expect(result.autoReplied).toBe(0);
     expect(mockSendMessageWith).not.toHaveBeenCalled();
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+    );
+    expect(resolveCall).toBeDefined();
+    expect(resolveCall![1]).toEqual(["row-1"]);
   });
 
   it("enforces the daily auto-reply cap: the 21st eligible chat is skipped, not sent", async () => {
@@ -478,6 +581,10 @@ describe("sweepUnanswered", () => {
     expect(result.autoReplied).toBe(20);
     expect(result.skipped).toBe(1);
     expect(mockSendMessageWith).toHaveBeenCalledTimes(20);
+    const expireCall = mockPoolQuery.mock.calls.find(
+      ([sql, params]) => String(sql).includes("state='expired'") && String((params as unknown[])?.[0]) === "row-20",
+    );
+    expect(expireCall).toBeDefined();
   });
 
   it("paces sends 20s apart (sleep called once for 2 sends)", async () => {
@@ -536,7 +643,7 @@ describe("sweepUnanswered", () => {
     expect(mockSendMessageWith).toHaveBeenCalledWith(CREDS, "972501111111@c.us", AUTO_REPLY_TEXT);
   });
 
-  it("suppress-track: a dedupe-hit row transitions to awaiting_reply without auto_replied_at, no send", async () => {
+  it("dedupe-hit: a row already auto-replied today is resolved WITH day-block, no send", async () => {
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'watching'")) {
         return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
@@ -550,14 +657,14 @@ describe("sweepUnanswered", () => {
 
     expect(result.skipped).toBe(1);
     expect(mockSendMessageWith).not.toHaveBeenCalled();
-    const suppressCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='awaiting_reply'") && !String(sql).includes("auto_replied_at=now()"),
+    const resolveCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
     );
-    expect(suppressCall).toBeDefined();
-    expect(suppressCall![1]).toEqual(["row-1"]);
+    expect(resolveCall).toBeDefined();
+    expect(resolveCall![1]).toEqual(["row-1"]);
   });
 
-  it("suppress-track: a cap-hit row transitions to awaiting_reply without auto_replied_at, no send", async () => {
+  it("cap-hit: the 21st eligible row expires (not resolved, not day-blocked), no send", async () => {
     const rows = Array.from({ length: 21 }, (_, i) => ({ id: `row-${i}`, chat_id: `97250000${String(i).padStart(3, "0")}@c.us` }));
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'watching'")) return Promise.resolve({ rows });
@@ -570,11 +677,10 @@ describe("sweepUnanswered", () => {
 
     expect(result.skipped).toBe(1);
     expect(mockSendMessageWith).toHaveBeenCalledTimes(20);
-    const suppressCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='awaiting_reply'") && !String(sql).includes("auto_replied_at=now()"),
+    const expireCall = mockPoolQuery.mock.calls.find(
+      ([sql, params]) => String(sql).includes("state='expired'") && String((params as unknown[])?.[0]) === "row-20",
     );
-    expect(suppressCall).toBeDefined();
-    expect(suppressCall![1]).toEqual(["row-20"]);
+    expect(expireCall).toBeDefined();
   });
 
   it("midnight expiry: expires yesterday's pending_followup rows via the daily-reset update", async () => {
@@ -671,10 +777,11 @@ describe("sendUnansweredFollowups", () => {
     expect(result.deleted).toBe(3);
   });
 
-  it("selection picks up a suppressed (NULL auto_replied_at) row via the COALESCE fallback to first_unanswered_at", async () => {
+  it("eligibility query requires a non-NULL auto_replied_at — excludes rows never genuinely auto-replied", async () => {
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'awaiting_reply'")) {
-        expect(sql).toContain("COALESCE(auto_replied_at, first_unanswered_at)");
+        expect(sql).toContain("auto_replied_at IS NOT NULL");
+        expect(sql).not.toContain("COALESCE");
         return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
       }
       if (sql.includes("count(*)::int")) {

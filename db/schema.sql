@@ -424,6 +424,7 @@ CREATE TABLE public.wa_unanswered (
                         'resolved', 'skipped', 'expired'
                       )),
   resolved_at         timestamptz,
+  blocks_rest_of_day  boolean     NOT NULL DEFAULT false,
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now()
 );

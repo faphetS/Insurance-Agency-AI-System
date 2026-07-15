@@ -134,6 +134,8 @@ async function createWatchingRow(chatId: string, senderName: string | null, firs
   );
 }
 
+// Plain resolve — LLM-close path only. A closer verdict means nothing needed a reply
+// in the first place, so it must NOT day-disable the chat's automation.
 async function resolveRow(id: string): Promise<void> {
   await pool.query(
     `UPDATE public.wa_unanswered SET state='resolved', resolved_at=now(), updated_at=now() WHERE id=$1`,
@@ -141,22 +143,34 @@ async function resolveRow(id: string): Promise<void> {
   );
 }
 
-async function resolveActiveRowForChat(chatId: string): Promise<void> {
+// Resolve + day-disable — any human engagement (Didi replying, the lead replying while
+// awaiting/pending, or a button tap) blocks the rest of the Israel day for that chat.
+async function resolveRowWithBlock(id: string): Promise<void> {
   await pool.query(
     `UPDATE public.wa_unanswered
-     SET state='resolved', resolved_at=now(), updated_at=now()
+     SET state='resolved', resolved_at=now(), updated_at=now(), blocks_rest_of_day=true
+     WHERE id=$1`,
+    [id],
+  );
+}
+
+async function resolveActiveRowForChatWithBlock(chatId: string): Promise<void> {
+  await pool.query(
+    `UPDATE public.wa_unanswered
+     SET state='resolved', resolved_at=now(), updated_at=now(), blocks_rest_of_day=true
      WHERE chat_id=$1 AND state IN ('watching','awaiting_reply','pending_followup')`,
     [chatId],
   );
 }
 
-// Suppressed-tracking: episode stays open (no auto-reply sent), but the row keeps
-// tomorrow's 09:00 follow-up eligible since auto_replied_at is deliberately left NULL.
-async function suppressRow(id: string): Promise<void> {
-  await pool.query(
-    `UPDATE public.wa_unanswered SET state='awaiting_reply', updated_at=now() WHERE id=$1`,
-    [id],
+async function isChatBlockedToday(chatId: string, dayStart: Date): Promise<boolean> {
+  const res = await pool.query(
+    `SELECT 1 FROM public.wa_unanswered
+     WHERE chat_id=$1 AND blocks_rest_of_day AND resolved_at >= $2
+     LIMIT 1`,
+    [chatId, dayStart.toISOString()],
   );
+  return (res.rowCount ?? 0) > 0;
 }
 
 async function markExpired(id: string): Promise<void> {
@@ -201,9 +215,13 @@ export async function handleOpInstanceEvent(rawBody: unknown): Promise<void> {
   const chatId = body.senderData?.chatId;
   if (!chatId) return;
 
-  // Didi typed manually on his own phone — any reply cancels the watch.
+  const typeMessage = (rawBody as { messageData?: { typeMessage?: string } }).messageData?.typeMessage;
+  const isReaction = typeMessage === "reactionMessage";
+
+  // Didi sent anything (text, media, or a reaction) on his own phone — he's handling
+  // it himself, so cancel the watch and day-block the chat's automation.
   if (typeWebhook === "outgoingMessageReceived") {
-    await resolveActiveRowForChat(chatId);
+    await resolveActiveRowForChatWithBlock(chatId);
     return;
   }
 
@@ -217,9 +235,12 @@ export async function handleOpInstanceEvent(rawBody: unknown): Promise<void> {
   const active = await getActiveRow(chatId);
 
   if (!active) {
+    if (isReaction) return; // reactions never start tracking
     const messageTs = typeof body.timestamp === "number" ? new Date(body.timestamp * 1000) : new Date();
     if (!isWithinWatchWindow(messageTs)) return;
+    if (await isChatBlockedToday(chatId, israelDayStart(new Date()))) return;
     await createWatchingRow(chatId, body.senderData?.senderName ?? null, messageTs);
+    logger.debug({ chatId, typeMessage }, "unanswered-wa: watching row created");
     return;
   }
 
@@ -229,25 +250,27 @@ export async function handleOpInstanceEvent(rawBody: unknown): Promise<void> {
   }
 
   if (active.state === "awaiting_reply") {
-    // Anyone replying (any message) cancels the pending follow-up.
-    await resolveRow(active.id);
+    // Anyone replying (any message, including reactions) cancels the pending follow-up
+    // and day-blocks the chat.
+    await resolveRowWithBlock(active.id);
     return;
   }
 
-  // active.state === "pending_followup" — only button taps act.
+  // active.state === "pending_followup"
   const buttonId = extractButtonId(rawBody);
   if (buttonId === "ua_ok") {
-    await resolveRow(active.id);
+    await resolveRowWithBlock(active.id);
     return;
   }
   if (buttonId === "ua_callback") {
     const phone = chatId.replace("@c.us", "");
     const name = body.senderData?.senderName || phone;
     await notifyOwnerOps(`🔔 ${name} (${phone}) ביקש שתחזור אליו — לא ענית להודעה שלו מאתמול.`);
-    await resolveRow(active.id);
+    await resolveRowWithBlock(active.id);
     return;
   }
-  // Non-button message while pending_followup — ignore, leave state as-is.
+  // Any other incoming (text, media, reaction) — silently resolve + day-block.
+  await resolveRowWithBlock(active.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +343,9 @@ export async function sweepUnanswered(): Promise<{
         );
 
         if ((already.rowCount ?? 0) > 0) {
-          await suppressRow(row.id);
+          // Already auto-replied today for this chat — resolve + day-block rather than
+          // re-sending or leaving tomorrow's 09:00 follow-up eligible.
+          await resolveRowWithBlock(row.id);
           skipped++;
           continue;
         }
@@ -330,7 +355,7 @@ export async function sweepUnanswered(): Promise<{
             { chatId: row.chat_id, cap: DAILY_AUTO_REPLY_CAP },
             "unanswered-wa: daily auto-reply cap reached — skipping",
           );
-          await suppressRow(row.id);
+          await markExpired(row.id);
           skipped++;
           continue;
         }
@@ -387,7 +412,7 @@ export async function sendUnansweredFollowups(): Promise<{ followupsSent: number
     if (creds) {
       const res = await pool.query<{ id: string; chat_id: string }>(
         `SELECT id, chat_id FROM public.wa_unanswered
-         WHERE state = 'awaiting_reply' AND COALESCE(auto_replied_at, first_unanswered_at) < $1`,
+         WHERE state = 'awaiting_reply' AND auto_replied_at IS NOT NULL AND auto_replied_at < $1`,
         [dayStart.toISOString()],
       );
 

@@ -110,3 +110,67 @@ describe("needsReplyFromDidi", () => {
     expect(result).toBe(true);
   });
 });
+
+describe("buildTranscript (via needsReplyFromDidi's user message)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOpCreds.mockReturnValue(CREDS);
+    mockCreate.mockResolvedValue(makeCompletion(JSON.stringify({ needs_reply: true })));
+  });
+
+  function transcriptSentToLlm(): string {
+    const call = mockCreate.mock.calls[0] as [{ messages: { role: string; content: string }[] }];
+    const userMessage = call[0].messages.find((m) => m.role === "user");
+    return userMessage?.content ?? "";
+  }
+
+  it("renders media placeholders for voice, image, and document messages", async () => {
+    mockGetChatHistoryWith.mockResolvedValue([
+      { type: "incoming", typeMessage: "audioMessage", timestamp: 1000 },
+      { type: "incoming", typeMessage: "imageMessage", timestamp: 1001 },
+      { type: "incoming", typeMessage: "documentMessage", timestamp: 1002 },
+    ]);
+
+    await needsReplyFromDidi("972501111111@c.us");
+
+    const transcript = transcriptSentToLlm();
+    expect(transcript).toContain("[voice message]");
+    expect(transcript).toContain("[image]");
+    expect(transcript).toContain("[document]");
+  });
+
+  it("skips reaction messages entirely", async () => {
+    mockGetChatHistoryWith.mockResolvedValue([
+      { type: "incoming", textMessage: "היי דידי", timestamp: 1000 },
+      { type: "outgoing", typeMessage: "reactionMessage", timestamp: 1001 },
+    ]);
+
+    await needsReplyFromDidi("972501111111@c.us");
+
+    const transcript = transcriptSentToLlm();
+    expect(transcript).toContain("היי דידי");
+    expect(transcript).not.toContain("reactionMessage");
+    expect(transcript.split("\n")).toHaveLength(1);
+  });
+
+  it("prefers text content over a media placeholder when both are present", async () => {
+    mockGetChatHistoryWith.mockResolvedValue([
+      { type: "incoming", typeMessage: "imageMessage", textMessage: "תראה את זה", timestamp: 1000 },
+    ]);
+
+    await needsReplyFromDidi("972501111111@c.us");
+
+    const transcript = transcriptSentToLlm();
+    expect(transcript).toContain("תראה את זה");
+    expect(transcript).not.toContain("[image]");
+  });
+
+  it("falls back to a generic placeholder for an unrecognized typeMessage", async () => {
+    mockGetChatHistoryWith.mockResolvedValue([{ type: "incoming", typeMessage: "locationMessage", timestamp: 1000 }]);
+
+    await needsReplyFromDidi("972501111111@c.us");
+
+    const transcript = transcriptSentToLlm();
+    expect(transcript).toContain("[message]");
+  });
+});
