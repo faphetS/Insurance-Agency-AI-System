@@ -139,6 +139,11 @@ const envSchema = z.object({
   // "log" = dry-run (compose to pm2 logs, no send); "send" = actually email staff.
   STAFF_EMAIL_NOTIFY_MODE: z.enum(["log", "send"]).default("log"),
 
+  // Unanswered-WA watcher mode (the only feature sending FROM Didi's line 944).
+  // "off" = fully dormant (no tracking, no LLM, no sends); "log" = dry-run
+  // (full pipeline, sends become log lines); "send" = real sends.
+  UNANSWERED_WA_MODE: z.enum(["off", "log", "send"]).default("off"),
+
   // Welcome-image URL sent as a second bubble after the opening intake message.
   // Blank string disables the feature; unset falls back to <BACKEND_URL>/assets/brand.jpeg.
   WELCOME_IMAGE_URL: z.string().optional(),

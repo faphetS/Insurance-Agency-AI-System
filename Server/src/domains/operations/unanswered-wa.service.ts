@@ -215,6 +215,8 @@ interface OpWebhookBody {
 const SINGLE_EMOJI_RE = new RegExp("^\\p{RGI_Emoji}$", "v");
 
 export async function handleOpInstanceEvent(rawBody: unknown): Promise<void> {
+  if (env.UNANSWERED_WA_MODE === "off") return;
+
   const body = rawBody as OpWebhookBody;
   const typeWebhook = body.typeWebhook;
 
@@ -304,6 +306,19 @@ export async function sweepUnanswered(): Promise<{
   sweepRunning = true;
 
   try {
+    if (env.UNANSWERED_WA_MODE === "off") {
+      // Expire leftovers so re-enabling later can't fire ancient auto-replies.
+      const expiredRes = await pool.query(
+        `UPDATE public.wa_unanswered SET state='expired', updated_at=now()
+         WHERE state IN ('watching','awaiting_reply','pending_followup')`,
+      );
+      const expiredCount = expiredRes.rowCount ?? 0;
+      if (expiredCount > 0) {
+        logger.info({ expiredCount }, `unanswered-wa: mode=off — expired ${expiredCount} active rows`);
+      }
+      return { processed: 0, autoReplied: 0, skipped: 0, closedByLlm: 0 };
+    }
+
     const creds = opCreds();
     if (!creds) {
       logger.info("unanswered-wa: op creds unset — skipping sweep");
@@ -376,7 +391,14 @@ export async function sweepUnanswered(): Promise<{
           await sleep(SEND_GAP_MS);
         }
 
-        await sendMessageWith(creds, row.chat_id, AUTO_REPLY_TEXT);
+        if (env.UNANSWERED_WA_MODE === "send") {
+          await sendMessageWith(creds, row.chat_id, AUTO_REPLY_TEXT);
+        } else {
+          logger.info(
+            { chatId: row.chat_id, text: AUTO_REPLY_TEXT },
+            "unanswered-wa: [LOG MODE] auto-reply suppressed — would have sent",
+          );
+        }
         await pool.query(
           `UPDATE public.wa_unanswered
            SET state='awaiting_reply', auto_replied_at=now(), updated_at=now()
@@ -421,7 +443,9 @@ export async function sendUnansweredFollowups(): Promise<{ followupsSent: number
     let followupsSent = 0;
     let expired = 0;
 
-    if (creds) {
+    if (env.UNANSWERED_WA_MODE === "off") {
+      logger.info("unanswered-wa: mode=off — skipping follow-up sends");
+    } else if (creds) {
       const res = await pool.query<{ id: string; chat_id: string }>(
         `SELECT id, chat_id FROM public.wa_unanswered
          WHERE state = 'awaiting_reply' AND auto_replied_at IS NOT NULL AND auto_replied_at < $1`,
@@ -446,7 +470,14 @@ export async function sendUnansweredFollowups(): Promise<{ followupsSent: number
             await sleep(SEND_GAP_MS);
           }
 
-          await sendInteractiveButtonsWith(creds, row.chat_id, FOLLOWUP_BODY, FOLLOWUP_BUTTONS);
+          if (env.UNANSWERED_WA_MODE === "send") {
+            await sendInteractiveButtonsWith(creds, row.chat_id, FOLLOWUP_BODY, FOLLOWUP_BUTTONS);
+          } else {
+            logger.info(
+              { chatId: row.chat_id },
+              "unanswered-wa: [LOG MODE] follow-up buttons suppressed — would have sent",
+            );
+          }
           await pool.query(
             `UPDATE public.wa_unanswered
              SET state='pending_followup', followup_sent_at=now(), updated_at=now()

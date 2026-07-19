@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock functions
@@ -35,6 +35,7 @@ vi.mock("../../config/env.js", () => ({
     GREENAPI_OP_ID_INSTANCE: "op-id",
     GREENAPI_OP_API_TOKEN: "op-token",
     GREENAPI_OP_BASE_URL: "https://test.api.greenapi.com",
+    UNANSWERED_WA_MODE: "send",
   },
 }));
 
@@ -829,5 +830,164 @@ describe("sendUnansweredFollowups", () => {
 
     expect(result.followupsSent).toBe(1);
     expect(mockSendInteractiveButtonsWith).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// UNANSWERED_WA_MODE — 3-mode kill switch
+// ---------------------------------------------------------------------------
+
+async function setUnansweredWaMode(mode: "off" | "log" | "send"): Promise<void> {
+  const { env } = await import("../../config/env.js");
+  (env as Record<string, unknown>)["UNANSWERED_WA_MODE"] = mode;
+}
+
+describe("handleOpInstanceEvent — mode=off", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await setUnansweredWaMode("off");
+  });
+
+  afterEach(async () => {
+    await setUnansweredWaMode("send");
+  });
+
+  it("does nothing — no row created, no DB queries at all", async () => {
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000),
+    });
+
+    expect(mockPoolQuery).not.toHaveBeenCalled();
+    expect(mockFromImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("sweepUnanswered — mode=off", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await setUnansweredWaMode("off");
+  });
+
+  afterEach(async () => {
+    await setUnansweredWaMode("send");
+  });
+
+  it("skips the pipeline, expires all active rows, returns zeroed counters", async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 3 });
+
+    const result = await sweepUnanswered();
+
+    expect(result).toEqual({ processed: 0, autoReplied: 0, skipped: 0, closedByLlm: 0 });
+    expect(mockOpCreds).not.toHaveBeenCalled();
+    expect(mockNeedsReplyFromDidi).not.toHaveBeenCalled();
+    expect(mockSendMessageWith).not.toHaveBeenCalled();
+    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+    const expireCall = mockPoolQuery.mock.calls[0];
+    expect(String(expireCall[0])).toContain("state='expired'");
+    expect(String(expireCall[0])).toContain(
+      "WHERE state IN ('watching','awaiting_reply','pending_followup')",
+    );
+  });
+});
+
+describe("sendUnansweredFollowups — mode=off", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await setUnansweredWaMode("off");
+  });
+
+  afterEach(async () => {
+    await setUnansweredWaMode("send");
+  });
+
+  it("skips follow-up sends but still runs the housekeeping delete", async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 2 });
+
+    const result = await sendUnansweredFollowups();
+
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
+    expect(result.followupsSent).toBe(0);
+    expect(result.expired).toBe(0);
+    expect(result.deleted).toBe(2);
+  });
+});
+
+describe("sweepUnanswered — mode=log", () => {
+  const CREDS = { idInstance: "op-id", token: "op-token", baseUrl: "https://test.api.greenapi.com" };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await setUnansweredWaMode("log");
+    mockOpCreds.mockReturnValue(CREDS);
+    mockSleep.mockResolvedValue(undefined);
+    mockNeedsReplyFromDidi.mockResolvedValue(true);
+  });
+
+  afterEach(async () => {
+    await setUnansweredWaMode("send");
+  });
+
+  it("does not call sendMessageWith but still stamps auto_replied_at and counts the reply", async () => {
+    mockPoolQuery.mockImplementation((sql: string) => {
+      if (sql.includes("state = 'watching'")) {
+        return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
+      }
+      if (sql.includes("count(*)::int")) {
+        return Promise.resolve({ rows: [{ c: 0 }] });
+      }
+      if (sql.includes("SELECT 1 FROM public.wa_unanswered")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+
+    const result = await sweepUnanswered();
+
+    expect(result.autoReplied).toBe(1);
+    expect(mockSendMessageWith).not.toHaveBeenCalled();
+    const updateCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='awaiting_reply'") && String(sql).includes("auto_replied_at=now()"),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).toEqual(["row-1"]);
+  });
+});
+
+describe("sendUnansweredFollowups — mode=log", () => {
+  const CREDS = { idInstance: "op-id", token: "op-token", baseUrl: "https://test.api.greenapi.com" };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await setUnansweredWaMode("log");
+    mockOpCreds.mockReturnValue(CREDS);
+    mockSleep.mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    await setUnansweredWaMode("send");
+  });
+
+  it("does not call sendInteractiveButtonsWith but still stamps followup_sent_at", async () => {
+    mockPoolQuery.mockImplementation((sql: string) => {
+      if (sql.includes("state = 'awaiting_reply'")) {
+        return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
+      }
+      if (sql.includes("count(*)::int")) {
+        return Promise.resolve({ rows: [{ c: 0 }] });
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+
+    const result = await sendUnansweredFollowups();
+
+    expect(result.followupsSent).toBe(1);
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
+    const updateCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='pending_followup'") && String(sql).includes("followup_sent_at=now()"),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).toEqual(["row-1"]);
   });
 });
