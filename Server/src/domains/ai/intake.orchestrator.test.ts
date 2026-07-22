@@ -26,6 +26,7 @@ const {
   mockUploadLeadDocument,
   mockSendStaffLeadEmail,
   mockBuildCallbackAlert,
+  mockSendCallbackRequestEmail,
   mockNotifyOwner,
 } = vi.hoisted(() => ({
   mockSendInteractiveButtons: vi.fn().mockResolvedValue({ idMessage: "btn-1" }),
@@ -38,6 +39,7 @@ const {
   mockUploadLeadDocument: vi.fn(),
   mockSendStaffLeadEmail: vi.fn().mockResolvedValue(undefined),
   mockBuildCallbackAlert: vi.fn(() => "📞 CALLBACK ALERT"),
+  mockSendCallbackRequestEmail: vi.fn().mockResolvedValue(undefined),
   mockNotifyOwner: vi.fn().mockResolvedValue(true),
 }));
 
@@ -65,6 +67,7 @@ vi.mock("../integrations/google/leads-mirror.service.js", () => ({ mirrorLeadToS
 vi.mock("./intake-notify.service.js", () => ({
   sendStaffLeadEmail: mockSendStaffLeadEmail,
   buildCallbackAlert: mockBuildCallbackAlert,
+  sendCallbackRequestEmail: mockSendCallbackRequestEmail,
 }));
 vi.mock("../operations/owner-notify.js", () => ({ notifyOwner: mockNotifyOwner }));
 
@@ -274,6 +277,11 @@ describe("menu slot — callback_didi (button 8)", () => {
     expect(mockNotifyOwner).toHaveBeenCalledOnce();
     expect(mockNotifyOwner.mock.calls[0]?.[0]).toBe("📞 CALLBACK ALERT");
     expect(mockSendStaffLeadEmail).not.toHaveBeenCalled();
+    expect(mockSendCallbackRequestEmail).toHaveBeenCalledOnce();
+    expect(mockSendCallbackRequestEmail.mock.calls[0]?.[0]).toMatchObject({
+      phone: "972501234567",
+      waName: "דוד",
+    });
     expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("תודה! הפרטים הועברו לדידי והוא יחזור אליך בהקדם.");
   });
 });

@@ -18,7 +18,11 @@ import { downloadMetaMedia } from "../whatsapp/meta/meta.media.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
 import { notifyOwner } from "../operations/owner-notify.js";
-import { sendStaffLeadEmail, buildCallbackAlert } from "./intake-notify.service.js";
+import {
+  sendStaffLeadEmail,
+  buildCallbackAlert,
+  sendCallbackRequestEmail,
+} from "./intake-notify.service.js";
 import { displayName } from "../whatsapp/whatsapp.util.js";
 
 const COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -282,6 +286,11 @@ async function handleMenu(
       await notifyOwner(buildCallbackAlert(phone, displayName(fullName, phone)));
     } catch (err) {
       logger.warn({ err, clientId }, "intake: callback owner alert failed");
+    }
+    try {
+      await sendCallbackRequestEmail({ phone, waName: displayName(fullName, phone) });
+    } catch (err) {
+      logger.warn({ err, clientId }, "intake: callback owner email failed");
     }
     await sendTextPrompt(conversationId, chatId, "thanks_callback");
     await endFlow(conversationId, clientId, "new_lead");

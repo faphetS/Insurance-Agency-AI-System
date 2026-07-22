@@ -22,6 +22,7 @@ vi.mock("../integrations/google/google.gmail.js", () => ({
 
 import {
   sendStaffLeadEmail,
+  sendCallbackRequestEmail,
   buildCallbackAlert,
   buildStallAlert,
 } from "./intake-notify.service.js";
@@ -91,6 +92,39 @@ describe("sendStaffLeadEmail — routing", () => {
   it("DRY-RUN gate: mode 'log' never calls sendOwnerEmail", async () => {
     envMock.STAFF_EMAIL_NOTIFY_MODE = "log";
     await sendStaffLeadEmail("vehicle", { phone: FAKE_PHONE, waName: "יעל" });
+    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sendCallbackRequestEmail — Didi self-email for button 8
+// ---------------------------------------------------------------------------
+
+describe("sendCallbackRequestEmail", () => {
+  it("SEND mode → emails didi@ddins.net, no thank-you signature", async () => {
+    envMock.STAFF_EMAIL_NOTIFY_MODE = "send";
+    await sendCallbackRequestEmail({ phone: FAKE_PHONE, waName: "יעל כהן" });
+    expect(mockSendOwnerEmail).toHaveBeenCalledOnce();
+    const [to, subject, body] = mockSendOwnerEmail.mock.calls[0] as [string, string, string];
+    expect(to).toBe("didi@ddins.net");
+    expect(subject).toContain("בקשת שיחה חוזרת");
+    expect(subject).toContain("יעל כהן");
+    expect(body).toContain("טלפון הלקוח: 050-1234567");
+    expect(body).toContain("שם בוואטסאפ: יעל כהן");
+    expect(body).not.toContain("תודה");
+  });
+
+  it("null waName → falls back to local phone in subject and לא צוין in body", async () => {
+    envMock.STAFF_EMAIL_NOTIFY_MODE = "send";
+    await sendCallbackRequestEmail({ phone: FAKE_PHONE, waName: null });
+    const [, subject, body] = mockSendOwnerEmail.mock.calls[0] as [string, string, string];
+    expect(subject).toContain("050-1234567");
+    expect(body).toContain("שם בוואטסאפ: לא צוין");
+  });
+
+  it("DRY-RUN gate: mode 'log' never calls sendOwnerEmail", async () => {
+    envMock.STAFF_EMAIL_NOTIFY_MODE = "log";
+    await sendCallbackRequestEmail({ phone: FAKE_PHONE, waName: "יעל" });
     expect(mockSendOwnerEmail).not.toHaveBeenCalled();
   });
 });

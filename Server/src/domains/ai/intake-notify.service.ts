@@ -48,6 +48,25 @@ export async function sendStaffLeadEmail(
   }
 }
 
+const OWNER_EMAIL = "didi@ddins.net";
+
+export async function sendCallbackRequestEmail(
+  lead: { phone: string; waName: string | null },
+): Promise<void> {
+  const subject = `בקשת שיחה חוזרת מהבוט — ${lead.waName ?? toLocalPhone(lead.phone)}`;
+  const body =
+    `היי דידי,\n\n` +
+    `לקוח ביקש שיחה חוזרת דרך הוואטסאפ של המשרד.\n\n` +
+    `טלפון הלקוח: ${toLocalPhone(lead.phone)}\n` +
+    `שם בוואטסאפ: ${lead.waName ?? "לא צוין"}`;
+
+  if (env.STAFF_EMAIL_NOTIFY_MODE === "send") {
+    await sendOwnerEmail(OWNER_EMAIL, subject, body);
+  } else {
+    logger.info({ to: OWNER_EMAIL, subject, body }, "callback-email (DRY RUN — not sent)");
+  }
+}
+
 export function buildCallbackAlert(phone: string, waName: string | null): string {
   return (
     `📞 בקשת שיחה חוזרת מהבוט` +
