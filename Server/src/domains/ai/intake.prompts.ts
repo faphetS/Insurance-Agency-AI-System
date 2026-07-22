@@ -37,7 +37,7 @@ export const INTAKE_PROMPTS = {
       "היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. אנו שמחים שפנית אלינו באפשרותך לבצע מספר פעולות או להשאיר הודעה ונחזור אליך בהקדם אנא בחר מתפריט:",
     buttons: [
       ...INQUIRY_BUTTONS,
-      { buttonId: "callback_didi", buttonText: "מבקש שדידי יחזור אליי" },
+      { buttonId: "callback_didi", buttonText: "אשמח שדידי יחזור אליי" },
       { buttonId: "meeting_didi", buttonText: "בקשת תיאום פגישה עם דידי" },
     ],
   },

@@ -722,7 +722,7 @@ describe("sendButtonPrompt fallback", () => {
     expect(result.consumed).toBe(true);
     const fallback = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
     expect(fallback).toContain("ביטוח רכב");
-    expect(fallback).toContain("מבקש שדידי יחזור אליי");
+    expect(fallback).toContain("אשמח שדידי יחזור אליי");
   });
 });
 

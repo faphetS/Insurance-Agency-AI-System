@@ -68,7 +68,7 @@ describe("INTAKE_PROMPTS.menu — 9-button opening", () => {
 
   it("uses Didi's exact callback + meeting labels", () => {
     const byId = Object.fromEntries(INTAKE_PROMPTS.menu.buttons.map((b) => [b.buttonId, b.buttonText]));
-    expect(byId["callback_didi"]).toBe("מבקש שדידי יחזור אליי");
+    expect(byId["callback_didi"]).toBe("אשמח שדידי יחזור אליי");
     expect(byId["meeting_didi"]).toBe("בקשת תיאום פגישה עם דידי");
   });
 
