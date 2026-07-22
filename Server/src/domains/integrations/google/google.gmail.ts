@@ -150,6 +150,15 @@ export async function threadRepliedAfter(
   return false;
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export async function sendOwnerEmail(
   to: string,
   subject: string,
@@ -159,13 +168,14 @@ export async function sendOwnerEmail(
   const gmail = google.gmail({ version: "v1", auth: client });
 
   const encodedSubject = `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
-  const encodedBody = Buffer.from(bodyText, "utf8").toString("base64");
+  const html = `<div dir="rtl" style="text-align:right; white-space:pre-line; font-family:Arial,sans-serif; font-size:14px;">${escapeHtml(bodyText)}</div>`;
+  const encodedBody = Buffer.from(html, "utf8").toString("base64");
 
   const raw = [
     `To: ${to}`,
     `Subject: ${encodedSubject}`,
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Type: text/html; charset="UTF-8"',
     "Content-Transfer-Encoding: base64",
     "",
     encodedBody,
