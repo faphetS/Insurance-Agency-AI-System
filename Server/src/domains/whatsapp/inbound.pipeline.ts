@@ -2,10 +2,9 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
-import { assignStaffToMeeting } from "../meetings/meeting-handoff.service.js";
 import { mirrorInboundHook, type ConversationalChannel } from "./transport.resolve.js";
 import type { MessagePayload } from "./whatsapp.validator.js";
-import { isStaffChat, toChatId } from "./whatsapp.util.js";
+import { isStaffChat } from "./whatsapp.util.js";
 
 export interface InboundCustomerMessage {
   chatId: string;
@@ -17,7 +16,7 @@ export interface InboundCustomerMessage {
 
 /**
  * Shared inbound gate chain — runs post-ACK for both providers (GreenAPI
- * controller and Meta webhook controller): owner guard → staff intercept →
+ * controller and Meta webhook controller): staff intercept →
  * conversation upsert (+ channel stamp) → message insert (dedup) → allowlist →
  * client link/create → mirror hook → intake.
  */
@@ -36,25 +35,6 @@ export async function processInboundCustomerMessage(
 
   // Derive phone from chatId (format: "1234567890@c.us" or "group@g.us")
   const contactPhone = chatId.split("@")[0] ?? chatId;
-
-  // The owner number is OPERATIONAL-ONLY: it must never enter the lead/intake
-  // conversational flow. Handle its operational buttons (staff assignment) and
-  // silently ignore anything else.
-  const ownerChatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
-  if (ownerChatId && chatId === ownerChatId) {
-    const buttonId = payload.kind === "text" && payload.isButtonReply ? payload.text : "";
-    const assignMatch = /^assign_staff:([^:]+):([^:]+)$/.exec(buttonId);
-    if (assignMatch) {
-      try {
-        await assignStaffToMeeting(assignMatch[1]!, assignMatch[2]!, chatId);
-      } catch (err) {
-        logger.error({ err, chatId }, "assignStaffToMeeting failed");
-      }
-    } else {
-      logger.info({ chatId }, "owner message ignored — operational-only number (no lead/intake)");
-    }
-    return;
-  }
 
   // Staff intercept — if this chat belongs to a staff member, log and skip.
   const staff = await isStaffChat(chatId);

@@ -2,12 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const {
   mockHandleIntake,
-  mockAssignStaffToMeeting,
   mockIsStaffChat,
   mockFromImpl,
 } = vi.hoisted(() => ({
   mockHandleIntake: vi.fn().mockResolvedValue({ consumed: false }),
-  mockAssignStaffToMeeting: vi.fn().mockResolvedValue(undefined),
   mockIsStaffChat: vi.fn().mockResolvedValue(null),
   mockFromImpl: vi.fn(),
 }));
@@ -30,10 +28,6 @@ vi.mock("../../config/supabase.js", () => ({
 
 vi.mock("../ai/intake.orchestrator.js", () => ({
   handleIntake: mockHandleIntake,
-}));
-
-vi.mock("../meetings/meeting-handoff.service.js", () => ({
-  assignStaffToMeeting: mockAssignStaffToMeeting,
 }));
 
 vi.mock("./whatsapp.util.js", async () => {
@@ -77,7 +71,6 @@ const OWNER_CHAT_ID = "639219909210@c.us";
 const LEAD_CHAT_ID = "972500000000@c.us";
 
 const textPayload = (text: string): MessagePayload => ({ kind: "text", text });
-const buttonPayload = (text: string): MessagePayload => ({ kind: "text", text, isButtonReply: true });
 
 function inbound(
   chatId: string,
@@ -97,35 +90,28 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockIsStaffChat.mockResolvedValue(null);
   mockHandleIntake.mockResolvedValue({ consumed: false });
-  mockAssignStaffToMeeting.mockResolvedValue(undefined);
 });
 
 // ---------------------------------------------------------------------------
-// Owner guard
+// Owner number — normal lead/intake flow (no more operational-only guard)
 // ---------------------------------------------------------------------------
 
-describe("processInboundCustomerMessage — owner guard", () => {
-  it("owner assign_staff button tap → assignStaffToMeeting, no DB writes, no intake", async () => {
-    await processInboundCustomerMessage(inbound(OWNER_CHAT_ID, buttonPayload("assign_staff:m1:s1")));
+describe("processInboundCustomerMessage — owner number", () => {
+  it("inbound text from the owner's own number goes through the normal client/intake flow", async () => {
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: "client-owner" }, error: null }),
+    ]);
 
-    expect(mockAssignStaffToMeeting).toHaveBeenCalledOnce();
-    expect(mockAssignStaffToMeeting).toHaveBeenCalledWith("m1", "s1", OWNER_CHAT_ID);
-    expect(mockFromImpl).not.toHaveBeenCalled();
-    expect(mockHandleIntake).not.toHaveBeenCalled();
-  });
-
-  it("owner plain text → silently ignored (no DB, no intake, no assignment)", async () => {
     await processInboundCustomerMessage(inbound(OWNER_CHAT_ID, textPayload("שלום")));
 
-    expect(mockAssignStaffToMeeting).not.toHaveBeenCalled();
-    expect(mockFromImpl).not.toHaveBeenCalled();
-    expect(mockHandleIntake).not.toHaveBeenCalled();
-  });
-
-  it("typed (non-tap) assign_staff text from the owner is NOT treated as a button", async () => {
-    await processInboundCustomerMessage(inbound(OWNER_CHAT_ID, textPayload("assign_staff:m1:s1")));
-
-    expect(mockAssignStaffToMeeting).not.toHaveBeenCalled();
+    expect(mockHandleIntake).toHaveBeenCalledWith(
+      "conv1",
+      "client-owner",
+      OWNER_CHAT_ID,
+      { kind: "text", text: "שלום" },
+    );
   });
 });
 
