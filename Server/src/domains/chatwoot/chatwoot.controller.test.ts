@@ -210,8 +210,8 @@ describe("handleCallback — agent takeover", () => {
     };
     expect(updateArg.bot_paused).toBe(true);
     const until = new Date(updateArg.bot_paused_until).getTime();
-    expect(until).toBeGreaterThanOrEqual(before + 59 * 60 * 1000);
-    expect(until).toBeLessThanOrEqual(Date.now() + 61 * 60 * 1000);
+    expect(until).toBeGreaterThanOrEqual(before + 359 * 60 * 1000);
+    expect(until).toBeLessThanOrEqual(Date.now() + 361 * 60 * 1000);
     expect(pauseBuilder["eq"]).toHaveBeenCalledWith("whatsapp_chat_id", "972501112233@c.us");
   });
 

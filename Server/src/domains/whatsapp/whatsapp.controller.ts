@@ -143,8 +143,8 @@ export const whatsappController = {
       status: "sent",
     });
 
-    // Set 1-hour cooldown
-    const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    // Set 6-hour cooldown
+    const pausedUntil = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
     await supabaseAdmin
       .from("conversations")
       .update({ bot_paused: true, bot_paused_until: pausedUntil })

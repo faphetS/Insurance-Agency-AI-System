@@ -55,7 +55,7 @@ async function processCallback(body: ChatwootCallback): Promise<void> {
 
   await sendMessage(chatId, content, { skipMirror: true });
 
-  const pausedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const pausedUntil = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
   const { error } = await supabaseAdmin
     .from("conversations")
     .update({ bot_paused: true, bot_paused_until: pausedUntil })
@@ -64,7 +64,7 @@ async function processCallback(body: ChatwootCallback): Promise<void> {
     logger.warn({ chatId, error }, "chatwoot takeover: failed to pause bot");
   }
 
-  logger.info({ chatId, pausedUntil }, "chatwoot agent takeover — reply forwarded, bot paused 1h");
+  logger.info({ chatId, pausedUntil }, "chatwoot agent takeover — reply forwarded, bot paused 6h");
 }
 
 export const chatwootController = {
