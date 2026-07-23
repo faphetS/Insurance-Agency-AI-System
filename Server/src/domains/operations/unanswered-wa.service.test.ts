@@ -7,7 +7,6 @@ const {
   mockPoolQuery,
   mockFromImpl,
   mockOpCreds,
-  mockSendMessageWith,
   mockSendInteractiveButtonsWith,
   mockNotifyOwnerOps,
   mockExtractButtonId,
@@ -17,7 +16,6 @@ const {
   mockPoolQuery: vi.fn(),
   mockFromImpl: vi.fn(),
   mockOpCreds: vi.fn(),
-  mockSendMessageWith: vi.fn(),
   mockSendInteractiveButtonsWith: vi.fn(),
   mockNotifyOwnerOps: vi.fn(),
   mockExtractButtonId: vi.fn(),
@@ -57,16 +55,16 @@ vi.mock("../../config/supabase.js", () => ({
 
 vi.mock("../whatsapp/whatsapp.service.js", () => ({
   opCreds: mockOpCreds,
-  sendMessageWith: mockSendMessageWith,
+  sendMessageWith: vi.fn(),
   sendInteractiveButtonsWith: mockSendInteractiveButtonsWith,
   sendMessageWithTyping: vi.fn(),
 }));
 
-// Use the REAL toChatId (pure), mock only extractButtonId
+// Use the REAL pure helpers (toChatId, toLocalPhone, displayName), mock only extractButtonId
 vi.mock("../whatsapp/whatsapp.util.js", async () => {
   const actual = await vi.importActual<typeof import("../whatsapp/whatsapp.util.js")>("../whatsapp/whatsapp.util.js");
   return {
-    toChatId: actual.toChatId,
+    ...actual,
     extractButtonId: mockExtractButtonId,
   };
 });
@@ -86,9 +84,10 @@ vi.mock("./unanswered-wa.llm.js", () => ({
 import {
   handleOpInstanceEvent,
   sweepUnanswered,
-  sendUnansweredFollowups,
+  sendCallbackReminders,
   isWithinWatchWindow,
   AUTO_REPLY_TEXT,
+  AUTO_REPLY_BUTTONS,
 } from "./unanswered-wa.service.js";
 
 // ---------------------------------------------------------------------------
@@ -128,40 +127,48 @@ function setupExclusionQueries(opts?: {
 }
 
 // ---------------------------------------------------------------------------
-// isWithinWatchWindow — Israel TZ window boundaries (07:00-20:00 inclusive)
+// isWithinWatchWindow — Israel TZ window boundaries (Sun-Thu 09:00-18:00 inclusive)
 // ---------------------------------------------------------------------------
 
 describe("isWithinWatchWindow", () => {
-  it("06:59 Israel summer (UTC+3) is outside the window", () => {
-    expect(isWithinWatchWindow(new Date("2026-07-01T03:59:00Z"))).toBe(false);
+  it("Sunday 10:00 Israel summer (UTC+3) is inside the window", () => {
+    // 2026-07-05 is a Sunday. 10:00 IST = 07:00 UTC.
+    expect(isWithinWatchWindow(new Date("2026-07-05T07:00:00Z"))).toBe(true);
   });
 
-  it("07:00 Israel summer (UTC+3) is inside the window", () => {
-    expect(isWithinWatchWindow(new Date("2026-07-01T04:00:00Z"))).toBe(true);
+  it("Thursday 17:59 Israel summer (UTC+3) is inside the window", () => {
+    // 2026-07-09 is a Thursday. 17:59 IST = 14:59 UTC.
+    expect(isWithinWatchWindow(new Date("2026-07-09T14:59:00Z"))).toBe(true);
   });
 
-  it("19:59 Israel summer (UTC+3) is inside the window", () => {
-    expect(isWithinWatchWindow(new Date("2026-07-01T16:59:00Z"))).toBe(true);
+  it("Friday 12:00 Israel summer (UTC+3) is outside the window (weekend)", () => {
+    // 2026-07-10 is a Friday. 12:00 IST = 09:00 UTC.
+    expect(isWithinWatchWindow(new Date("2026-07-10T09:00:00Z"))).toBe(false);
   });
 
-  it("20:01 Israel summer (UTC+3) is outside the window", () => {
-    expect(isWithinWatchWindow(new Date("2026-07-01T17:01:00Z"))).toBe(false);
+  it("Saturday 12:00 Israel summer (UTC+3) is outside the window (weekend)", () => {
+    // 2026-07-11 is a Saturday. 12:00 IST = 09:00 UTC.
+    expect(isWithinWatchWindow(new Date("2026-07-11T09:00:00Z"))).toBe(false);
   });
 
-  it("06:59 Israel winter (UTC+2) is outside the window", () => {
-    expect(isWithinWatchWindow(new Date("2026-01-15T04:59:00Z"))).toBe(false);
+  it("Sunday 08:59 Israel summer (UTC+3) is outside the window (before open)", () => {
+    // 2026-07-05 is a Sunday. 08:59 IST = 05:59 UTC.
+    expect(isWithinWatchWindow(new Date("2026-07-05T05:59:00Z"))).toBe(false);
   });
 
-  it("07:00 Israel winter (UTC+2) is inside the window", () => {
-    expect(isWithinWatchWindow(new Date("2026-01-15T05:00:00Z"))).toBe(true);
+  it("Sunday 18:01 Israel summer (UTC+3) is outside the window (after close)", () => {
+    // 2026-07-05 is a Sunday. 18:01 IST = 15:01 UTC.
+    expect(isWithinWatchWindow(new Date("2026-07-05T15:01:00Z"))).toBe(false);
   });
 
-  it("19:59 Israel winter (UTC+2) is inside the window", () => {
-    expect(isWithinWatchWindow(new Date("2026-01-15T17:59:00Z"))).toBe(true);
+  it("Sunday 10:00 Israel winter (UTC+2) is inside the window", () => {
+    // 2026-01-04 is a Sunday. 10:00 IST = 08:00 UTC in standard time.
+    expect(isWithinWatchWindow(new Date("2026-01-04T08:00:00Z"))).toBe(true);
   });
 
-  it("20:01 Israel winter (UTC+2) is outside the window", () => {
-    expect(isWithinWatchWindow(new Date("2026-01-15T18:01:00Z"))).toBe(false);
+  it("Friday 12:00 Israel winter (UTC+2) is outside the window (weekend)", () => {
+    // 2026-01-09 is a Friday. 12:00 IST = 10:00 UTC in standard time.
+    expect(isWithinWatchWindow(new Date("2026-01-09T10:00:00Z"))).toBe(false);
   });
 });
 
@@ -180,21 +187,23 @@ describe("handleOpInstanceEvent — new chat, no active row", () => {
     await handleOpInstanceEvent({
       typeWebhook: "incomingMessageReceived",
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
-      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000), // 13:00 IST summer
+      // 2026-07-05 is a Sunday. 13:00 IST = 10:00 UTC.
+      timestamp: Math.floor(new Date("2026-07-05T10:00:00Z").getTime() / 1000),
     });
 
     const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
       String(sql).includes("INSERT INTO public.wa_unanswered"),
     );
     expect(insertCall).toBeDefined();
-    expect(insertCall![1]).toEqual(["972501111111@c.us", "Yossi", "2026-07-01T10:00:00.000Z"]);
+    expect(insertCall![1]).toEqual(["972501111111@c.us", "Yossi", "2026-07-05T10:00:00.000Z"]);
   });
 
   it("does nothing when the message is outside the watch window", async () => {
     await handleOpInstanceEvent({
       typeWebhook: "incomingMessageReceived",
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
-      timestamp: Math.floor(new Date("2026-07-01T17:30:00Z").getTime() / 1000), // 20:30 IST summer
+      // 2026-07-05 is a Sunday. 20:30 IST = 17:30 UTC — after the 18:00 close.
+      timestamp: Math.floor(new Date("2026-07-05T17:30:00Z").getTime() / 1000),
     });
 
     const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
@@ -211,7 +220,7 @@ describe("handleOpInstanceEvent — new chat, no active row", () => {
       await handleOpInstanceEvent({
         typeWebhook: "incomingMessageReceived",
         senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
-        timestamp: Math.floor(new Date("2026-07-01T17:30:00Z").getTime() / 1000), // 20:30 IST summer
+        timestamp: Math.floor(new Date("2026-07-05T17:30:00Z").getTime() / 1000),
       });
 
       const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
@@ -228,7 +237,7 @@ describe("handleOpInstanceEvent — new chat, no active row", () => {
       typeWebhook: "incomingMessageReceived",
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
       messageData: { typeMessage: "reactionMessage" },
-      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000), // 13:00 IST summer
+      timestamp: Math.floor(new Date("2026-07-05T10:00:00Z").getTime() / 1000),
     });
 
     const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
@@ -244,7 +253,7 @@ describe("handleOpInstanceEvent — new chat, no active row", () => {
         typeWebhook: "incomingMessageReceived",
         senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
         messageData: { typeMessage: "textMessage", textMessageData: { textMessage: emoji } },
-        timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000),
+        timestamp: Math.floor(new Date("2026-07-05T10:00:00Z").getTime() / 1000),
       });
 
       const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
@@ -263,7 +272,7 @@ describe("handleOpInstanceEvent — new chat, no active row", () => {
       typeWebhook: "incomingMessageReceived",
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
       messageData: { typeMessage: "textMessage", textMessageData: { textMessage: "תודה 👍" } },
-      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000),
+      timestamp: Math.floor(new Date("2026-07-05T10:00:00Z").getTime() / 1000),
     });
 
     const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
@@ -280,7 +289,7 @@ describe("handleOpInstanceEvent — new chat, no active row", () => {
     await handleOpInstanceEvent({
       typeWebhook: "incomingMessageReceived",
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
-      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000), // 13:00 IST summer
+      timestamp: Math.floor(new Date("2026-07-05T10:00:00Z").getTime() / 1000),
     });
 
     const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
@@ -301,7 +310,7 @@ describe("handleOpInstanceEvent — state transitions", () => {
     mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 1 });
   });
 
-  it("watching + incoming message: leaves state as-is (no insert, no update)", async () => {
+  it("watching + incoming message: re-anchors the silence timer to the newest message", async () => {
     mockPoolQuery.mockImplementationOnce(() =>
       Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us", state: "watching" }] }),
     );
@@ -309,31 +318,19 @@ describe("handleOpInstanceEvent — state transitions", () => {
     await handleOpInstanceEvent({
       typeWebhook: "incomingMessageReceived",
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+      timestamp: Math.floor(new Date("2026-07-05T10:30:00Z").getTime() / 1000),
     });
 
-    expect(mockPoolQuery).toHaveBeenCalledTimes(1); // only the active-row select
+    const reanchor = mockPoolQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("SET first_unanswered_at=$2"),
+    );
+    expect(reanchor).toBeDefined();
+    expect(reanchor![1]).toEqual(["row-1", "2026-07-05T10:30:00.000Z"]);
   });
 
-  it("awaiting_reply + incoming message: resolves the row WITH day-block (any reply cancels follow-up)", async () => {
+  it("watching + a reaction: does NOT re-anchor the silence timer", async () => {
     mockPoolQuery.mockImplementationOnce(() =>
-      Promise.resolve({ rows: [{ id: "row-2", chat_id: "972501111111@c.us", state: "awaiting_reply" }] }),
-    );
-
-    await handleOpInstanceEvent({
-      typeWebhook: "incomingMessageReceived",
-      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
-    });
-
-    const resolveCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
-    );
-    expect(resolveCall).toBeDefined();
-    expect(resolveCall![1]).toEqual(["row-2"]);
-  });
-
-  it("awaiting_reply + a reaction: also resolves the row WITH day-block", async () => {
-    mockPoolQuery.mockImplementationOnce(() =>
-      Promise.resolve({ rows: [{ id: "row-2b", chat_id: "972501111111@c.us", state: "awaiting_reply" }] }),
+      Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us", state: "watching" }] }),
     );
 
     await handleOpInstanceEvent({
@@ -342,11 +339,7 @@ describe("handleOpInstanceEvent — state transitions", () => {
       messageData: { typeMessage: "reactionMessage" },
     });
 
-    const resolveCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
-    );
-    expect(resolveCall).toBeDefined();
-    expect(resolveCall![1]).toEqual(["row-2b"]);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(1); // only the active-row select
   });
 
   it("outgoingMessageReceived (Didi typed manually): resolves the active row for the chat WITH day-block", async () => {
@@ -391,10 +384,7 @@ describe("handleOpInstanceEvent — state transitions", () => {
     expect(mockFromImpl).not.toHaveBeenCalled();
   });
 
-  it("pending_followup + ua_ok: resolves WITH day-block, WITHOUT alerting Didi", async () => {
-    mockPoolQuery.mockImplementationOnce(() =>
-      Promise.resolve({ rows: [{ id: "row-3", chat_id: "972501111111@c.us", state: "pending_followup" }] }),
-    );
+  it("ua_ok tap: resolves the chat's active row WITH day-block, WITHOUT alerting Didi", async () => {
     mockExtractButtonId.mockReturnValue("ua_ok");
 
     await handleOpInstanceEvent({
@@ -404,16 +394,16 @@ describe("handleOpInstanceEvent — state transitions", () => {
 
     expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
     const resolveCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+      ([sql]) =>
+        String(sql).includes("state='resolved'") &&
+        String(sql).includes("chat_id=$1") &&
+        String(sql).includes("blocks_rest_of_day=true"),
     );
     expect(resolveCall).toBeDefined();
-    expect(resolveCall![1]).toEqual(["row-3"]);
+    expect(resolveCall![1]).toEqual(["972501111111@c.us"]);
   });
 
-  it("pending_followup + ua_callback: alerts Didi via notifyOwnerOps, then resolves WITH day-block", async () => {
-    mockPoolQuery.mockImplementationOnce(() =>
-      Promise.resolve({ rows: [{ id: "row-4", chat_id: "972501111111@c.us", state: "pending_followup" }] }),
-    );
+  it("ua_callback tap with an active row: stamps callback_requested_at + resolves WITH day-block, NO immediate owner notify", async () => {
     mockExtractButtonId.mockReturnValue("ua_callback");
 
     await handleOpInstanceEvent({
@@ -421,15 +411,70 @@ describe("handleOpInstanceEvent — state transitions", () => {
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
     });
 
-    expect(mockNotifyOwnerOps).toHaveBeenCalledOnce();
-    const [text] = mockNotifyOwnerOps.mock.calls[0] as [string];
-    expect(text).toContain("Yossi");
-    expect(text).toContain("972501111111");
-    const resolveCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
+    expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
+    const updateCall = mockPoolQuery.mock.calls.find(
+      ([sql]) =>
+        String(sql).includes("callback_requested_at=now()") &&
+        String(sql).includes("state='resolved'") &&
+        String(sql).includes("blocks_rest_of_day=true"),
     );
-    expect(resolveCall).toBeDefined();
-    expect(resolveCall![1]).toEqual(["row-4"]);
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).toEqual(["972501111111@c.us"]);
+    // active-row hit → no fallback stamp, no synthetic insert
+    expect(
+      mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO public.wa_unanswered")),
+    ).toBeUndefined();
+  });
+
+  it("stale ua_callback tap (row already expired): stamps the chat's latest auto-replied row — no new watch, no second auto-reply", async () => {
+    mockExtractButtonId.mockReturnValue("ua_callback");
+    mockPoolQuery
+      .mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })) // active-row UPDATE → none
+      .mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 1 })); // stale-row UPDATE → hit
+
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+    });
+
+    const staleCall = mockPoolQuery.mock.calls[1]!;
+    expect(String(staleCall[0])).toContain("auto_replied_at IS NOT NULL");
+    expect(String(staleCall[0])).toContain("callback_requested_at=now()");
+    expect(
+      mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO public.wa_unanswered")),
+    ).toBeUndefined();
+    expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
+  });
+
+  it("ua_callback tap with no trace of the chat left: records a synthetic resolved row", async () => {
+    mockExtractButtonId.mockReturnValue("ua_callback");
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+    });
+
+    const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO public.wa_unanswered"),
+    );
+    expect(insertCall).toBeDefined();
+    expect(String(insertCall![0])).toContain("callback_requested_at");
+    expect(insertCall![1]).toEqual(["972501111111@c.us", "Yossi"]);
+  });
+
+  it("stale ua_ok tap (no active row): no-op — no watching row created, no auto-reply cycle started", async () => {
+    mockExtractButtonId.mockReturnValue("ua_ok");
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    await handleOpInstanceEvent({
+      typeWebhook: "incomingMessageReceived",
+      senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+    });
+
+    expect(
+      mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO public.wa_unanswered")),
+    ).toBeUndefined();
   });
 
   it("pending_followup + free-text message: resolves WITH day-block, silently (no owner notify)", async () => {
@@ -533,12 +578,21 @@ describe("handleOpInstanceEvent — exclusions", () => {
 describe("sweepUnanswered", () => {
   const CREDS = { idInstance: "op-id", token: "op-token", baseUrl: "https://test.api.greenapi.com" };
 
+  // 2026-07-05 is a Sunday — well within the Sun-Thu 09:00-18:00 window at 13:00 IST.
+  const WITHIN_WINDOW_NOW = new Date("2026-07-05T10:00:00Z");
+
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(WITHIN_WINDOW_NOW);
     mockOpCreds.mockReturnValue(CREDS);
-    mockSendMessageWith.mockResolvedValue({ idMessage: "x" });
+    mockSendInteractiveButtonsWith.mockResolvedValue({ idMessage: "x" });
     mockSleep.mockResolvedValue(undefined);
     mockNeedsReplyFromDidi.mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("no-ops when opCreds() is null", async () => {
@@ -550,13 +604,16 @@ describe("sweepUnanswered", () => {
     expect(mockPoolQuery).not.toHaveBeenCalled();
   });
 
-  it("sends an auto-reply and transitions watching -> awaiting_reply", async () => {
+  it("sends buttons and transitions watching -> pending_followup", async () => {
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'watching'")) {
         return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
       }
       if (sql.includes("count(*)::int")) {
         return Promise.resolve({ rows: [{ c: 0 }] });
+      }
+      if (sql.includes("SELECT state FROM")) {
+        return Promise.resolve({ rows: [{ state: "watching" }] });
       }
       if (sql.includes("SELECT 1 FROM public.wa_unanswered")) {
         return Promise.resolve({ rows: [], rowCount: 0 });
@@ -568,10 +625,36 @@ describe("sweepUnanswered", () => {
 
     expect(result.autoReplied).toBe(1);
     expect(result.skipped).toBe(0);
-    expect(mockSendMessageWith).toHaveBeenCalledWith(CREDS, "972501111111@c.us", AUTO_REPLY_TEXT);
+    expect(mockSendInteractiveButtonsWith).toHaveBeenCalledWith(
+      CREDS,
+      "972501111111@c.us",
+      AUTO_REPLY_TEXT,
+      AUTO_REPLY_BUTTONS,
+    );
+    const updateCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("state='pending_followup'") && String(sql).includes("auto_replied_at=now()"),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).toEqual(["row-1"]);
   });
 
-  it("resolves WITH day-block (no follow-up eligibility) when an auto-reply was already sent today for that chat", async () => {
+  it("outside the watch window: expires all watching rows and sends nothing", async () => {
+    // 2026-07-05 is a Sunday. 20:30 IST = 17:30 UTC — after the 18:00 close.
+    vi.setSystemTime(new Date("2026-07-05T17:30:00Z"));
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 4 });
+
+    const result = await sweepUnanswered();
+
+    expect(result).toEqual({ processed: 0, autoReplied: 0, skipped: 0, closedByLlm: 0 });
+    expect(mockNeedsReplyFromDidi).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
+    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+    const expireCall = mockPoolQuery.mock.calls[0];
+    expect(String(expireCall[0])).toContain("state='expired'");
+    expect(String(expireCall[0])).toContain("WHERE state='watching'");
+  });
+
+  it("resolves WITH day-block (no reminder eligibility) when an auto-reply was already sent today for that chat", async () => {
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'watching'")) {
         return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
@@ -589,7 +672,7 @@ describe("sweepUnanswered", () => {
 
     expect(result.skipped).toBe(1);
     expect(result.autoReplied).toBe(0);
-    expect(mockSendMessageWith).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
     const resolveCall = mockPoolQuery.mock.calls.find(
       ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
     );
@@ -597,7 +680,7 @@ describe("sweepUnanswered", () => {
     expect(resolveCall![1]).toEqual(["row-1"]);
   });
 
-  it("enforces the daily auto-reply cap: the 21st eligible chat is skipped, not sent", async () => {
+  it("enforces the daily auto-reply cap: the 21st eligible chat expires without paying the LLM call", async () => {
     const rows = Array.from({ length: 21 }, (_, i) => ({ id: `row-${i}`, chat_id: `97250000${String(i).padStart(3, "0")}@c.us` }));
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'watching'")) {
@@ -605,6 +688,9 @@ describe("sweepUnanswered", () => {
       }
       if (sql.includes("count(*)::int")) {
         return Promise.resolve({ rows: [{ c: 0 }] });
+      }
+      if (sql.includes("SELECT state FROM")) {
+        return Promise.resolve({ rows: [{ state: "watching" }] });
       }
       if (sql.includes("SELECT 1 FROM public.wa_unanswered")) {
         return Promise.resolve({ rows: [], rowCount: 0 });
@@ -616,11 +702,31 @@ describe("sweepUnanswered", () => {
 
     expect(result.autoReplied).toBe(20);
     expect(result.skipped).toBe(1);
-    expect(mockSendMessageWith).toHaveBeenCalledTimes(20);
+    expect(mockSendInteractiveButtonsWith).toHaveBeenCalledTimes(20);
+    // Cap check runs before the LLM gate — the capped row must not burn a Gemini call.
+    expect(mockNeedsReplyFromDidi).toHaveBeenCalledTimes(20);
     const expireCall = mockPoolQuery.mock.calls.find(
       ([sql, params]) => String(sql).includes("state='expired'") && String((params as unknown[])?.[0]) === "row-20",
     );
     expect(expireCall).toBeDefined();
+  });
+
+  it("race guard: a row resolved mid-sweep (Didi answered) is skipped — no send", async () => {
+    mockPoolQuery.mockImplementation((sql: string) => {
+      if (sql.includes("state = 'watching'")) {
+        return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
+      }
+      if (sql.includes("count(*)::int")) return Promise.resolve({ rows: [{ c: 0 }] });
+      if (sql.includes("SELECT state FROM")) return Promise.resolve({ rows: [{ state: "resolved" }] });
+      if (sql.includes("SELECT 1 FROM public.wa_unanswered")) return Promise.resolve({ rows: [], rowCount: 0 });
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+
+    const result = await sweepUnanswered();
+
+    expect(result.autoReplied).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
   });
 
   it("paces sends 20s apart (sleep called once for 2 sends)", async () => {
@@ -631,6 +737,7 @@ describe("sweepUnanswered", () => {
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'watching'")) return Promise.resolve({ rows });
       if (sql.includes("count(*)::int")) return Promise.resolve({ rows: [{ c: 0 }] });
+      if (sql.includes("SELECT state FROM")) return Promise.resolve({ rows: [{ state: "watching" }] });
       if (sql.includes("SELECT 1 FROM public.wa_unanswered")) return Promise.resolve({ rows: [], rowCount: 0 });
       return Promise.resolve({ rows: [], rowCount: 1 });
     });
@@ -655,7 +762,7 @@ describe("sweepUnanswered", () => {
 
     expect(result.closedByLlm).toBe(1);
     expect(result.autoReplied).toBe(0);
-    expect(mockSendMessageWith).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
     const resolveCall = mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("state='resolved'"));
     expect(resolveCall).toBeDefined();
     expect(resolveCall![1]).toEqual(["row-1"]);
@@ -668,6 +775,7 @@ describe("sweepUnanswered", () => {
         return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
       }
       if (sql.includes("count(*)::int")) return Promise.resolve({ rows: [{ c: 0 }] });
+      if (sql.includes("SELECT state FROM")) return Promise.resolve({ rows: [{ state: "watching" }] });
       if (sql.includes("SELECT 1 FROM public.wa_unanswered")) return Promise.resolve({ rows: [], rowCount: 0 });
       return Promise.resolve({ rows: [], rowCount: 1 });
     });
@@ -676,7 +784,12 @@ describe("sweepUnanswered", () => {
 
     expect(result.closedByLlm).toBe(0);
     expect(result.autoReplied).toBe(1);
-    expect(mockSendMessageWith).toHaveBeenCalledWith(CREDS, "972501111111@c.us", AUTO_REPLY_TEXT);
+    expect(mockSendInteractiveButtonsWith).toHaveBeenCalledWith(
+      CREDS,
+      "972501111111@c.us",
+      AUTO_REPLY_TEXT,
+      AUTO_REPLY_BUTTONS,
+    );
   });
 
   it("dedupe-hit: a row already auto-replied today is resolved WITH day-block, no send", async () => {
@@ -692,7 +805,7 @@ describe("sweepUnanswered", () => {
     const result = await sweepUnanswered();
 
     expect(result.skipped).toBe(1);
-    expect(mockSendMessageWith).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
     const resolveCall = mockPoolQuery.mock.calls.find(
       ([sql]) => String(sql).includes("state='resolved'") && String(sql).includes("blocks_rest_of_day=true"),
     );
@@ -700,136 +813,144 @@ describe("sweepUnanswered", () => {
     expect(resolveCall![1]).toEqual(["row-1"]);
   });
 
-  it("cap-hit: the 21st eligible row expires (not resolved, not day-blocked), no send", async () => {
-    const rows = Array.from({ length: 21 }, (_, i) => ({ id: `row-${i}`, chat_id: `97250000${String(i).padStart(3, "0")}@c.us` }));
-    mockPoolQuery.mockImplementation((sql: string) => {
-      if (sql.includes("state = 'watching'")) return Promise.resolve({ rows });
-      if (sql.includes("count(*)::int")) return Promise.resolve({ rows: [{ c: 0 }] });
-      if (sql.includes("SELECT 1 FROM public.wa_unanswered")) return Promise.resolve({ rows: [], rowCount: 0 });
-      return Promise.resolve({ rows: [], rowCount: 1 });
-    });
+});
 
-    const result = await sweepUnanswered();
+// ---------------------------------------------------------------------------
+// sendCallbackReminders
+// ---------------------------------------------------------------------------
 
-    expect(result.skipped).toBe(1);
-    expect(mockSendMessageWith).toHaveBeenCalledTimes(20);
-    const expireCall = mockPoolQuery.mock.calls.find(
-      ([sql, params]) => String(sql).includes("state='expired'") && String((params as unknown[])?.[0]) === "row-20",
-    );
-    expect(expireCall).toBeDefined();
+describe("sendCallbackReminders", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    // 2026-07-05 is a Sunday — a business day for the reminder pass.
+    vi.setSystemTime(new Date("2026-07-05T06:00:00Z"));
+    mockNotifyOwnerOps.mockResolvedValue(true);
   });
 
-  it("midnight expiry: expires yesterday's pending_followup rows via the daily-reset update", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("aggregates unreminded callback rows into a single owner notify and stamps callback_reminded_at", async () => {
+    mockPoolQuery.mockImplementation((sql: string) => {
+      if (sql.includes("callback_requested_at IS NOT NULL AND callback_reminded_at IS NULL")) {
+        return Promise.resolve({
+          rows: [
+            { id: "row-1", chat_id: "972501111111@c.us", sender_name: "Yossi" },
+            { id: "row-2", chat_id: "972502222222@c.us", sender_name: null },
+          ],
+        });
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+
+    const result = await sendCallbackReminders();
+
+    expect(result.reminded).toBe(2);
+    expect(mockNotifyOwnerOps).toHaveBeenCalledOnce();
+    const [message] = mockNotifyOwnerOps.mock.calls[0] as [string];
+    expect(message).toContain("Yossi");
+    expect(message).toContain("050-1111111");
+    expect(message).toContain("050-2222222");
+
+    const stampCall = mockPoolQuery.mock.calls.find(
+      ([sql]) => String(sql).includes("callback_reminded_at=now()") && String(sql).includes("id = ANY($1)"),
+    );
+    expect(stampCall).toBeDefined();
+    expect(stampCall![1]).toEqual([["row-1", "row-2"]]);
+  });
+
+  it("Friday: defers reminders + daily reset to Sunday, but housekeeping still runs", async () => {
+    // 2026-07-10 is a Friday.
+    vi.setSystemTime(new Date("2026-07-10T06:00:00Z"));
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 3 });
+
+    const result = await sendCallbackReminders();
+
+    expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
+    expect(result.reminded).toBe(0);
+    expect(result.expired).toBe(0);
+    expect(result.deleted).toBe(3);
+    // No callback-rows SELECT ran (the housekeeping DELETE shares the predicate text,
+    // so match on the SELECT's own column list instead)
+    expect(
+      mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("SELECT id, chat_id, sender_name")),
+    ).toBeUndefined();
+    const deleteCall = mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("DELETE FROM public.wa_unanswered"));
+    expect(deleteCall).toBeDefined();
+  });
+
+  it("owner notify fails: rows are NOT stamped (left for tomorrow's retry), reminded=0", async () => {
+    mockNotifyOwnerOps.mockResolvedValue(false);
+    mockPoolQuery.mockImplementation((sql: string) => {
+      if (sql.includes("callback_requested_at IS NOT NULL AND callback_reminded_at IS NULL")) {
+        return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us", sender_name: "Yossi" }] });
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+
+    const result = await sendCallbackReminders();
+
+    expect(result.reminded).toBe(0);
+    expect(mockNotifyOwnerOps).toHaveBeenCalledOnce();
+    const stampCall = mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("callback_reminded_at=now()"));
+    expect(stampCall).toBeUndefined();
+  });
+
+  it("zero unreminded callback rows: no notify sent", async () => {
     mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
 
-    await sweepUnanswered();
+    const result = await sendCallbackReminders();
+
+    expect(result.reminded).toBe(0);
+    expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
+  });
+
+  it("expires yesterday's pending_followup rows (auto_replied_at before today's Israel day start)", async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    await sendCallbackReminders();
 
     const expireCall = mockPoolQuery.mock.calls.find(
       ([sql]) => String(sql).includes("state='expired'") && String(sql).includes("state='pending_followup'"),
     );
     expect(expireCall).toBeDefined();
   });
-});
 
-// ---------------------------------------------------------------------------
-// sendUnansweredFollowups
-// ---------------------------------------------------------------------------
+  it("housekeeping delete excludes rows with an unreminded callback request", async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
 
-describe("sendUnansweredFollowups", () => {
-  const CREDS = { idInstance: "op-id", token: "op-token", baseUrl: "https://test.api.greenapi.com" };
+    await sendCallbackReminders();
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockOpCreds.mockReturnValue(CREDS);
-    mockSendInteractiveButtonsWith.mockResolvedValue({ idMessage: "x" });
-    mockSleep.mockResolvedValue(undefined);
+    const deleteCall = mockPoolQuery.mock.calls.find(([sql]) => String(sql).includes("DELETE FROM public.wa_unanswered"));
+    expect(deleteCall).toBeDefined();
+    expect(String(deleteCall![0])).toContain(
+      "AND NOT (callback_requested_at IS NOT NULL AND callback_reminded_at IS NULL)",
+    );
   });
 
-  it("sends follow-up buttons and transitions awaiting_reply -> pending_followup", async () => {
-    mockPoolQuery.mockImplementation((sql: string) => {
-      if (sql.includes("state = 'awaiting_reply'")) {
-        return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
-      }
-      if (sql.includes("count(*)::int")) {
-        return Promise.resolve({ rows: [{ c: 0 }] });
-      }
-      return Promise.resolve({ rows: [], rowCount: 0 });
-    });
+  it("mode=log: no notify sent and rows are NOT stamped (kept intact for the send-mode flip)", async () => {
+    await setUnansweredWaMode("log");
+    try {
+      mockPoolQuery.mockImplementation((sql: string) => {
+        if (sql.includes("callback_requested_at IS NOT NULL AND callback_reminded_at IS NULL")) {
+          return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us", sender_name: "Yossi" }] });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      });
 
-    const result = await sendUnansweredFollowups();
+      const result = await sendCallbackReminders();
 
-    expect(result.followupsSent).toBe(1);
-    expect(mockSendInteractiveButtonsWith).toHaveBeenCalledOnce();
-    const call = mockSendInteractiveButtonsWith.mock.calls[0] as [unknown, string, string, unknown];
-    expect(call[0]).toEqual(CREDS);
-    expect(call[1]).toBe("972501111111@c.us");
-  });
-
-  it("enforces the daily follow-up cap: the 41st eligible chat is expired, not sent", async () => {
-    const rows = Array.from({ length: 41 }, (_, i) => ({ id: `row-${i}`, chat_id: `97250000${String(i).padStart(3, "0")}@c.us` }));
-    mockPoolQuery.mockImplementation((sql: string) => {
-      if (sql.includes("state = 'awaiting_reply'")) {
-        return Promise.resolve({ rows });
-      }
-      if (sql.includes("count(*)::int")) {
-        return Promise.resolve({ rows: [{ c: 0 }] });
-      }
-      return Promise.resolve({ rows: [], rowCount: 0 });
-    });
-
-    const result = await sendUnansweredFollowups();
-
-    expect(result.followupsSent).toBe(40);
-    expect(mockSendInteractiveButtonsWith).toHaveBeenCalledTimes(40);
-    expect(result.expired).toBeGreaterThanOrEqual(1);
-  });
-
-  it("paces sends 20s apart (sleep called once for 2 sends)", async () => {
-    const rows = [
-      { id: "row-1", chat_id: "972501111111@c.us" },
-      { id: "row-2", chat_id: "972502222222@c.us" },
-    ];
-    mockPoolQuery.mockImplementation((sql: string) => {
-      if (sql.includes("state = 'awaiting_reply'")) return Promise.resolve({ rows });
-      if (sql.includes("count(*)::int")) return Promise.resolve({ rows: [{ c: 0 }] });
-      return Promise.resolve({ rows: [], rowCount: 0 });
-    });
-
-    await sendUnansweredFollowups();
-
-    expect(mockSleep).toHaveBeenCalledTimes(1);
-    expect(mockSleep).toHaveBeenCalledWith(20_000);
-  });
-
-  it("still runs housekeeping even when opCreds() is null (no sends, no expiry — that now lives in sweepUnanswered)", async () => {
-    mockOpCreds.mockReturnValue(null);
-    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 3 });
-
-    const result = await sendUnansweredFollowups();
-
-    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
-    expect(result.followupsSent).toBe(0);
-    expect(result.expired).toBe(0);
-    expect(result.deleted).toBe(3);
-  });
-
-  it("eligibility query requires a non-NULL auto_replied_at — excludes rows never genuinely auto-replied", async () => {
-    mockPoolQuery.mockImplementation((sql: string) => {
-      if (sql.includes("state = 'awaiting_reply'")) {
-        expect(sql).toContain("auto_replied_at IS NOT NULL");
-        expect(sql).not.toContain("COALESCE");
-        return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
-      }
-      if (sql.includes("count(*)::int")) {
-        return Promise.resolve({ rows: [{ c: 0 }] });
-      }
-      return Promise.resolve({ rows: [], rowCount: 0 });
-    });
-
-    const result = await sendUnansweredFollowups();
-
-    expect(result.followupsSent).toBe(1);
-    expect(mockSendInteractiveButtonsWith).toHaveBeenCalledOnce();
+      expect(result.reminded).toBe(0);
+      expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
+      const stampCall = mockPoolQuery.mock.calls.find(([sql]) =>
+        String(sql).includes("callback_reminded_at=now()"),
+      );
+      expect(stampCall).toBeUndefined();
+    } finally {
+      await setUnansweredWaMode("send");
+    }
   });
 });
 
@@ -856,7 +977,7 @@ describe("handleOpInstanceEvent — mode=off", () => {
     await handleOpInstanceEvent({
       typeWebhook: "incomingMessageReceived",
       senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
-      timestamp: Math.floor(new Date("2026-07-01T10:00:00Z").getTime() / 1000),
+      timestamp: Math.floor(new Date("2026-07-05T10:00:00Z").getTime() / 1000),
     });
 
     expect(mockPoolQuery).not.toHaveBeenCalled();
@@ -882,7 +1003,7 @@ describe("sweepUnanswered — mode=off", () => {
     expect(result).toEqual({ processed: 0, autoReplied: 0, skipped: 0, closedByLlm: 0 });
     expect(mockOpCreds).not.toHaveBeenCalled();
     expect(mockNeedsReplyFromDidi).not.toHaveBeenCalled();
-    expect(mockSendMessageWith).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
     expect(mockPoolQuery).toHaveBeenCalledTimes(1);
     const expireCall = mockPoolQuery.mock.calls[0];
     expect(String(expireCall[0])).toContain("state='expired'");
@@ -892,33 +1013,14 @@ describe("sweepUnanswered — mode=off", () => {
   });
 });
 
-describe("sendUnansweredFollowups — mode=off", () => {
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    await setUnansweredWaMode("off");
-  });
-
-  afterEach(async () => {
-    await setUnansweredWaMode("send");
-  });
-
-  it("skips follow-up sends but still runs the housekeeping delete", async () => {
-    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 2 });
-
-    const result = await sendUnansweredFollowups();
-
-    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
-    expect(result.followupsSent).toBe(0);
-    expect(result.expired).toBe(0);
-    expect(result.deleted).toBe(2);
-  });
-});
-
 describe("sweepUnanswered — mode=log", () => {
   const CREDS = { idInstance: "op-id", token: "op-token", baseUrl: "https://test.api.greenapi.com" };
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+    // 2026-07-05 is a Sunday, 13:00 IST — inside the window.
+    vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
     await setUnansweredWaMode("log");
     mockOpCreds.mockReturnValue(CREDS);
     mockSleep.mockResolvedValue(undefined);
@@ -926,16 +1028,20 @@ describe("sweepUnanswered — mode=log", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await setUnansweredWaMode("send");
   });
 
-  it("does not call sendMessageWith but still stamps auto_replied_at and counts the reply", async () => {
+  it("does not call sendInteractiveButtonsWith but still stamps auto_replied_at and counts the reply", async () => {
     mockPoolQuery.mockImplementation((sql: string) => {
       if (sql.includes("state = 'watching'")) {
         return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
       }
       if (sql.includes("count(*)::int")) {
         return Promise.resolve({ rows: [{ c: 0 }] });
+      }
+      if (sql.includes("SELECT state FROM")) {
+        return Promise.resolve({ rows: [{ state: "watching" }] });
       }
       if (sql.includes("SELECT 1 FROM public.wa_unanswered")) {
         return Promise.resolve({ rows: [], rowCount: 0 });
@@ -946,48 +1052,33 @@ describe("sweepUnanswered — mode=log", () => {
     const result = await sweepUnanswered();
 
     expect(result.autoReplied).toBe(1);
-    expect(mockSendMessageWith).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
     const updateCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='awaiting_reply'") && String(sql).includes("auto_replied_at=now()"),
+      ([sql]) => String(sql).includes("state='pending_followup'") && String(sql).includes("auto_replied_at=now()"),
     );
     expect(updateCall).toBeDefined();
     expect(updateCall![1]).toEqual(["row-1"]);
   });
 });
 
-describe("sendUnansweredFollowups — mode=log", () => {
-  const CREDS = { idInstance: "op-id", token: "op-token", baseUrl: "https://test.api.greenapi.com" };
-
+describe("sendCallbackReminders — mode=off", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    await setUnansweredWaMode("log");
-    mockOpCreds.mockReturnValue(CREDS);
-    mockSleep.mockResolvedValue(undefined);
+    await setUnansweredWaMode("off");
   });
 
   afterEach(async () => {
     await setUnansweredWaMode("send");
   });
 
-  it("does not call sendInteractiveButtonsWith but still stamps followup_sent_at", async () => {
-    mockPoolQuery.mockImplementation((sql: string) => {
-      if (sql.includes("state = 'awaiting_reply'")) {
-        return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
-      }
-      if (sql.includes("count(*)::int")) {
-        return Promise.resolve({ rows: [{ c: 0 }] });
-      }
-      return Promise.resolve({ rows: [], rowCount: 0 });
-    });
+  it("skips reminder + expiry work but still runs the housekeeping delete", async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 2 });
 
-    const result = await sendUnansweredFollowups();
+    const result = await sendCallbackReminders();
 
-    expect(result.followupsSent).toBe(1);
-    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
-    const updateCall = mockPoolQuery.mock.calls.find(
-      ([sql]) => String(sql).includes("state='pending_followup'") && String(sql).includes("followup_sent_at=now()"),
-    );
-    expect(updateCall).toBeDefined();
-    expect(updateCall![1]).toEqual(["row-1"]);
+    expect(mockNotifyOwnerOps).not.toHaveBeenCalled();
+    expect(result.reminded).toBe(0);
+    expect(result.expired).toBe(0);
+    expect(result.deleted).toBe(2);
   });
 });

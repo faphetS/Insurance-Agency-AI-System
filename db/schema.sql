@@ -408,7 +408,9 @@ CREATE INDEX email_staff_mentions_status_idx
 -- ============================================================
 -- wa_unanswered — tracks unanswered inbound messages on Didi's own
 --   WhatsApp line (GreenAPI OP instance) so the operational bot can
---   auto-reply after 1h of silence and a follow-up the next morning.
+--   auto-reply (with buttons) after 10 min of silence, Sun-Thu 09:00-18:00
+--   Israel time, and aggregate any "call me back" taps into a single
+--   next-business-day 09:00 owner reminder (Fri/Sat roll to Sunday).
 --   One "active" row per chat_id at a time (partial unique index).
 -- ============================================================
 CREATE TABLE public.wa_unanswered (
@@ -425,6 +427,8 @@ CREATE TABLE public.wa_unanswered (
                       )),
   resolved_at         timestamptz,
   blocks_rest_of_day  boolean     NOT NULL DEFAULT false,
+  callback_requested_at timestamptz,
+  callback_reminded_at  timestamptz,
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now()
 );

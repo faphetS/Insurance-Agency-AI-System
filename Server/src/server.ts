@@ -10,7 +10,7 @@ import { startCommitmentCrons } from "./domains/commitments/commitments.service.
 import { sendMorningDigest } from "./domains/operations/morning-digest.service.js";
 import { runStaffEmailNotify } from "./domains/operations/email-mentions.service.js";
 import { runUnansweredEmailNotify } from "./domains/operations/unanswered-emails.service.js";
-import { sweepUnanswered, sendUnansweredFollowups } from "./domains/operations/unanswered-wa.service.js";
+import { sweepUnanswered, sendCallbackReminders } from "./domains/operations/unanswered-wa.service.js";
 import { applyRelevanceDropdowns, sweepRelevanceMoves } from "./domains/integrations/google/leads-relevance.service.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
 // v4: disabled — calendar 24h/1h reminders stay gated off (service kept dormant).
@@ -181,8 +181,8 @@ const server = app.listen(env.PORT, () => {
         runUnansweredEmailNotify().catch((err: unknown) =>
           logger.error({ err }, "unanswered-emails: daily run failed"),
         );
-        sendUnansweredFollowups().catch((err: unknown) =>
-          logger.error({ err }, "unanswered-wa: daily follow-up run failed"),
+        sendCallbackReminders().catch((err: unknown) =>
+          logger.error({ err }, "unanswered-wa: daily callback-reminder run failed"),
         );
         applyRelevanceDropdowns().catch((err: unknown) =>
           logger.error({ err }, "leads-relevance: daily dropdown re-apply failed"),
@@ -218,12 +218,13 @@ const server = app.listen(env.PORT, () => {
       );
     }, 10 * 60 * 1000);
 
-    // Unanswered-WA sweeper — every 5 minutes, auto-reply on Didi's own line after 1h of silence.
+    // Unanswered-WA sweeper — every 2 minutes, auto-reply (with buttons) on Didi's own line
+    // after 10 minutes of silence, Sun-Thu 09:00-18:00 Israel time only.
     setInterval(() => {
       sweepUnanswered().catch((err: unknown) =>
         logger.error({ err }, "unanswered-wa: scheduled sweep failed"),
       );
-    }, 5 * 60 * 1000);
+    }, 2 * 60 * 1000);
 
     // Leads relevance — F-column dropdowns applied at boot (idempotent), rows moved every 5 min.
     setTimeout(() => {

@@ -5,7 +5,7 @@ import { runMorningCommitments } from "../commitments/commitments.service.js";
 import { sendMorningDigest } from "./morning-digest.service.js";
 import { runStaffEmailNotify } from "./email-mentions.service.js";
 import { runUnansweredEmailNotify } from "./unanswered-emails.service.js";
-import { sweepUnanswered, sendUnansweredFollowups } from "./unanswered-wa.service.js";
+import { sweepUnanswered, sendCallbackReminders } from "./unanswered-wa.service.js";
 import { applyRelevanceDropdowns, sweepRelevanceMoves } from "../integrations/google/leads-relevance.service.js";
 
 export const operationsController = {
@@ -36,8 +36,8 @@ export const operationsController = {
   async runUnanswered(_req: Request, res: Response): Promise<void> {
     logger.info("operations: manual unanswered-wa trigger");
     const sweep = await sweepUnanswered();
-    const followups = await sendUnansweredFollowups();
-    res.json({ status: "success", sweep, followups });
+    const reminders = await sendCallbackReminders();
+    res.json({ status: "success", sweep, reminders });
   },
 
   async runUnansweredEmails(_req: Request, res: Response): Promise<void> {

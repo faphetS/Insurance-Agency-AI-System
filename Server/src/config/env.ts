@@ -121,7 +121,7 @@ const envSchema = z.object({
   GREENAPI_OP_API_TOKEN: z.string().optional(),
 
   // Test-period toggle for the unanswered-WA watcher: when set (any non-empty value),
-  // isWithinWatchWindow() always returns true, ignoring the 07:00-20:00 Israel window.
+  // isWithinWatchWindow() always returns true, ignoring the Sun-Thu 09:00-18:00 Israel window.
   // Must be unset in production.
   UNANSWERED_WINDOW_DISABLED: z.string().optional(),
 
@@ -139,7 +139,10 @@ const envSchema = z.object({
   // "log" = dry-run (compose to pm2 logs, no send); "send" = actually email staff.
   STAFF_EMAIL_NOTIFY_MODE: z.enum(["log", "send"]).default("log"),
 
-  // Unanswered-WA watcher mode (the only feature sending FROM Didi's line 944).
+  // Unanswered-WA watcher mode (the only feature sending FROM Didi's line 944). Auto-reply
+  // is a single interactive-buttons message after 10 min of silence; a tap on "call me back"
+  // is aggregated into one owner reminder at the next business day's 09:00 job (no immediate
+  // notify; Fri/Sat roll to Sunday).
   // "off" = fully dormant (no tracking, no LLM, no sends); "log" = dry-run
   // (full pipeline, sends become log lines); "send" = real sends.
   UNANSWERED_WA_MODE: z.enum(["off", "log", "send"]).default("off"),

@@ -11,7 +11,7 @@ const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
 });
 
-const SYSTEM_PROMPT = `You are triaging Didi's (an Israeli insurance agent) personal WhatsApp chats. The transcript below is the tail end of a 1:1 conversation; the trailing message(s) from the other side ("Lead") have sat unanswered by Didi for over an hour.
+const SYSTEM_PROMPT = `You are triaging Didi's (an Israeli insurance agent) personal WhatsApp chats. The transcript below is the tail end of a 1:1 conversation; the trailing message(s) from the other side ("Lead") have sat unanswered by Didi for over 10 minutes.
 
 Decide whether the trailing Lead message actually requires a personal response from Didi.
 
