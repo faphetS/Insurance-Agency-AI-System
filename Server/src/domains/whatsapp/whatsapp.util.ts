@@ -1,3 +1,4 @@
+import { env } from "../../config/env.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 
 export function extractButtonId(reqBody: unknown): string {
@@ -46,6 +47,17 @@ export function toChatId(raw: string | null | undefined): string | null {
   if (normalized.length < 11) return null;
 
   return `${normalized}@c.us`;
+}
+
+export function opExcludedChatIds(): Set<string> {
+  return new Set(
+    env.OP_EXCLUDED_PHONES.map(toChatId).filter((c): c is string => c !== null),
+  );
+}
+
+export function isOpExcludedPhone(phone: string): boolean {
+  const digits = phone.replace(/\D/g, "");
+  return [...opExcludedChatIds()].some((c) => c.replace(/\D/g, "") === digits);
 }
 
 export async function isStaffChat(

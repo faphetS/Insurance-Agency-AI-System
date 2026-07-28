@@ -3,6 +3,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { notifyOwnerOps } from "../operations/owner-notify.js";
+import { opExcludedChatIds } from "../whatsapp/whatsapp.util.js";
 import { COMMITMENT_COMPOSITION_SYSTEM_PROMPT } from "./commitments.prompts.js";
 import type { Commitment } from "./commitments.types.js";
 
@@ -98,7 +99,8 @@ export async function buildMorningCommitmentSection(): Promise<{ text: string | 
     return { text: null, ids: [] };
   }
 
-  const pending = (data ?? []) as Commitment[];
+  const excluded = opExcludedChatIds();
+  const pending = ((data ?? []) as Commitment[]).filter((c) => !excluded.has(c.chat_id));
   if (pending.length === 0) return { text: null, ids: [] };
 
   const text = await composeMorningMessage(pending);
@@ -147,7 +149,8 @@ export async function fireTimedReminders(): Promise<void> {
     return;
   }
 
-  const due = (dueData ?? []) as Commitment[];
+  const excluded = opExcludedChatIds();
+  const due = ((dueData ?? []) as Commitment[]).filter((c) => !excluded.has(c.chat_id));
   if (due.length === 0) return;
 
   // Group by fire_at minute (round to minute)

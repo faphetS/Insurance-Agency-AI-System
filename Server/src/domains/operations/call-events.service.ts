@@ -1,8 +1,17 @@
 import { pool } from "../../lib/db.js";
 import { logger } from "../../config/logger.js";
+import { isOpExcludedPhone } from "../whatsapp/whatsapp.util.js";
 import type { ZadarmaCallRow } from "../zadarma/zadarma.validator.js";
 
 export async function recordZadarmaCallEvent(row: ZadarmaCallRow): Promise<void> {
+  if (isOpExcludedPhone(row.counterpart_phone)) {
+    logger.info(
+      { counterpartPhone: row.counterpart_phone },
+      "recordZadarmaCallEvent: personal-line excluded phone — skipping insert",
+    );
+    return;
+  }
+
   try {
     await pool.query(
       `INSERT INTO public.call_events

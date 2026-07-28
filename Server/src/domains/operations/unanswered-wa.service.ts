@@ -5,7 +5,13 @@ import { sleep } from "../../lib/sleep.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { israelTimeOfDayMs, israelWallTimeInstant } from "../calendar/reminder.service.js";
 import { opCreds, sendInteractiveButtonsWith } from "../whatsapp/whatsapp.service.js";
-import { displayName, extractButtonId, toChatId, toLocalPhone } from "../whatsapp/whatsapp.util.js";
+import {
+  displayName,
+  extractButtonId,
+  opExcludedChatIds,
+  toChatId,
+  toLocalPhone,
+} from "../whatsapp/whatsapp.util.js";
 import { notifyOwnerOps } from "./owner-notify.js";
 import { needsReplyFromDidi } from "./unanswered-wa.llm.js";
 
@@ -83,6 +89,8 @@ async function getExcludedChatIds(): Promise<Set<string>> {
 
   const summaryChatId = toChatId(env.SUMMARY_RECIPIENT_PHONE ?? null);
   if (summaryChatId) excluded.add(summaryChatId);
+
+  for (const chatId of opExcludedChatIds()) excluded.add(chatId);
 
   return excluded;
 }

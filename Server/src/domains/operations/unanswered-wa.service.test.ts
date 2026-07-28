@@ -34,6 +34,7 @@ vi.mock("../../config/env.js", () => ({
     GREENAPI_OP_API_TOKEN: "op-token",
     GREENAPI_OP_BASE_URL: "https://test.api.greenapi.com",
     UNANSWERED_WA_MODE: "send",
+    OP_EXCLUDED_PHONES: [] as string[],
   },
 }));
 
@@ -568,6 +569,47 @@ describe("handleOpInstanceEvent — exclusions", () => {
     });
 
     expect(mockPoolQuery).not.toHaveBeenCalled();
+  });
+
+  it("a number listed in OP_EXCLUDED_PHONES never creates a wa_unanswered row", async () => {
+    const { env } = await import("../../config/env.js");
+    (env as Record<string, unknown>)["OP_EXCLUDED_PHONES"] = ["0508946380"];
+    setupExclusionQueries();
+
+    try {
+      await handleOpInstanceEvent({
+        typeWebhook: "incomingMessageReceived",
+        senderData: { chatId: "972508946380@c.us", senderName: "Personal" },
+      });
+
+      expect(mockPoolQuery).not.toHaveBeenCalled();
+    } finally {
+      (env as Record<string, unknown>)["OP_EXCLUDED_PHONES"] = [];
+    }
+  });
+
+  it("a non-excluded number still gets tracked (unaffected by OP_EXCLUDED_PHONES)", async () => {
+    const { env } = await import("../../config/env.js");
+    (env as Record<string, unknown>)["OP_EXCLUDED_PHONES"] = ["0508946380"];
+    setupExclusionQueries();
+    mockPoolQuery
+      .mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })) // getActiveRow -> none
+      .mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })); // isChatBlockedToday -> not blocked
+
+    try {
+      await handleOpInstanceEvent({
+        typeWebhook: "incomingMessageReceived",
+        senderData: { chatId: "972501111111@c.us", senderName: "Yossi" },
+        timestamp: Math.floor(new Date("2026-07-05T10:00:00Z").getTime() / 1000),
+      });
+
+      const insertCall = mockPoolQuery.mock.calls.find(([sql]) =>
+        String(sql).includes("INSERT INTO public.wa_unanswered"),
+      );
+      expect(insertCall).toBeDefined();
+    } finally {
+      (env as Record<string, unknown>)["OP_EXCLUDED_PHONES"] = [];
+    }
   });
 });
 

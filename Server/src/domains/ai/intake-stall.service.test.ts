@@ -10,6 +10,12 @@ const { mockFromImpl, mockNotifyOwner, mockBuildStallAlert } = vi.hoisted(() => 
   mockBuildStallAlert: vi.fn((phone: string, _name: string | null, slot: string) => `ALERT:${slot}:${phone}`),
 }));
 
+vi.mock("../../config/env.js", () => ({
+  env: {
+    NODE_ENV: "test",
+    OP_EXCLUDED_PHONES: [] as string[],
+  },
+}));
 vi.mock("../../config/supabase.js", () => ({
   supabaseAdmin: { from: mockFromImpl },
 }));

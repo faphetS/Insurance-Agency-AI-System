@@ -46,6 +46,14 @@ const envSchema = z.object({
     .default("")
     .transform((v) => (v.trim() === "" ? [] : v.split(",").map((s) => s.trim()))),
 
+  // Personal-line exclusion list — comma-separated phone numbers (local 05X or intl 972X)
+  // exempt from ALL op-line automation: unanswered-WA auto-reply, commitment scan,
+  // missed-call reminders. Owner's personal contacts.
+  OP_EXCLUDED_PHONES: z
+    .string()
+    .default("")
+    .transform((v) => (v.trim() === "" ? [] : v.split(",").map((s) => s.trim()))),
+
   // Shared inbound webhook auth for POST /api/whatsapp/webhook — used by the
   // operational (GREENAPI_OP_*) and NOTIFY (GREENAPI_NOTIFY_*) lines.
   GREENAPI_WEBHOOK_TOKEN: z.string().optional(),

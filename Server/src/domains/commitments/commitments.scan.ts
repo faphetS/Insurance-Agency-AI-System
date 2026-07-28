@@ -5,6 +5,7 @@ import {
   lastIncomingMessagesWith,
   lastOutgoingMessagesWith,
 } from "../whatsapp/whatsapp.service.js";
+import { opExcludedChatIds } from "../whatsapp/whatsapp.util.js";
 import type { ChatTranscript, TranscriptLine } from "./commitments.types.js";
 
 async function getExcludedChatIds(): Promise<Set<string>> {
@@ -22,6 +23,8 @@ async function getExcludedChatIds(): Promise<Set<string>> {
     .eq("key", "commitment_bot_chat_id")
     .maybeSingle();
   if (botRow?.value) excluded.add(botRow.value as string);
+
+  for (const chatId of opExcludedChatIds()) excluded.add(chatId);
 
   return excluded;
 }

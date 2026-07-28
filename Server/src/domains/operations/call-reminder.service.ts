@@ -1,4 +1,5 @@
 import { logger } from "../../config/logger.js";
+import { isOpExcludedPhone } from "../whatsapp/whatsapp.util.js";
 import { getUnresolvedMissedSince, pruneCallsOlderThan } from "./call-events.service.js";
 import { notifyOwnerOps } from "./owner-notify.js";
 
@@ -19,7 +20,9 @@ function stripCus(phone: string): string {
 
 export async function buildCallReminderSection(): Promise<string | null> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const rows = await getUnresolvedMissedSince(since);
+  const rows = (await getUnresolvedMissedSince(since)).filter(
+    (r) => !isOpExcludedPhone(stripCus(r.counterpart_phone)),
+  );
   if (rows.length === 0) return null;
 
   const lines = rows

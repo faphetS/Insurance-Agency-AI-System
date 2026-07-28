@@ -7,6 +7,13 @@ const { mockPoolQuery } = vi.hoisted(() => ({
   mockPoolQuery: vi.fn(),
 }));
 
+vi.mock("../../config/env.js", () => ({
+  env: {
+    NODE_ENV: "test",
+    OP_EXCLUDED_PHONES: [] as string[],
+  },
+}));
+
 vi.mock("../../config/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));

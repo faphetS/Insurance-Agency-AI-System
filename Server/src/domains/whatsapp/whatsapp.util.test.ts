@@ -1,10 +1,18 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+
+const { mockEnv } = vi.hoisted(() => ({
+  mockEnv: { OP_EXCLUDED_PHONES: [] as string[] },
+}));
+
+vi.mock("../../config/env.js", () => ({
+  env: mockEnv,
+}));
 
 vi.mock("../../config/supabase.js", () => ({
   supabaseAdmin: {},
 }));
 
-import { toChatId, toLocalPhone, displayName } from "./whatsapp.util.js";
+import { toChatId, toLocalPhone, displayName, opExcludedChatIds, isOpExcludedPhone } from "./whatsapp.util.js";
 
 describe("toChatId", () => {
   it("normalizes 0xx Israeli mobile to 972xx@c.us", () => {
@@ -86,5 +94,47 @@ describe("displayName", () => {
     expect(displayName("", "972501234567")).toBeNull();
     expect(displayName(null, "972501234567")).toBeNull();
     expect(displayName(undefined, null)).toBeNull();
+  });
+});
+
+describe("opExcludedChatIds", () => {
+  afterEach(() => {
+    mockEnv.OP_EXCLUDED_PHONES = [];
+  });
+
+  it("normalizes local 05X numbers into 972X@c.us chat ids", () => {
+    mockEnv.OP_EXCLUDED_PHONES = ["0508946380"];
+    expect(opExcludedChatIds()).toEqual(new Set(["972508946380@c.us"]));
+  });
+
+  it("skips malformed entries that toChatId can't normalize", () => {
+    mockEnv.OP_EXCLUDED_PHONES = ["0508946380", "abc", ""];
+    expect(opExcludedChatIds()).toEqual(new Set(["972508946380@c.us"]));
+  });
+
+  it("returns an empty set when the list is empty", () => {
+    mockEnv.OP_EXCLUDED_PHONES = [];
+    expect(opExcludedChatIds()).toEqual(new Set());
+  });
+});
+
+describe("isOpExcludedPhone", () => {
+  afterEach(() => {
+    mockEnv.OP_EXCLUDED_PHONES = [];
+  });
+
+  it("matches a bare-digit phone against a listed local number", () => {
+    mockEnv.OP_EXCLUDED_PHONES = ["0508946380"];
+    expect(isOpExcludedPhone("972508946380")).toBe(true);
+  });
+
+  it("matches an @c.us chat id against a listed intl number", () => {
+    mockEnv.OP_EXCLUDED_PHONES = ["972508946380"];
+    expect(isOpExcludedPhone("972508946380@c.us")).toBe(true);
+  });
+
+  it("rejects a phone not present in the list", () => {
+    mockEnv.OP_EXCLUDED_PHONES = ["0508946380"];
+    expect(isOpExcludedPhone("972501111111")).toBe(false);
   });
 });

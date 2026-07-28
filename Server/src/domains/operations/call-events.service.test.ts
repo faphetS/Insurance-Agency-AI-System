@@ -17,6 +17,7 @@ vi.mock("../../config/env.js", () => ({
     DATABASE_URL: "postgresql://test",
     DATABASE_POOL_MAX: 5,
     GREENAPI_OP_ID_INSTANCE: "7103519997",
+    OP_EXCLUDED_PHONES: [] as string[],
   },
 }));
 
@@ -35,7 +36,50 @@ vi.mock("../../lib/db.js", () => ({
 // ---------------------------------------------------------------------------
 // Subject imports (after mocks)
 // ---------------------------------------------------------------------------
-import { getUnresolvedMissedSince } from "./call-events.service.js";
+import { getUnresolvedMissedSince, recordZadarmaCallEvent } from "./call-events.service.js";
+import type { ZadarmaCallRow } from "../zadarma/zadarma.validator.js";
+
+// ---------------------------------------------------------------------------
+// Tests: recordZadarmaCallEvent
+// ---------------------------------------------------------------------------
+
+describe("recordZadarmaCallEvent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const baseRow: ZadarmaCallRow = {
+    id_message: "msg-1",
+    id_instance: "instance-1",
+    direction: "incoming",
+    counterpart_phone: "972508946380",
+    status: "missed",
+    is_video: false,
+    called_at: new Date("2026-06-25T09:00:00Z"),
+  };
+
+  it("does not insert when the counterpart phone is excluded via OP_EXCLUDED_PHONES", async () => {
+    const { env } = await import("../../config/env.js");
+    (env as Record<string, unknown>)["OP_EXCLUDED_PHONES"] = ["0508946380"];
+
+    try {
+      await recordZadarmaCallEvent(baseRow);
+      expect(mockPoolQuery).not.toHaveBeenCalled();
+    } finally {
+      (env as Record<string, unknown>)["OP_EXCLUDED_PHONES"] = [];
+    }
+  });
+
+  it("inserts as usual when the counterpart phone is not excluded", async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 1 });
+
+    await recordZadarmaCallEvent(baseRow);
+
+    expect(mockPoolQuery).toHaveBeenCalledOnce();
+    const [sql] = mockPoolQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("call_events");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Tests: getUnresolvedMissedSince
