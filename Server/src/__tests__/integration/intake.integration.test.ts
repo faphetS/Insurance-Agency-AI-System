@@ -1,5 +1,5 @@
 /**
- * Integration test: intake.orchestrator — v4.1 9-button menu flow + email slot.
+ * Integration test: intake.orchestrator — v4.1 8-button menu flow + email slot.
  *
  * Slot machine: welcome → menu → meeting_type → email → consent → id_photo → done.
  *
@@ -118,7 +118,6 @@ async function teardown(seeds: Seeds) {
   await pool.query(`DELETE FROM meetings WHERE client_id = $1`, [seeds.clientId]);
   await pool.query(`DELETE FROM documents WHERE client_id = $1`, [seeds.clientId]);
   await pool.query(`DELETE FROM conversations WHERE id = $1`, [seeds.conversationId]);
-  await pool.query(`DELETE FROM notifications WHERE client_id = $1`, [seeds.clientId]);
   await pool.query(`DELETE FROM clients WHERE id = $1`, [seeds.clientId]);
   await pool.query(`DELETE FROM staff WHERE id = $1`, [seeds.staffId]);
 }

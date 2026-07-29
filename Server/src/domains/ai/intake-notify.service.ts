@@ -17,7 +17,7 @@ const STAFF_ROUTES: Record<string, { to: string[]; firstNameHe: string | null }>
   business: { to: ["giti@shaked-ins.com"], firstNameHe: "גיטי" },
   life_health_pension: { to: LIFE_FINANCE_TEAM, firstNameHe: null },
   finance: { to: LIFE_FINANCE_TEAM, firstNameHe: null },
-  // travel + other: intentionally ABSENT — dead silence (owner decision)
+  // travel: intentionally ABSENT — dead silence (owner decision); other removed from the menu, legacy value kept
 };
 
 export async function sendStaffLeadEmail(

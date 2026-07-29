@@ -27,11 +27,10 @@ const INQUIRY_BUTTONS = [
   { buttonId: "life_health_pension", buttonText: "ביטוח חיים/בריאות/פנסיה" },
   { buttonId: "travel", buttonText: 'ביטוח נסיעות לחו"ל' },
   { buttonId: "finance", buttonText: "פיננסים" },
-  { buttonId: "other", buttonText: "אחר" },
 ] as const;
 
 export const INTAKE_PROMPTS = {
-  // Opening menu — Didi's flowchart text verbatim + 9 buttons (brand image sent as a 2nd bubble).
+  // Opening menu — Didi's flowchart text verbatim + 8 buttons (brand image sent as a 2nd bubble).
   menu: {
     text:
       "היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. אנו שמחים שפנית אלינו באפשרותך לבצע מספר פעולות או להשאיר הודעה ונחזור אליך בהקדם אנא בחר מתפריט:",
@@ -41,7 +40,7 @@ export const INTAKE_PROMPTS = {
       { buttonId: "meeting_didi", buttonText: "בקשת תיאום פגישה עם דידי" },
     ],
   },
-  // Button 9 sub-choice: existing vs new client.
+  // Button 8 sub-choice: existing vs new client.
   meeting_type: {
     text: "כדי שנוכל לסייע לך בצורה הטובה ביותר בתיאום ייעוץ מקצועי, אנא בחר:",
     buttons: [

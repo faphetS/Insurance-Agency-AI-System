@@ -15,7 +15,7 @@ describe("INQUIRY_TYPE_HE", () => {
     }
   });
 
-  it("covers exactly the 7 insurance button ids", () => {
+  it("covers exactly the 7 INQUIRY_TYPES values (only 6 of which are still offered as menu buttons)", () => {
     expect(Object.keys(INQUIRY_TYPE_HE)).toHaveLength(INQUIRY_TYPES.length);
   });
 
@@ -46,12 +46,12 @@ describe("SLOT_ORDER — v4.1 slot machine", () => {
   });
 });
 
-describe("INTAKE_PROMPTS.menu — 9-button opening", () => {
-  it("has 9 buttons (7 insurance + callback + meeting)", () => {
-    expect(INTAKE_PROMPTS.menu.buttons).toHaveLength(9);
+describe("INTAKE_PROMPTS.menu — 8-button opening", () => {
+  it("has 8 buttons (6 insurance + callback + meeting)", () => {
+    expect(INTAKE_PROMPTS.menu.buttons).toHaveLength(8);
   });
 
-  it("keeps the 7 insurance buttonIds stable and adds callback_didi + meeting_didi", () => {
+  it("keeps the 6 insurance buttonIds stable and adds callback_didi + meeting_didi", () => {
     const ids = INTAKE_PROMPTS.menu.buttons.map((b) => b.buttonId);
     expect(ids).toEqual([
       "vehicle",
@@ -60,7 +60,6 @@ describe("INTAKE_PROMPTS.menu — 9-button opening", () => {
       "life_health_pension",
       "travel",
       "finance",
-      "other",
       "callback_didi",
       "meeting_didi",
     ]);
@@ -81,6 +80,15 @@ describe("INTAKE_PROMPTS.menu — 9-button opening", () => {
   it("every menu button label is ≤ 25 chars (GreenAPI limit)", () => {
     for (const b of INTAKE_PROMPTS.menu.buttons) {
       expect(b.buttonText.length).toBeLessThanOrEqual(25);
+    }
+  });
+
+  it("every insurance-type button id is a valid INQUIRY_TYPES value with a Hebrew label (prevents a future button dead-ending the staff-email gate)", () => {
+    const nonInquiryIds = new Set(["callback_didi", "meeting_didi"]);
+    for (const b of INTAKE_PROMPTS.menu.buttons) {
+      if (nonInquiryIds.has(b.buttonId)) continue;
+      expect((INQUIRY_TYPES as readonly string[])).toContain(b.buttonId);
+      expect(INQUIRY_TYPE_HE).toHaveProperty(b.buttonId);
     }
   });
 });

@@ -97,7 +97,7 @@ describe("sendStaffLeadEmail — routing", () => {
 });
 
 // ---------------------------------------------------------------------------
-// sendCallbackRequestEmail — Didi self-email for button 8
+// sendCallbackRequestEmail — Didi self-email for button 7
 // ---------------------------------------------------------------------------
 
 describe("sendCallbackRequestEmail", () => {

@@ -57,9 +57,11 @@ CREATE TABLE public.clients (
                          'life', 'health', 'property', 'vehicle',
                          'liability', 'business', 'pension', 'travel',
                          'mortgage', 'general',
-                         -- new fixed button set (2026-06-26)
+                         -- new fixed button set (2026-06-26); 'other' is legacy-only since
+                         -- 2026-07-29 (removed from the menu, value kept for old rows)
                          'home', 'life_health_pension', 'finance', 'other',
-                         -- v4 menu routes (2026-07-09): button 8 callback, button 9 meeting
+                         -- v4 menu routes (2026-07-09): button 7 callback, button 8 meeting
+                         -- (menu reduced to 8 rows on 2026-07-29 — see intake.prompts.ts)
                          'callback', 'meeting'
                        )),
   status               text        NOT NULL DEFAULT 'new'
@@ -85,7 +87,7 @@ CREATE TABLE public.clients (
   -- Default amended to 'welcome' by 20260429120000_intake_welcome_slot
   intake_state         text        NOT NULL DEFAULT 'collecting'
                        CHECK (intake_state IN ('collecting', 'completed', 'skipped')),
-  -- Slot list replaced by 20260709120000_intake_v4 (v4 9-button menu flow);
+  -- Slot list replaced by 20260709120000_intake_v4 (v4 8-button menu flow);
   -- 'email' slot added by 20260714120000_intake_email_slot (v4.1)
   intake_current_slot  text        DEFAULT 'welcome'
                        CHECK (intake_current_slot IN (
@@ -205,6 +207,39 @@ CREATE TABLE public.audit_logs (
 );
 
 -- ============================================================
+-- 11. WHATSAPP_INSTANCES
+--     Added by 20260520110100_whatsapp_instances.
+--     is_connected is a GENERATED ALWAYS AS ... STORED column —
+--     standard SQL:2003 feature, supported in Postgres 12+.
+--     Expression: non-NULL instance_id AND non-NULL token.
+-- ============================================================
+CREATE TABLE public.whatsapp_instances (
+  id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  label                 text        NOT NULL,
+  phone_number          text,
+  role                  text        NOT NULL CHECK (role IN ('bot', 'staff')),
+  staff_id              uuid        REFERENCES public.staff(id) ON DELETE SET NULL,
+  green_api_instance_id text,
+  green_api_token       text,
+  green_api_url         text,
+  -- Added for CLIX gateway: identifies the connected line by CLIX customerId
+  gateway_customer_id   text        UNIQUE,
+  -- 'conversational' = customer-facing bot; 'operational' = staff scan/monitoring line
+  purpose               text        NOT NULL DEFAULT 'conversational'
+                        CHECK (purpose IN ('conversational', 'operational')),
+  is_active             boolean     NOT NULL DEFAULT true,
+  is_connected          boolean     GENERATED ALWAYS AS (
+                          green_api_instance_id IS NOT NULL
+                          AND green_api_token IS NOT NULL
+                        ) STORED,
+  last_synced_at        timestamptz,
+  last_unanswered_count integer     DEFAULT 0,
+  last_error            text,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now()
+);
+
+-- ============================================================
 -- 6. CONVERSATIONS
 --    Added by 20260415094240_messaging_and_pipeline.
 --    bot_paused_until added by 20260428160000.
@@ -274,39 +309,6 @@ CREATE TABLE public.system_settings (
   key        text        PRIMARY KEY,
   value      text        NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
-);
-
--- ============================================================
--- 11. WHATSAPP_INSTANCES
---     Added by 20260520110100_whatsapp_instances.
---     is_connected is a GENERATED ALWAYS AS ... STORED column —
---     standard SQL:2003 feature, supported in Postgres 12+.
---     Expression: non-NULL instance_id AND non-NULL token.
--- ============================================================
-CREATE TABLE public.whatsapp_instances (
-  id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  label                 text        NOT NULL,
-  phone_number          text,
-  role                  text        NOT NULL CHECK (role IN ('bot', 'staff')),
-  staff_id              uuid        REFERENCES public.staff(id) ON DELETE SET NULL,
-  green_api_instance_id text,
-  green_api_token       text,
-  green_api_url         text,
-  -- Added for CLIX gateway: identifies the connected line by CLIX customerId
-  gateway_customer_id   text        UNIQUE,
-  -- 'conversational' = customer-facing bot; 'operational' = staff scan/monitoring line
-  purpose               text        NOT NULL DEFAULT 'conversational'
-                        CHECK (purpose IN ('conversational', 'operational')),
-  is_active             boolean     NOT NULL DEFAULT true,
-  is_connected          boolean     GENERATED ALWAYS AS (
-                          green_api_instance_id IS NOT NULL
-                          AND green_api_token IS NOT NULL
-                        ) STORED,
-  last_synced_at        timestamptz,
-  last_unanswered_count integer     DEFAULT 0,
-  last_error            text,
-  created_at            timestamptz NOT NULL DEFAULT now(),
-  updated_at            timestamptz NOT NULL DEFAULT now()
 );
 
 -- ============================================================

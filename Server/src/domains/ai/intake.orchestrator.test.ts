@@ -1,7 +1,7 @@
 /**
- * Unit tests for the v4.1 intake flow (9-button menu + email slot):
+ * Unit tests for the v4.1 intake flow (8-button menu + email slot):
  *  - welcome → menu buttons + scheduled brand image
- *  - menu: free text / image → re-prompt #12; buttons 1-7 → staff email + thanks + endFlow;
+ *  - menu: free text / image → re-prompt #12; buttons 1-6 → staff email + thanks + endFlow;
  *    callback_didi → notifyOwner + thanks; meeting_didi → meeting_type sub-choice
  *  - meeting_type: either tap saves client_type ('old'/'new') and advances to the email ask
  *  - email: first email-looking token stored lowercased; old → booking link + 24h pause;
@@ -133,7 +133,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("welcome slot", () => {
-  it("sends the 9-button opening menu", async () => {
+  it("sends the 8-button opening menu", async () => {
     setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("welcome")), makeBuilder({ data: null, error: null })]);
 
     const result = await handleIntake("conv1", "client1", "chat1@c.us", textPayload("hi"));
@@ -142,7 +142,7 @@ describe("welcome slot", () => {
     expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
     const [, body, buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
     expect(body).toContain("שקד סוכנות לביטוח");
-    expect(buttons).toHaveLength(9);
+    expect(buttons).toHaveLength(8);
   });
 
   it("schedules the brand image as a 2nd bubble", async () => {
@@ -185,10 +185,52 @@ describe("menu slot — free-text / image re-prompt", () => {
 });
 
 // ---------------------------------------------------------------------------
-// menu — buttons 1-7 (insurance)
+// menu — legacy "אחר" grace (stale pre-2026-07-29 list taps)
 // ---------------------------------------------------------------------------
 
-describe("menu slot — insurance buttons 1-7", () => {
+describe("menu slot — legacy אחר grace", () => {
+  function setupLegacy() {
+    const updateInquiry = makeBuilder({ data: null, error: null });
+    const persist = makeBuilder({ data: null, error: null });
+    const endUpdate = makeBuilder({ data: null, error: null });
+    const convPause = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("menu")),
+      updateInquiry,
+      persist,
+      endUpdate,
+      convPause,
+    ]);
+    return { updateInquiry, endUpdate };
+  }
+
+  it.each(["other", "אחר"])(
+    "stale tap %s → inquiry_type other, thanks, endFlow(new_lead), NO staff email",
+    async (val) => {
+      const { updateInquiry, endUpdate } = setupLegacy();
+
+      const result = await handleIntake("conv", "client", "chat@c.us", textPayload(val));
+
+      expect(result.consumed).toBe(true);
+      expect((updateInquiry["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "other" });
+      expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("תודה על פנייתך! קיבלנו את הפרטים וניצור איתך קשר בהקדם.");
+      expect((endUpdate["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+        intake_state: "completed",
+        intake_current_slot: "done",
+        pipeline_stage: "new_lead",
+      });
+      expect(mockSendStaffLeadEmail).not.toHaveBeenCalled();
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// menu — buttons 1-6 (insurance)
+// ---------------------------------------------------------------------------
+
+describe("menu slot — insurance buttons 1-6", () => {
   function setupInquiry() {
     const updateInquiry = makeBuilder({ data: null, error: null });
     const contact = makeBuilder({ data: { full_name: "יעל כהן", phone: "972501234567" }, error: null });
@@ -241,7 +283,7 @@ describe("menu slot — insurance buttons 1-7", () => {
     expect(mockSendStaffLeadEmail.mock.calls[0]?.[1]).toEqual({ phone: "972501234567", waName: "יעל כהן" });
   });
 
-  it.each(["vehicle", "home", "business", "life_health_pension", "travel", "finance", "other"])(
+  it.each(["vehicle", "home", "business", "life_health_pension", "travel", "finance"])(
     "button %s → sendStaffLeadEmail called with that id",
     async (id) => {
       setupInquiry();
@@ -253,10 +295,10 @@ describe("menu slot — insurance buttons 1-7", () => {
 });
 
 // ---------------------------------------------------------------------------
-// menu — button 8 callback
+// menu — button 7 callback
 // ---------------------------------------------------------------------------
 
-describe("menu slot — callback_didi (button 8)", () => {
+describe("menu slot — callback_didi (button 7)", () => {
   it("notifies Didi with the 📞 template, thanks #4, NO staff email", async () => {
     const updateInquiry = makeBuilder({ data: null, error: null });
     const contact = makeBuilder({ data: { full_name: "דוד", phone: "972501234567" }, error: null });
@@ -287,10 +329,10 @@ describe("menu slot — callback_didi (button 8)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// menu — button 9 meeting → meeting_type
+// menu — button 8 meeting → meeting_type
 // ---------------------------------------------------------------------------
 
-describe("menu slot — meeting_didi (button 9)", () => {
+describe("menu slot — meeting_didi (button 8)", () => {
   it("advances to the existing/new sub-choice buttons", async () => {
     const updateInquiry = makeBuilder({ data: null, error: null });
     setupFrom([
@@ -698,7 +740,7 @@ describe("post-cooldown restart", () => {
     });
     expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
     const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
-    expect(buttons).toHaveLength(9);
+    expect(buttons).toHaveLength(8);
   });
 });
 

@@ -3,8 +3,10 @@
 > Canonical description of **how the system behaves**, re-traced from source on **2026-07-01**,
 > updated **2026-07-09** for the **conversational bot v4/v4.1** redesign (9-button menu + sheet-mirror
 > tab routing), **2026-07-10** for the **CRM-sheet relevance dropdown + row mover** (§10) and the
-> unanswered-WA session-model rework (§6a), and **2026-07-14** for the **intake email slot +
-> booking-sync re-enable (email-only matching)** (§3.1, §3.5).
+> unanswered-WA session-model rework (§6a), **2026-07-14** for the **intake email slot +
+> booking-sync re-enable (email-only matching)** (§3.1, §3.5), and **2026-07-29** for the **removal
+> of the "אחר" (Other) opening-menu button** (§3.1 — menu is now 8 buttons; `other` stays a valid
+> legacy `inquiry_type` value, no longer offerable).
 >
 > **📍 The two bots each have a dedicated deep-dive doc — read those for feature-level detail:**
 > - **`.claude/CONVERSATIONAL_BOT.md`** — the customer-facing WhatsApp intake bot (v4.1 state machine,
@@ -54,15 +56,15 @@ GreenAPI op-line call-event recording removed; intake v3 — `team_routing` slot
 now immediately follows `client_type`; old-client branch adds `issue`→`action_choice` slots; human
 escalation (`whatsapp.escalation.ts`) deleted; department-routing WhatsApp ping on inquiry-type
 selection added. **2026-07-09: conversational bot v4** — the linear intake is replaced by a 9-button
-menu (7 insurance types → staff **email**; callback → Didi WA alert; meeting → existing/new split with
+menu (menu later reduced to 8 — see 2026-07-29 entry) (7 insurance types → staff **email**; callback → Didi WA alert; meeting → existing/new split with
 tap-only consent + lenient ID OCR); department-routing pings removed; terminals now pause 24h (cooldown,
 fresh menu on return); 3h stall watcher alerts Didi; calendar booking-sync + 24h/1h reminders + Timeless
 run-loops **disabled** (code kept, server.ts registrations commented out); biennial service-meeting cron
 deleted (service kept dormant); lead mirror rewritten to a 7-column single-tab progressive upsert.
 **v4.1 (same day, `b0da7b3`): sheet mirror tab-routed — rows appear only after a definitive menu choice
-(buttons 1-8 → `לידים חדשים `; button 9 + existing → `לקוח קיים `; no flow-start phone-only rows);
+(buttons 1-7 → `לידים חדשים `; button 8 + existing → `לקוח קיים `; no flow-start phone-only rows);
 appended rows auto-formatted 13pt/not-bold/white; `meeting_didi` tap + fresh-restart now clear stale
-`inquiry_type`/`client_type`.** **2026-07-14: the button-9 path gains an `email` slot (both branches
+`inquiry_type`/`client_type`.** **2026-07-14: the button-8 path gains an `email` slot (both branches
 pass through it before their terminals) and the calendar booking-sync run-loop is re-enabled with
 email-only matching + a new thank-you (§3.5); the 24h/1h reminders stay off.**
 
@@ -159,17 +161,26 @@ All prompts in Hebrew, masculine-generic (Didi's style), no emojis in client mes
 - **welcome** — no message of its own; advances to `menu` (which sends the opening), then schedules the
   **brand-image 2nd bubble** ~3–5s later (`WELCOME_IMAGE_URL`, default `<BACKEND_URL>/assets/brand.jpeg`).
 - **menu** — the opening message (Didi's flowchart text verbatim,
-  `"היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. …אנא בחר מתפריט:"`) + **9 buttons**:
-  the 7 insurance types (`vehicle`/`home`/`business`/`life_health_pension`/`travel`/`finance`/`other`)
+  `"היי, הגעתם לשקד סוכנות לביטוח - דידי פרידלנדר. …אנא בחר מתפריט:"`) + **8 buttons**:
+  the 6 insurance types (`vehicle`/`home`/`business`/`life_health_pension`/`travel`/`finance`)
   + `callback_didi` "מבקש שדידי יחזור אליי" + `meeting_didi` "בקשת תיאום פגישה עם דידי".
-  - **Buttons 1-7** → save `inquiry_type` → **staff EMAIL** via `intake-notify.service.ts`
+  (`other` was removed from the menu — no button offers it — but stays a valid legacy `inquiry_type`
+  value for pre-existing rows and the Hebrew label map.)
+  - **Buttons 1-6** → save `inquiry_type` → **staff EMAIL** via `intake-notify.service.ts`
     (vehicle→merav@, home→hodaya@, business→giti@, life_health_pension/finance→ rivka+tzivia+ruth+yafa@
-    shaked-ins.com in ONE email; **travel/other → nobody, deliberate**), gated by
+    shaked-ins.com in ONE email; **travel → nobody, deliberate; `other` = legacy value only** (button
+    removed 2026-07-29, stale taps grace-handled — see below)), gated by
     `STAFF_EMAIL_NOTIFY_MODE` (`log`=dry-run) → thank-you → `endFlow('new_lead')`.
-  - **Button 8** (`callback_didi`) → `inquiry_type='callback'` → **📞 WhatsApp alert to Didi**
+  - **Button 7** (`callback_didi`) → `inquiry_type='callback'` → **📞 WhatsApp alert to Didi**
     (`notifyOwner` → `SUMMARY_RECIPIENT_PHONE`) → thank-you → `endFlow('new_lead')`.
-  - **Button 9** (`meeting_didi`) → `inquiry_type='meeting'` → advance to `meeting_type`.
-  - Free text / media → text-only re-prompt `"אנא בחר אחת מהאפשרויות בתפריט למעלה"` (nobody notified).
+  - **Button 8** (`meeting_didi`) → `inquiry_type='meeting'` → advance to `meeting_type`.
+  - **Legacy `אחר` grace (2026-07-29):** pre-removal WhatsApp list messages stay tappable in a client's
+    chat history forever, so a stale tap can still arrive as `{kind:"text", text:"other"}` (row id) or
+    the literal label `"אחר"`. Both are matched *before* the unmatched-reprompt fallback:
+    `inquiry_type='other'` → thank-you → `endFlow('new_lead')` — **no staff email** (that route never
+    existed for `other`/`travel` anyway).
+  - Free text / media (anything else) → text-only re-prompt `"אנא בחר אחת מהאפשרויות בתפריט למעלה"`
+    (nobody notified).
 - **meeting_type** — buttons `existing_client` "לקוח קיים" / `new_client` "לקוח חדש". Either tap saves
   `client_type` (`'old'`/`'new'`) and advances to `email` — the old/new branch continues only after the
   email is collected.
@@ -197,7 +208,7 @@ All prompts in Hebrew, masculine-generic (Didi's style), no emojis in client mes
   Sheet row + Drive file are the record). Invalid/unreadable → Hebrew `{reason}` re-prompt.
 - **`endFlow(pipelineStage)`** (replaces the old finalize/finalizeRepresentative) — sets
   `intake_state='completed'`, slot `done`, `intake_completed_at`, `pipeline_stage` (`new_lead` for
-  buttons 1-8, `meeting_scheduling` for the button-9 terminals), mirrors the lead, and pauses the
+  buttons 1-7, `meeting_scheduling` for the button-8 terminals), mirrors the lead, and pauses the
   conversation for a **24h cooldown** (`bot_paused=true`, `bot_paused_until=now+24h`) — NOT permanent.
 - **Fresh restart:** a message from a completed client after the cooldown expired (or after a manual
   unpause) resets intake (`collecting`/`welcome`, clears consent/stall/completed stamps) and re-runs
@@ -242,7 +253,7 @@ machine (§3.1) is the current replacement for routing an existing client to a r
   (The 2h escalation pause is **gone** — human escalation was removed, §3.3.)
 
 ### 3.5 Booking sync → thank-you — **RE-ENABLED in v4.1 (2026-07-14)**; 24h/1h reminders stay DISABLED (`calendar/booking-sync.service.ts`, `calendar/reminder.service.ts`)
-Booking is still via the **Calendly link** sent at the button-9 terminals, and the booked Google
+Booking is still via the **Calendly link** sent at the button-8 terminals, and the booked Google
 Calendar event carries the Zoom link. The **booking-sync run-loop is back on in `server.ts`** — first
 run 30s after boot, then **every 3 minutes** (public deployments only). Each run pulls events created
 since `system_settings.google_calendar_last_sync` and, per new event (skipped if a `meetings` row with
@@ -345,9 +356,12 @@ Gmail.
   op-line call-webhook path (`recordCallEvent` / `mapStatus` for GreenAPI shapes) has been deleted.
   `call-events.service.ts` now only exports `recordZadarmaCallEvent`, `getUnresolvedMissedSince`, and
   `pruneCallsOlderThan`.
-- **Build (`buildCallReminderSection`).** Looks back 24h for **incoming** calls with
-  `status IN ('missed','declined')` via `getUnresolvedMissedSince`. The query is plain dedup-by-number:
-  `SELECT counterpart_phone, MAX(called_at) FROM call_events WHERE ... GROUP BY counterpart_phone ORDER BY called_at ASC` —
+- **Build (`buildCallReminderSection`).** Looks back 24h (72h on Israel-Sunday — the lookback is
+  adjustable, verified live at 72h) for **incoming** calls with `status IN ('missed','declined')` via
+  `getUnresolvedMissedSince`. The query dedups by number and **excludes Fri/Sat rows in SQL** (`EXTRACT(DOW
+  FROM called_at AT TIME ZONE 'Asia/Jerusalem') NOT IN (5, 6)`) before the `MAX(called_at)` aggregation, so a
+  weekend call never masks an earlier weekday one:
+  `SELECT counterpart_phone, MAX(called_at) FROM call_events WHERE ... AND EXTRACT(DOW ...) NOT IN (5,6) GROUP BY counterpart_phone ORDER BY called_at ASC` —
   **no answered-callback suppression** (the "latest answered call cancels a missed-call entry" logic was
   removed). Output: `"תזכורת על שיחות שלא נענו אתמול:"` + `- <phone> בשעה <HH:mm>` lines.
 - **Send.** `sendDailyCallReminder` exists as a standalone sender (manual route) and delivers to Didi
@@ -355,17 +369,28 @@ Gmail.
   the 09:00 morning digest** (§5.4). `call_events` pruned older than 48h after a successful send.
 
 ### 5.2 Pillar 2 — Personal commitment reminders — `commitments/*`
-- **Scan (`scanRecentChats`).** Reads the op line's last-24h **incoming + outgoing** journals
-  (`lastIncoming/OutgoingMessagesWith`, 1440 min), buckets per 1:1 chat (skips groups and the
-  excluded self/bot chat ids), produces dated transcripts labelled `Didi:` vs the contact.
+- **Op window.** The whole pillar — scan + LLM detect + morning batch — only runs **Sun–Thu 09:00–18:00
+  Israel** (`isWithinOpWindow` gates `refreshCommitments`/`runMorningCommitments`; the digest gates itself
+  too — see §5.4). Weekends are **fully dropped**: Friday's scan never runs, and any commitment whose
+  `fire_at` would land Fri/Sat is discarded rather than rolled to Sunday (see below).
+- **Scan (`scanRecentChats`).** Reads the op line's last-24h (**72h on Israel-Sunday** — a catch-up scan
+  since Friday's own scan no longer runs, verified live at 72h/4320 min) **incoming + outgoing** journals
+  (`lastIncoming/OutgoingMessagesWith`), buckets per 1:1 chat (skips groups and the excluded self/bot chat
+  ids), produces dated transcripts labelled `Didi:` vs the contact. Per-message weekend filter: **client**
+  Fri/Sat messages are dropped, but **Didi's own outgoing** Fri/Sat messages are kept as context so the LLM
+  can see requests he already handled over the weekend.
 - **Detect (`detectCommitments`).** LLM (`COMMITMENT_AI_MODEL`, fallback `gemini-2.5-flash`, JSON mode)
   extracts **only Didi's own future plans** he proposes or agrees to (meet/call/send/come/get-back, or
   agreeing to a time) — **never** chores others tell Didi to do, and never past/vague items. Output `what`
   is written in **Hebrew**; relative dates resolved against the conversation's Jerusalem date. Each is
   inserted into `commitments` with a derived `kind` and `fire_at`; dedup key
-  `source_message_id = "<chatId>:<djb2(what)>"` (partial-unique, raw SQL `ON CONFLICT … DO NOTHING`).
+  `source_message_id = "<chatId>:<djb2(what)>"` (partial-unique, raw SQL `ON CONFLICT … DO NOTHING`). A
+  commitment whose computed `fire_at` lands on Fri/Sat is **skipped at insertion** (never rolled to
+  Sunday); one whose clamped `fire_at` would land at/after the appointment itself (early-morning meeting) is
+  also skipped.
 - **`fire_at` rules (`commitments.fireat.ts`).** `timed` (date + time) → **1 h before**, clamped to
-  07:00–21:00 Jerusalem; `date_only` (date, no time) → **09:00 on the due date**; `floating` (neither) →
+  09:00–17:00 Jerusalem (returns nothing — insertion skipped — if the clamp would land at/after the
+  appointment); `date_only` (date, no time) → **09:00 on the due date**; `floating` (neither) →
   **next day 09:00** (message date + 1 day).
 - **Fire.**
   - **Timed:** `fireTimedReminders` runs every **15 min** (`setInterval` in `startCommitmentCrons`). It
@@ -375,7 +400,8 @@ Gmail.
   - **Date-only / floating:** `buildMorningCommitmentSection` (status `pending`, kind in
     `date_only`/`floating`, `fire_at <= now`) is composed by the LLM into a Hebrew bullet list
     (`"בוקר טוב! התזכורות להיום:"`, fallback template on LLM failure) and **merged into the 09:00 digest**;
-    the included ids are then marked `sent`.
+    the included ids are then marked `sent`. Any pending row with a Fri/Sat `fire_at` (legacy rows inserted
+    before the weekend-drop rule existed) is **cancelled** here instead of surfaced.
 - All commitment reminders go to **Didi via the NOTIFY instance** (`sendSelfMessage`
   wraps `notifyOwnerOps` — despite the legacy name it sends to `SUMMARY_RECIPIENT_PHONE`, not as a
   self-message on the op line).
@@ -417,10 +443,13 @@ Gmail.
   the own account can't be spam-flagged; 1 email/day max, no pacing needed.
 
 ### 5.4 The merged 09:00 digest — `operations/morning-digest.service.ts`
-`sendMorningDigest` (cron `0 9 * * *`, Asia/Jerusalem) re-scans commitments (`refreshCommitments`), builds
-the **commitment morning section** and the **call-reminder section** in parallel, joins them (commitments
-first, blank line, then calls) into **one** Hebrew message and sends it **to Didi via `notifyOwnerOps`**
-(NOTIFY instance). If both sections are empty it returns early without sending anything.
+`sendMorningDigest` (cron `0 9 * * *`, Asia/Jerusalem) is gated **first** on `isWithinOpWindow` (Sun–Thu
+09:00–18:00 Israel) — outside that window it returns immediately, before the commitment re-scan/LLM even
+runs, so no LLM call or send happens on Fri/Sat or outside business hours. Inside the window it re-scans
+commitments (`refreshCommitments`), builds the **commitment morning section** and the **call-reminder
+section** in parallel, joins them (commitments first, blank line, then calls) into **one** Hebrew message
+and sends it **to Didi via `notifyOwnerOps`** (NOTIFY instance). If both sections are empty it returns early
+without sending anything.
 After the send attempt: commitment ids are marked `sent` **only if the send returned `true`**; then
 `pruneCallsOlderThan(48h)` runs **unconditionally** (regardless of send result, but only if there was
 something to send — the empty-check above returns before this point). Still gated on `opCreds()` (scan
@@ -542,7 +571,7 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   **v4 stall-watcher columns `consent_prompted_at` + `stall_notified_at`** (timestamptz), and
   `mirrored_to_sheet_at` (column exists but is **not read/written by the lead-mirror code** — sheet
   idempotency is phone-based, see §10). `inquiry_type` CHECK includes the fixed button set plus **v4
-  values `callback` (button 8) and `meeting` (button 9)** plus legacy keys for old rows.
+  values `callback` (button 7) and `meeting` (button 8)** plus legacy keys for old rows.
 - `meetings`: `type` (`zoom`/`phone`/`in_person`/`google_meet`), `status`
   (`pending_booking → scheduled → confirmed → done → cancelled`), `summary_draft`/`summary_final`,
   `summary_status` (`draft`→`sent`; `approved` unused), `client_confirmed` (vestigial),
@@ -592,7 +621,7 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   (`file_url`=webViewLink) **+** `clients.id_photo_url`/`id_number`. **`endFlow`** → `clients`
   (completed, `pipeline_stage='new_lead'|'meeting_scheduling'`) **+** `conversations.bot_paused=true` /
   `bot_paused_until=now+24h`. No `meetings` insert, no POA path anymore. **Bot replies** → `messages`
-  (`sent_by='bot'`). **Staff lead email** (buttons 1-7) → Gmail (or pm2 log in `log` mode); **callback/
+  (`sent_by='bot'`). **Staff lead email** (buttons 1-6) → Gmail (or pm2 log in `log` mode); **callback/
   stall alerts** → Didi's WhatsApp (not stored as our `messages`).
 - **Booking sync (re-enabled v4.1)** → `system_settings.google_calendar_last_sync`; `meetings` —
   always a fresh INSERT per event (`calendar_event_id` partial-unique, `scheduled_at`,
@@ -680,8 +709,8 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   QR-scan the three instances (944 → Didi's real phone, 945 → bot line, 7591 → notify; **clear each
   instance's message queue immediately before its scan** — queues refill from the daily crons) and the
   Zadarma telephony setup below.
-- **v4 removed the department pings and the old slots** — routing is the 9-button menu (§3.1); the
-  `client_type` fork survives only inside the button-9 meeting flow.
+- **v4 removed the department pings and the old slots** — routing is the 8-button menu (§3.1); the
+  `client_type` fork survives only inside the button-8 meeting flow.
 - **Zadarma telephony pending (owner action required):** `POST /api/zadarma/call-webhook` is deployed and
   IP-locked. Missing steps: Zadarma KYC approval + DID number purchase (`055`, ~$3/mo) + attach to PBX +
   GSM call-forwarding on Didi's phone. Until complete no real missed-call data is recorded.
@@ -713,13 +742,13 @@ Refresh token in `system_settings.google_ws_refresh_token`. Routes
 
 **Lead row mirror — `mirrorLeadToSheet(clientId)`** (v4 rewrite; called on each slot advance + at
 `endFlow`, EVERY branch, best-effort, never blocks intake):
-- **Tab routing (v4.1):** buttons 1-8 + callback → **`לידים חדשים `** (`LEADS_SHEET_TAB_NEW`, trailing
-  space, sheetId 0); button-9 meeting + existing client → **`לקוח קיים `** (`LEADS_SHEET_TAB_EXISTING`).
+- **Tab routing (v4.1):** buttons 1-7 + callback → **`לידים חדשים `** (`LEADS_SHEET_TAB_NEW`, trailing
+  space, sheetId 0); button-8 meeting + existing client → **`לקוח קיים `** (`LEADS_SHEET_TAB_EXISTING`).
   The bot never *appends* to `לא רלוונטי` (`LEADS_SHEET_TAB_IRRELEVANT`, new env 2026-07-10) — rows only
   arrive there via the relevance mover below. Tab titles resolved against live metadata (trim-match) and
   cached in `system_settings.leads_sheet_tab_resolved:<tab>` (+ `leads_sheet_gid:<title>` for sheetIds).
 - **7 columns A→G:** phone · name (`displayName` — blank if the WA name is just the phone) · inquiry
-  type (1-7 → Hebrew via `INQUIRY_TYPE_HE`; `callback` → `בקשת שיחה חוזרת`; `meeting` →
+  type (1-6, plus legacy `other` via the grace path → Hebrew via `INQUIRY_TYPE_HE`; `callback` → `בקשת שיחה חוזרת`; `meeting` →
   `תיאום פגישה — לקוח קיים/חדש` per `client_type`; `general` → blank) · ID-photo Drive URL · ID number ·
   רלוונטיות (**human-owned dropdown**, bot writes blank — see mover below) · creation date
   `DD/MM/YYYY HH:mm` Asia/Jerusalem. **Set-once columns `[5, 6]`** (2026-07-10, was `[6]`): a

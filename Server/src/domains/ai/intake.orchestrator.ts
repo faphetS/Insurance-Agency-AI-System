@@ -260,13 +260,23 @@ async function handleMenu(
   );
 
   if (!matched) {
+    // Legacy grace: pre-2026-07-29 WhatsApp list messages stay tappable in a
+    // client's chat history forever, so a stale tap on the removed "אחר" row
+    // can still arrive here — no button offers it anymore. Same terminal as
+    // the old button, minus staff email (that route never existed anyway).
+    if (val === "other" || val === "אחר") {
+      await updateClient(clientId, { inquiry_type: "other" });
+      await sendTextPrompt(conversationId, chatId, "thanks_menu");
+      await endFlow(conversationId, clientId, "new_lead");
+      return;
+    }
     await sendTextPrompt(conversationId, chatId, "menu_reprompt");
     return;
   }
 
   const id = matched.buttonId;
 
-  // Buttons 1-7 — insurance type → staff email → thank-you → bot off.
+  // Buttons 1-6 — insurance type → staff email → thank-you → bot off.
   if ((INQUIRY_TYPES as readonly string[]).includes(id)) {
     await updateClient(clientId, { inquiry_type: id });
     const { phone, fullName } = await loadContact(clientId);
@@ -278,7 +288,7 @@ async function handleMenu(
     return;
   }
 
-  // Button 8 — request a callback from Didi.
+  // Button 7 — request a callback from Didi.
   if (id === "callback_didi") {
     await updateClient(clientId, { inquiry_type: "callback" });
     const { phone, fullName } = await loadContact(clientId);
@@ -297,7 +307,7 @@ async function handleMenu(
     return;
   }
 
-  // Button 9 — meeting request → existing/new sub-choice.
+  // Button 8 — meeting request → existing/new sub-choice.
   if (id === "meeting_didi") {
     await updateClient(clientId, { inquiry_type: "meeting", client_type: null });
     await advanceTo(conversationId, chatId, clientId, "meeting_type");
