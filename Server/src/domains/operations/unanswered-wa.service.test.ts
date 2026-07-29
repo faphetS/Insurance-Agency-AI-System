@@ -86,10 +86,10 @@ import {
   handleOpInstanceEvent,
   sweepUnanswered,
   sendCallbackReminders,
-  isWithinWatchWindow,
   AUTO_REPLY_TEXT,
   AUTO_REPLY_BUTTONS,
 } from "./unanswered-wa.service.js";
+import { isWithinOpWindow as isWithinWatchWindow } from "./op-hours.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — supabaseAdmin builder stub (mirrors other test files' pattern)

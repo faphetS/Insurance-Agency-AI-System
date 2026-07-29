@@ -50,6 +50,7 @@ export async function getUnresolvedMissedSince(iso: string): Promise<CallEventRo
       `SELECT counterpart_phone, MAX(called_at) AS called_at
 FROM public.call_events
 WHERE called_at >= $1 AND direction = 'incoming' AND status IN ('missed','declined')
+  AND EXTRACT(DOW FROM called_at AT TIME ZONE 'Asia/Jerusalem') NOT IN (5, 6)
 GROUP BY counterpart_phone
 ORDER BY called_at ASC`,
       [iso],

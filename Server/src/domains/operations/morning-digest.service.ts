@@ -4,11 +4,17 @@ import { refreshCommitments } from "../commitments/commitments.service.js";
 import { buildMorningCommitmentSection, markCommitmentsSent } from "../commitments/commitments.reminders.js";
 import { buildCallReminderSection } from "./call-reminder.service.js";
 import { pruneCallsOlderThan } from "./call-events.service.js";
+import { isWithinOpWindow } from "./op-hours.js";
 import { notifyOwnerOps } from "./owner-notify.js";
 
 export async function sendMorningDigest(): Promise<void> {
   if (!opCreds()) {
     logger.info("morning-digest: op creds not configured — skipping");
+    return;
+  }
+
+  if (!isWithinOpWindow(new Date())) {
+    logger.info("morning-digest: outside op window — skipped");
     return;
   }
 

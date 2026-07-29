@@ -78,14 +78,14 @@ export function israelWallTimeInstant(ref: Date, hour: number, minute: number): 
   return new Date(instant);
 }
 
-export function clampedSendTime(scheduledAt: Date, offsetMs: number): Date {
+export function clampedSendTime(scheduledAt: Date, offsetMs: number, startHour = 7, endHour = 21): Date {
   const natural = new Date(scheduledAt.getTime() - offsetMs);
   const tod = israelTimeOfDayMs(natural);
-  const lo = 7 * 3600_000;
-  const hi = 21 * 3600_000;
+  const lo = startHour * 3600_000;
+  const hi = endHour * 3600_000;
 
-  if (tod < lo) return israelWallTimeInstant(natural, 7, 0);
-  if (tod > hi) return israelWallTimeInstant(natural, 21, 0);
+  if (tod < lo) return israelWallTimeInstant(natural, startHour, 0);
+  if (tod > hi) return israelWallTimeInstant(natural, endHour, 0);
   return natural;
 }
 

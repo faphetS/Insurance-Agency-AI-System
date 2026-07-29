@@ -1,17 +1,20 @@
 import { logger } from "../../config/logger.js";
 import { isOpExcludedPhone } from "../whatsapp/whatsapp.util.js";
 import { getUnresolvedMissedSince, pruneCallsOlderThan } from "./call-events.service.js";
+import { isIsraelSunday } from "./op-hours.js";
 import { notifyOwnerOps } from "./owner-notify.js";
 
 const TZ = "Asia/Jerusalem";
 
+const TIME_FMT = new Intl.DateTimeFormat("en-GB", {
+  timeZone: TZ,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
 function formatTime(calledAt: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(calledAt));
+  return TIME_FMT.format(new Date(calledAt));
 }
 
 function stripCus(phone: string): string {
@@ -19,7 +22,11 @@ function stripCus(phone: string): string {
 }
 
 export async function buildCallReminderSection(): Promise<string | null> {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  // Sunday-aware lookback like the commitment scan: Friday's job no longer runs, so Sunday
+  // reaches back 72h to catch Thursday's missed calls too; the SQL DOW predicate already
+  // drops the Fri/Sat portion of that widened window.
+  const lookbackHours = isIsraelSunday(new Date()) ? 72 : 24;
+  const since = new Date(Date.now() - lookbackHours * 60 * 60 * 1000).toISOString();
   const rows = (await getUnresolvedMissedSince(since)).filter(
     (r) => !isOpExcludedPhone(stripCus(r.counterpart_phone)),
   );

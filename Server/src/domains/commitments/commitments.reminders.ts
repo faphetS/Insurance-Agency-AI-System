@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
+import { isOpWeekday, isWithinOpWindow } from "../operations/op-hours.js";
 import { notifyOwnerOps } from "../operations/owner-notify.js";
 import { opExcludedChatIds } from "../whatsapp/whatsapp.util.js";
 import { COMMITMENT_COMPOSITION_SYSTEM_PROMPT } from "./commitments.prompts.js";
@@ -100,7 +101,17 @@ export async function buildMorningCommitmentSection(): Promise<{ text: string | 
   }
 
   const excluded = opExcludedChatIds();
-  const pending = ((data ?? []) as Commitment[]).filter((c) => !excluded.has(c.chat_id));
+  const notExcluded = ((data ?? []) as Commitment[]).filter((c) => !excluded.has(c.chat_id));
+
+  // Legacy rows: fire_at may predate the weekend-drop rule, so a pending row can still
+  // have a Fri/Sat fire_at — cancel those instead of surfacing them.
+  const weekendRows = notExcluded.filter((c) => !isOpWeekday(new Date(c.fire_at)));
+  if (weekendRows.length > 0) {
+    await markCommitmentsCancelled(weekendRows.map((c) => c.id));
+    logger.info({ count: weekendRows.length }, "commitments: cancelled legacy weekend-fire_at rows");
+  }
+
+  const pending = notExcluded.filter((c) => isOpWeekday(new Date(c.fire_at)));
   if (pending.length === 0) return { text: null, ids: [] };
 
   const text = await composeMorningMessage(pending);
@@ -119,6 +130,8 @@ export async function fireMorningBatch(): Promise<void> {
 
 export async function fireTimedReminders(): Promise<void> {
   const now = new Date();
+  if (!isWithinOpWindow(now)) return;
+
   const staleThreshold = new Date(now.getTime() - STALE_THRESHOLD_MS);
 
   // Cancel stale timed commitments (fired more than 2h ago)

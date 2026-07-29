@@ -4,6 +4,7 @@ import { logger } from "../../config/logger.js";
 import { pool } from "../../lib/db.js";
 import { COMMITMENT_EXTRACTION_SYSTEM_PROMPT } from "./commitments.prompts.js";
 import { deriveKind, computeFireAt } from "./commitments.fireat.js";
+import { isOpWeekday } from "../operations/op-hours.js";
 import type { ChatTranscript, DetectedCommitment } from "./commitments.types.js";
 
 const FALLBACK_MODEL = "google/gemini-2.5-flash";
@@ -147,6 +148,22 @@ export async function detectCommitments(transcripts: ChatTranscript[]): Promise<
         // Use the latest message timestamp as the message reference for floating
         const messageTs = transcript.latestTs || Math.floor(Date.now() / 1000);
         const fireAt = computeFireAt(kind, d.date, d.time, messageTs);
+
+        if (fireAt === null) {
+          logger.info(
+            { chatId: transcript.chatId, what: d.what },
+            "commitments: early-morning appointment after clamp — skipping insert",
+          );
+          continue;
+        }
+
+        if (!isOpWeekday(fireAt)) {
+          logger.info(
+            { chatId: transcript.chatId, what: d.what, fireAt: fireAt.toISOString() },
+            "commitments: weekend fire_at — skipping insert",
+          );
+          continue;
+        }
 
         // Stable synthetic key when no real message ID available
         const sourceKey = `${transcript.chatId}:${djb2(d.what)}`;

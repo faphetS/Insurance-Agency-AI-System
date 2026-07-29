@@ -4,6 +4,7 @@ import { opCreds, type GreenApiCreds } from "../whatsapp/whatsapp.service.js";
 import { scanRecentChats } from "./commitments.scan.js";
 import { detectCommitments } from "./commitments.detector.js";
 import { fireMorningBatch, fireTimedReminders } from "./commitments.reminders.js";
+import { isWithinOpWindow } from "../operations/op-hours.js";
 
 interface WaSettingsResponse {
   wid?: string;
@@ -53,6 +54,11 @@ export async function ensureChatIds(): Promise<void> {
 }
 
 export async function refreshCommitments(): Promise<void> {
+  if (!isWithinOpWindow(new Date())) {
+    logger.info("commitments: outside op window — scan skipped");
+    return;
+  }
+
   if (!opCreds()) {
     logger.info("commitments: scan creds unset — skipping refresh");
     return;
@@ -74,6 +80,11 @@ export async function refreshCommitments(): Promise<void> {
 }
 
 export async function runMorningCommitments(): Promise<void> {
+  if (!isWithinOpWindow(new Date())) {
+    logger.info("commitments: outside op window — morning batch skipped");
+    return;
+  }
+
   await refreshCommitments();
 
   try {

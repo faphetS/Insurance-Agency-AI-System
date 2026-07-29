@@ -106,6 +106,16 @@ describe("getUnresolvedMissedSince", () => {
     expect(params).toEqual([iso]);
   });
 
+  it("filters weekend rows via a DOW predicate before aggregation (F4)", async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [] });
+
+    await getUnresolvedMissedSince("2026-06-25T08:00:00Z");
+
+    const [sql] = mockPoolQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("EXTRACT(DOW FROM called_at AT TIME ZONE 'Asia/Jerusalem')");
+    expect(sql).toContain("NOT IN (5, 6)");
+  });
+
   it("returns missed row even when a later accepted call to same number exists", async () => {
     mockPoolQuery.mockResolvedValue({
       rows: [{ counterpart_phone: "97250111@c.us", called_at: "2026-06-25T09:00:00Z" }],

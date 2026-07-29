@@ -38,7 +38,7 @@ vi.mock("../whatsapp/whatsapp.service.js", () => ({
 // Subject imports (after mocks)
 // ---------------------------------------------------------------------------
 
-import { deriveKind, fireAtTimed, fireAtDateOnly, fireAtFloating, computeFireAt } from "./commitments.fireat.js";
+import { deriveKind, fireAtDateOnly, fireAtFloating, computeFireAt } from "./commitments.fireat.js";
 import { buildTranscriptString, israelNowString } from "./commitments.detector.js";
 import type { Commitment, ChatTranscript } from "./commitments.types.js";
 
@@ -89,39 +89,9 @@ describe("deriveKind", () => {
 });
 
 // ---------------------------------------------------------------------------
-// fireAtTimed — 1h before, clamped to 07:00–21:00 Jerusalem
+// fireAtTimed — moved to commitments.fireat.test.ts (single home for the
+// business-hours clamp + early-morning-null assertions).
 // ---------------------------------------------------------------------------
-
-describe("fireAtTimed", () => {
-  it("fires 1h before a mid-day appointment (no clamping)", () => {
-    // 15:00 appointment → 14:00 fire_at
-    const result = fireAtTimed("2026-07-01", "15:00");
-    const { h, m } = israelHourMinute(result);
-    expect(h).toBe(14);
-    expect(m).toBe(0);
-  });
-
-  it("clamps an early-morning appointment to 07:00", () => {
-    // 07:30 appointment → 06:30 natural fire_at → clamped to 07:00
-    const result = fireAtTimed("2026-07-01", "07:30");
-    const { h } = israelHourMinute(result);
-    expect(h).toBe(7);
-  });
-
-  it("clamps a late appointment 1h window beyond 21:00 to 21:00", () => {
-    // 22:30 appointment → 21:30 natural fire_at → clamped to 21:00
-    const result = fireAtTimed("2026-07-01", "22:30");
-    const { h } = israelHourMinute(result);
-    expect(h).toBe(21);
-  });
-
-  it("fires at the exact quiet-hours boundary of 07:00 (not clamped)", () => {
-    // 08:00 appointment → 07:00 → exactly the boundary, not before → not clamped
-    const result = fireAtTimed("2026-07-01", "08:00");
-    const { h } = israelHourMinute(result);
-    expect(h).toBe(7);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // fireAtDateOnly — due_date @ 09:00 Jerusalem
@@ -204,22 +174,31 @@ describe("computeFireAt", () => {
 
   it("dispatches to fireAtTimed for kind='timed'", () => {
     const result = computeFireAt("timed", "2026-07-10", "15:00", fixedMsgTs);
-    const { h } = israelHourMinute(result);
+    expect(result).not.toBeNull();
+    const { h } = israelHourMinute(result!);
     expect(h).toBe(14);
+  });
+
+  it("dispatches to fireAtTimed for kind='timed' and propagates null for an early-morning appointment", () => {
+    // 2026-07-10 08:00 appointment: natural fire 07:00 clamps up to 09:00 (>= 08:00) → null
+    const result = computeFireAt("timed", "2026-07-10", "08:00", fixedMsgTs);
+    expect(result).toBeNull();
   });
 
   it("dispatches to fireAtDateOnly for kind='date_only'", () => {
     const result = computeFireAt("date_only", "2026-07-10", null, fixedMsgTs);
-    const { h } = israelHourMinute(result);
+    expect(result).not.toBeNull();
+    const { h } = israelHourMinute(result!);
     expect(h).toBe(9);
   });
 
   it("dispatches to fireAtFloating for kind='floating'", () => {
     const result = computeFireAt("floating", null, null, fixedMsgTs);
-    const { h } = israelHourMinute(result);
+    expect(result).not.toBeNull();
+    const { h } = israelHourMinute(result!);
     expect(h).toBe(9);
     // next day
-    expect(israelDateString(result)).toBe("2026-07-11");
+    expect(israelDateString(result!)).toBe("2026-07-11");
   });
 });
 

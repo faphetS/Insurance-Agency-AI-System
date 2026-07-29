@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock functions
@@ -151,5 +151,46 @@ describe("buildCallReminderSection — OP_EXCLUDED_PHONES", () => {
     } finally {
       (env as Record<string, unknown>)["OP_EXCLUDED_PHONES"] = [];
     }
+  });
+});
+
+// Weekend exclusion (F4) moved into the SQL predicate in getUnresolvedMissedSince
+// (call-events.service.ts) so weekend rows never mask weekday rows before aggregation —
+// see call-events.service.test.ts for the query-text assertion. buildCallReminderSection no
+// longer filters by weekday in JS.
+
+describe("buildCallReminderSection — Sunday-aware lookback (F4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("passes a 24h-ago `since` on a non-Sunday", async () => {
+    // 2026-07-28 is a Tuesday. 12:00 Israel = 09:00 UTC.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T09:00:00Z"));
+    mockGetUnresolvedMissedSince.mockResolvedValue([]);
+
+    await buildCallReminderSection();
+
+    const [sinceIso] = mockGetUnresolvedMissedSince.mock.calls[0] as [string];
+    const expected = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    expect(sinceIso).toBe(expected);
+  });
+
+  it("passes a 72h-ago `since` on Israel-Sunday", async () => {
+    // 2026-08-02 is a Sunday. 10:00 Israel = 07:00 UTC.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-02T07:00:00Z"));
+    mockGetUnresolvedMissedSince.mockResolvedValue([]);
+
+    await buildCallReminderSection();
+
+    const [sinceIso] = mockGetUnresolvedMissedSince.mock.calls[0] as [string];
+    const expected = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+    expect(sinceIso).toBe(expected);
   });
 });

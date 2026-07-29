@@ -3,7 +3,7 @@ import { logger } from "../../config/logger.js";
 import { env } from "../../config/env.js";
 import { sleep } from "../../lib/sleep.js";
 import { supabaseAdmin } from "../../config/supabase.js";
-import { israelTimeOfDayMs, israelWallTimeInstant } from "../calendar/reminder.service.js";
+import { israelWallTimeInstant } from "../calendar/reminder.service.js";
 import { opCreds, sendInteractiveButtonsWith } from "../whatsapp/whatsapp.service.js";
 import {
   displayName,
@@ -12,10 +12,9 @@ import {
   toChatId,
   toLocalPhone,
 } from "../whatsapp/whatsapp.util.js";
+import { isOpWeekday, isWithinOpWindow } from "./op-hours.js";
 import { notifyOwnerOps } from "./owner-notify.js";
 import { needsReplyFromDidi } from "./unanswered-wa.llm.js";
-
-const TZ = "Asia/Jerusalem";
 
 // ---------------------------------------------------------------------------
 // Message texts (exact — see plan)
@@ -39,19 +38,6 @@ const DAILY_AUTO_REPLY_CAP = 20;
 // ---------------------------------------------------------------------------
 // Israel wall-time helpers (reuse calendar/reminder.service.ts — don't hand-roll)
 // ---------------------------------------------------------------------------
-
-const WATCH_WEEKDAYS = new Set(["Sun", "Mon", "Tue", "Wed", "Thu"]);
-
-function israelWeekday(d: Date): string {
-  return new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "short" }).format(d);
-}
-
-// Sun–Thu, 09:00–18:00 Israel time (Didi's business hours).
-export function isWithinWatchWindow(d: Date): boolean {
-  if (env.UNANSWERED_WINDOW_DISABLED) return true;
-  const minutes = Math.floor(israelTimeOfDayMs(d) / 60_000);
-  return WATCH_WEEKDAYS.has(israelWeekday(d)) && minutes >= 9 * 60 && minutes <= 18 * 60;
-}
 
 function israelDayStart(d: Date): Date {
   return israelWallTimeInstant(d, 0, 0);
@@ -279,7 +265,7 @@ export async function handleOpInstanceEvent(rawBody: unknown): Promise<void> {
   if (!active) {
     if (isReaction) return; // reactions never start tracking
     const messageTs = typeof body.timestamp === "number" ? new Date(body.timestamp * 1000) : new Date();
-    if (!isWithinWatchWindow(messageTs)) return;
+    if (!isWithinOpWindow(messageTs)) return;
     if (await isChatBlockedToday(chatId, israelDayStart(new Date()))) return;
     await createWatchingRow(chatId, body.senderData?.senderName ?? null, messageTs);
     logger.debug({ chatId, typeMessage }, "unanswered-wa: watching row created");
@@ -348,7 +334,7 @@ export async function sweepUnanswered(): Promise<{
     // Boundary-crossers: a chat that started watching near 18:00 (or before the weekend)
     // must never fire once the window has closed — expire everything still watching
     // and send nothing until the window reopens.
-    if (!isWithinWatchWindow(now)) {
+    if (!isWithinOpWindow(now)) {
       const expiredRes = await pool.query(
         `UPDATE public.wa_unanswered SET state='expired', updated_at=now() WHERE state='watching'`,
       );
@@ -492,7 +478,7 @@ export async function sendCallbackReminders(): Promise<{ reminded: number; expir
 
     if (env.UNANSWERED_WA_MODE === "off") {
       logger.info("unanswered-wa: mode=off — skipping callback-reminder pass");
-    } else if (!WATCH_WEEKDAYS.has(israelWeekday(now))) {
+    } else if (!isOpWeekday(now)) {
       // Fri/Sat — Didi's weekend: hold both the reminder and the daily reset, so
       // Thursday's buttons stay tappable over the weekend and unreminded callbacks roll
       // to Sunday 09:00 instead of being stamped on a morning he won't act on.

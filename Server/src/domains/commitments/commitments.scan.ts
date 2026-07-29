@@ -6,6 +6,7 @@ import {
   lastOutgoingMessagesWith,
 } from "../whatsapp/whatsapp.service.js";
 import { opExcludedChatIds } from "../whatsapp/whatsapp.util.js";
+import { isOpWeekday, isIsraelSunday } from "../operations/op-hours.js";
 import type { ChatTranscript, TranscriptLine } from "./commitments.types.js";
 
 async function getExcludedChatIds(): Promise<Set<string>> {
@@ -36,15 +37,20 @@ export async function scanRecentChats(): Promise<ChatTranscript[]> {
     return [];
   }
 
-  const cutoffTs = Date.now() - 24 * 60 * 60 * 1000;
+  // The morning digest no longer runs on Friday (gated by isWithinOpWindow), so Friday's
+  // scan never fires and Thursday's daytime chats would otherwise be lost. Widen Sunday's
+  // lookback to 72h so Sunday's scan picks up Thursday's chats instead; the per-message
+  // Fri/Sat filter below still drops client weekend messages from the widened window.
+  const lookbackHours = isIsraelSunday(new Date()) ? 72 : 24;
+  const cutoffTs = Date.now() - lookbackHours * 60 * 60 * 1000;
   const excluded = await getExcludedChatIds();
 
   const [incoming, outgoing] = await Promise.all([
-    lastIncomingMessagesWith(creds, 1440).catch((err: unknown) => {
+    lastIncomingMessagesWith(creds, lookbackHours * 60).catch((err: unknown) => {
       logger.warn({ err }, "commitments: lastIncomingMessagesWith failed");
       return [];
     }),
-    lastOutgoingMessagesWith(creds, 1440).catch((err: unknown) => {
+    lastOutgoingMessagesWith(creds, lookbackHours * 60).catch((err: unknown) => {
       logger.warn({ err }, "commitments: lastOutgoingMessagesWith failed");
       return [];
     }),
@@ -59,6 +65,9 @@ export async function scanRecentChats(): Promise<ChatTranscript[]> {
     if (excluded.has(msg.chatId)) continue;
     if (!msg.textMessage) continue;
     if (msg.timestamp * 1000 <= cutoffTs) continue;
+    // Didi's own weekend replies stay in the transcript (context so the LLM sees handled
+    // requests); client weekend messages stay invisible.
+    if (msg.type !== "outgoing" && !isOpWeekday(new Date(msg.timestamp * 1000))) continue;
 
     let entry = byChatId.get(msg.chatId);
     if (!entry) {
