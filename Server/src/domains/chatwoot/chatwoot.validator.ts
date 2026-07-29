@@ -17,8 +17,15 @@ export const chatwootCallbackSchema = z
       })
       .passthrough()
       .optional(),
+    // Template pass-through (see chatwoot.templates.ts): Chatwoot lands the agent's
+    // template pick under additional_attributes.template_params on the top-level message.
+    additional_attributes: z
+      .object({ template_params: z.unknown().optional() })
+      .passthrough()
+      .optional(),
     conversation: z
       .object({
+        id: z.union([z.string(), z.number()]).optional(),
         meta: z
           .object({
             sender: z

@@ -12,7 +12,14 @@ vi.mock("../../../config/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { sendText, sendInteractive, sendImage, sendTypingAndRead, MetaSendError } from "./meta.transport.js";
+import {
+  sendText,
+  sendInteractive,
+  sendImage,
+  sendTypingAndRead,
+  sendTemplate,
+  MetaSendError,
+} from "./meta.transport.js";
 import { logger } from "../../../config/logger.js";
 
 function mockFetchOk(body: unknown) {
@@ -235,6 +242,93 @@ describe("sendImage", () => {
     const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as { image: Record<string, unknown> };
     expect(body.image).toEqual({ link: "https://example.com/brand.jpeg" });
+  });
+});
+
+describe("sendTemplate", () => {
+  it("builds a body-only components array", async () => {
+    const mockFetch = mockFetchOk(MESSAGES_RES);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await sendTemplate(WA_ID, {
+      name: "reminder_v1",
+      language: "he",
+      bodyParams: ["Dana", "14:00"],
+    });
+
+    expect(result.idMessage).toBe("wamid.SENT1");
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://graph.facebook.com/v24.0/1252996454555154/messages");
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).toEqual({
+      messaging_product: "whatsapp",
+      to: WA_ID,
+      type: "template",
+      template: {
+        name: "reminder_v1",
+        language: { code: "he" },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: "Dana" },
+              { type: "text", text: "14:00" },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("builds header + body components together", async () => {
+    const mockFetch = mockFetchOk(MESSAGES_RES);
+    vi.stubGlobal("fetch", mockFetch);
+
+    await sendTemplate(WA_ID, {
+      name: "welcome",
+      language: "he",
+      bodyParams: ["Dana"],
+      headerMedia: { type: "image", link: "https://cdn.test/img.jpg" },
+    });
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      template: { components: Record<string, unknown>[] };
+    };
+    expect(body.template.components).toEqual([
+      {
+        type: "header",
+        parameters: [{ type: "image", image: { link: "https://cdn.test/img.jpg" } }],
+      },
+      {
+        type: "body",
+        parameters: [{ type: "text", text: "Dana" }],
+      },
+    ]);
+  });
+
+  it("omits components entirely for a zero-param template", async () => {
+    const mockFetch = mockFetchOk(MESSAGES_RES);
+    vi.stubGlobal("fetch", mockFetch);
+
+    await sendTemplate(WA_ID, { name: "incoming_call", language: "he" });
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { template: Record<string, unknown> };
+    expect(body.template).toEqual({ name: "incoming_call", language: { code: "he" } });
+    expect(body.template.components).toBeUndefined();
+  });
+
+  it("returns noop idMessage and warns when creds are blank", async () => {
+    envMock.META_ACCESS_TOKEN = undefined;
+    const mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await sendTemplate(WA_ID, { name: "welcome", language: "he" });
+
+    expect(result.idMessage).toMatch(/^noop:/);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(vi.mocked(logger.warn)).toHaveBeenCalled();
   });
 });
 

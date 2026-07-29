@@ -4,6 +4,9 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { sendMessage } from "../whatsapp/whatsapp.service.js";
+import { sendTemplate, MetaSendError } from "../whatsapp/meta/meta.transport.js";
+import { buildTemplateSpec } from "./chatwoot.templates.js";
+import { postPrivateNote } from "./chatwoot.service.js";
 import { chatwootCallbackSchema, type ChatwootCallback } from "./chatwoot.validator.js";
 
 function secretMatches(provided: string, expected: string): boolean {
@@ -22,6 +25,19 @@ function extractChatId(body: ChatwootCallback): string | null {
 
   logger.warn({ identifier }, "chatwoot callback: cannot derive customer chatId — ignoring");
   return null;
+}
+
+async function pauseBotForTakeover(chatId: string): Promise<void> {
+  const pausedUntil = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
+  const { error } = await supabaseAdmin
+    .from("conversations")
+    .update({ bot_paused: true, bot_paused_until: pausedUntil })
+    .eq("whatsapp_chat_id", chatId);
+  if (error) {
+    logger.warn({ chatId, error }, "chatwoot takeover: failed to pause bot");
+  }
+
+  logger.info({ chatId, pausedUntil }, "chatwoot agent takeover — reply forwarded, bot paused 6h");
 }
 
 async function processCallback(body: ChatwootCallback): Promise<void> {
@@ -47,6 +63,33 @@ async function processCallback(body: ChatwootCallback): Promise<void> {
   const chatId = extractChatId(body);
   if (!chatId) return;
 
+  const templateParams = body.additional_attributes?.template_params;
+  const spec = templateParams !== undefined ? buildTemplateSpec(templateParams) : null;
+
+  if (spec) {
+    const waId = chatId.replace(/@c\.us$/, "");
+    try {
+      await sendTemplate(waId, spec);
+      logger.info({ chatId, name: spec.name }, `chatwoot template send — ${spec.name}`);
+      await pauseBotForTakeover(chatId);
+    } catch (err) {
+      if (err instanceof MetaSendError) {
+        logger.error({ chatId, message: err.message, code: err.code }, "chatwoot template send failed");
+        const conversationId = body.conversation?.id;
+        if (conversationId !== undefined) {
+          const codeSuffix = err.code !== undefined ? ` [${err.code}]` : "";
+          await postPrivateNote(
+            Number(conversationId),
+            `שליחת התבנית נכשלה: ${err.message}${codeSuffix}`,
+          );
+        }
+      } else {
+        logger.error({ chatId, err }, "chatwoot template send — unexpected error");
+      }
+    }
+    return;
+  }
+
   const content = typeof body.content === "string" ? body.content.trim() : "";
   if (!content) {
     logger.debug({ chatId }, "chatwoot agent reply has no text content — ignoring");
@@ -54,17 +97,7 @@ async function processCallback(body: ChatwootCallback): Promise<void> {
   }
 
   await sendMessage(chatId, content, { skipMirror: true });
-
-  const pausedUntil = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
-  const { error } = await supabaseAdmin
-    .from("conversations")
-    .update({ bot_paused: true, bot_paused_until: pausedUntil })
-    .eq("whatsapp_chat_id", chatId);
-  if (error) {
-    logger.warn({ chatId, error }, "chatwoot takeover: failed to pause bot");
-  }
-
-  logger.info({ chatId, pausedUntil }, "chatwoot agent takeover — reply forwarded, bot paused 6h");
+  await pauseBotForTakeover(chatId);
 }
 
 export const chatwootController = {

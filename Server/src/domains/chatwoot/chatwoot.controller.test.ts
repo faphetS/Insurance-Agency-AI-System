@@ -1,10 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Request, Response } from "express";
 
-const { mockSendMessage, mockFromImpl } = vi.hoisted(() => ({
-  mockSendMessage: vi.fn().mockResolvedValue({ idMessage: "fwd-1" }),
-  mockFromImpl: vi.fn(),
-}));
+const { mockSendMessage, mockFromImpl, mockSendTemplate, mockPostPrivateNote, MockMetaSendError } =
+  vi.hoisted(() => {
+    class MockMetaSendError extends Error {
+      constructor(
+        message: string,
+        public code?: number,
+      ) {
+        super(message);
+        this.name = "MetaSendError";
+      }
+    }
+    return {
+      mockSendMessage: vi.fn().mockResolvedValue({ idMessage: "fwd-1" }),
+      mockFromImpl: vi.fn(),
+      mockSendTemplate: vi.fn().mockResolvedValue({ idMessage: "tpl-1" }),
+      mockPostPrivateNote: vi.fn().mockResolvedValue(undefined),
+      MockMetaSendError,
+    };
+  });
 
 const envMock = {
   CHATWOOT_CALLBACK_SECRET: "hush-hush" as string | undefined,
@@ -26,7 +41,17 @@ vi.mock("../whatsapp/whatsapp.service.js", () => ({
   sendMessage: mockSendMessage,
 }));
 
+vi.mock("../whatsapp/meta/meta.transport.js", () => ({
+  sendTemplate: mockSendTemplate,
+  MetaSendError: MockMetaSendError,
+}));
+
+vi.mock("./chatwoot.service.js", () => ({
+  postPrivateNote: mockPostPrivateNote,
+}));
+
 import { chatwootController } from "./chatwoot.controller.js";
+import { MetaSendError } from "../whatsapp/meta/meta.transport.js";
 
 function makeBuilder(result: unknown) {
   const b: Record<string, unknown> = {};
@@ -81,6 +106,8 @@ async function flushImmediates() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSendMessage.mockResolvedValue({ idMessage: "fwd-1" });
+  mockSendTemplate.mockResolvedValue({ idMessage: "tpl-1" });
+  mockPostPrivateNote.mockResolvedValue(undefined);
   mockFromImpl.mockImplementation(() => makeBuilder({ data: null, error: null }));
   envMock.CHATWOOT_CALLBACK_SECRET = "hush-hush";
   envMock.CHATWOOT_BOT_USER_ID = "3";
@@ -248,5 +275,87 @@ describe("handleCallback — agent takeover", () => {
     await flushImmediates();
 
     expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Template pass-through
+// ---------------------------------------------------------------------------
+
+describe("handleCallback — template pass-through", () => {
+  function templateEvent(overrides: Record<string, unknown> = {}) {
+    return agentEvent({
+      content: null,
+      conversation: {
+        id: 55,
+        meta: {
+          sender: {
+            identifier: "972501112233@c.us",
+            phone_number: "+972501112233",
+          },
+        },
+      },
+      additional_attributes: {
+        template_params: {
+          name: "reminder_v1",
+          category: "UTILITY",
+          language: "he",
+          processed_params: { body: { "1": "Dana", "2": "14:00" } },
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  it("sends the template via Meta, skips sendMessage, and pauses the bot 6h", async () => {
+    const pauseBuilder = makeBuilder({ data: null, error: null });
+    mockFromImpl.mockReturnValue(pauseBuilder);
+
+    const res = makeRes();
+    chatwootController.handleCallback(makeReq("hush-hush", templateEvent()), res);
+    await flushImmediates();
+
+    expect(mockSendTemplate).toHaveBeenCalledWith("972501112233", {
+      name: "reminder_v1",
+      language: "he",
+      bodyParams: ["Dana", "14:00"],
+    });
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockPostPrivateNote).not.toHaveBeenCalled();
+
+    const updateArg = (pauseBuilder["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      bot_paused: boolean;
+    };
+    expect(updateArg.bot_paused).toBe(true);
+  });
+
+  it("on MetaSendError: posts a private note, does not pause the bot, and does not throw", async () => {
+    mockSendTemplate.mockRejectedValueOnce(new MetaSendError("Re-engagement message", 131047));
+    const pauseBuilder = makeBuilder({ data: null, error: null });
+    mockFromImpl.mockReturnValue(pauseBuilder);
+
+    const res = makeRes();
+    chatwootController.handleCallback(makeReq("hush-hush", templateEvent()), res);
+    await flushImmediates();
+
+    expect((res.sendStatus as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(200);
+    expect(mockPostPrivateNote).toHaveBeenCalledWith(
+      55,
+      expect.stringContaining("שליחת התבנית נכשלה"),
+    );
+    expect(mockPostPrivateNote.mock.calls[0]?.[1]).toContain("131047");
+    expect(mockFromImpl).not.toHaveBeenCalledWith("conversations");
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it("payload without template_params keeps the free-form path unchanged", async () => {
+    const res = makeRes();
+    chatwootController.handleCallback(makeReq("hush-hush", agentEvent()), res);
+    await flushImmediates();
+
+    expect(mockSendTemplate).not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith("972501112233@c.us", "תשובה מהסוכן", {
+      skipMirror: true,
+    });
   });
 });

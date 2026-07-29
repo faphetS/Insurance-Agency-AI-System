@@ -185,6 +185,52 @@ export async function sendInteractive(
   return toIdMessage(res);
 }
 
+export interface MetaTemplateSpec {
+  name: string;
+  language: string; // e.g. "he"
+  bodyParams?: string[]; // ordered {{1}}..{{n}}
+  headerMedia?: { type: "image" | "document" | "video"; link: string };
+}
+
+export async function sendTemplate(
+  waId: string,
+  tpl: MetaTemplateSpec,
+): Promise<{ idMessage: string }> {
+  const creds = metaCreds();
+  if (!creds) {
+    logger.warn({ waId, name: tpl.name }, "meta.sendTemplate: Meta creds not set — skipping");
+    return { idMessage: `noop:${Date.now()}` };
+  }
+
+  const components: Record<string, unknown>[] = [];
+  if (tpl.headerMedia) {
+    components.push({
+      type: "header",
+      parameters: [
+        { type: tpl.headerMedia.type, [tpl.headerMedia.type]: { link: tpl.headerMedia.link } },
+      ],
+    });
+  }
+  if (tpl.bodyParams && tpl.bodyParams.length > 0) {
+    components.push({
+      type: "body",
+      parameters: tpl.bodyParams.map((text) => ({ type: "text", text })),
+    });
+  }
+
+  const res = await graphPost<MetaMessagesResponse>(creds, `${creds.phoneNumberId}/messages`, {
+    messaging_product: "whatsapp",
+    to: waId,
+    type: "template",
+    template: {
+      name: tpl.name,
+      language: { code: tpl.language },
+      ...(components.length > 0 ? { components } : {}),
+    },
+  });
+  return toIdMessage(res);
+}
+
 export async function sendImage(
   waId: string,
   media: { mediaId?: string; link?: string },

@@ -64,6 +64,8 @@ const envSchema = z.object({
   META_PHONE_NUMBER_ID: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default("v24.0"),
+  // WhatsApp Business Account id — used by the Chatwoot template-sync job to fetch approved templates.
+  META_WABA_ID: z.string().optional(),
 
   // Chatwoot staff inbox — conversation mirror + human-takeover callback.
   // All blank keeps the mirror and the callback fully dormant.
@@ -76,6 +78,9 @@ const envSchema = z.object({
   CHATWOOT_BOT_TOKEN: z.string().optional(),
   CHATWOOT_BOT_USER_ID: z.string().optional(),
   CHATWOOT_CALLBACK_SECRET: z.string().optional(),
+  // Administrator user token for the inbox PATCH that injects approved templates
+  // (falls back to CHATWOOT_BOT_TOKEN — the mirror-bot user may lack admin rights).
+  CHATWOOT_ADMIN_TOKEN: z.string().optional(),
 
   // GreenAPI instance #2: scanning / operational bot (leave blank until provisioned)
   GREENAPI_SCAN_ID_INSTANCE: z.string().optional(),

@@ -13,6 +13,7 @@ import { runUnansweredEmailNotify } from "./domains/operations/unanswered-emails
 import { sweepUnanswered, sendCallbackReminders } from "./domains/operations/unanswered-wa.service.js";
 import { applyRelevanceDropdowns, sweepRelevanceMoves } from "./domains/integrations/google/leads-relevance.service.js";
 import { syncNewBookings } from "./domains/calendar/booking-sync.service.js";
+import { startTemplateSyncLoop } from "./domains/chatwoot/chatwoot.templates.js";
 // v4: disabled — calendar 24h/1h reminders stay gated off (service kept dormant).
 // import { checkAndSendReminders } from "./domains/calendar/reminder.service.js";
 import { checkIntakeStalls } from "./domains/ai/intake-stall.service.js";
@@ -238,6 +239,10 @@ const server = app.listen(env.PORT, () => {
         logger.error({ err }, "leads-relevance: scheduled sweep failed"),
       );
     }, 5 * 60 * 1000);
+
+    // Chatwoot template sync — pushes approved Meta WhatsApp templates into the inbox
+    // composer. No-ops (single debug log) when META_WABA_ID/Chatwoot config is unset.
+    startTemplateSyncLoop();
   } else {
     logger.info("Skipping booking/reminder schedulers — BACKEND_URL not public");
   }

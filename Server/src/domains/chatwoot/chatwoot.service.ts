@@ -246,3 +246,22 @@ export async function mirrorOutbound(chatId: string, text: string): Promise<void
     logger.warn({ err, chatId }, "chatwoot mirrorOutbound failed — continuing");
   }
 }
+
+// Best-effort private note (e.g. template-send failure surfaced to the agent) posted
+// directly against a known conversation id — no contact/conversation resolution needed.
+export async function postPrivateNote(conversationId: number, content: string): Promise<void> {
+  const cfg = config();
+  if (!cfg) return;
+  try {
+    const res = await cwFetch(cfg, "POST", `/conversations/${conversationId}/messages`, {
+      content,
+      message_type: "outgoing",
+      private: true,
+    });
+    if (res.status >= 400) {
+      logger.warn({ conversationId, status: res.status }, "chatwoot postPrivateNote failed");
+    }
+  } catch (err) {
+    logger.warn({ err, conversationId }, "chatwoot postPrivateNote failed — continuing");
+  }
+}
