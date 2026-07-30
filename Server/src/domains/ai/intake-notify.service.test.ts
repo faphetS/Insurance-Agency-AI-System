@@ -39,10 +39,16 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("sendStaffLeadEmail — routing", () => {
-  it("travel → no email (dead silence), even in send mode", async () => {
+  it("travel in SEND mode → single email to Yafa, personalised greeting", async () => {
     envMock.STAFF_EMAIL_NOTIFY_MODE = "send";
-    await sendStaffLeadEmail("travel", { phone: FAKE_PHONE, waName: "יעל" });
-    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+    await sendStaffLeadEmail("travel", { phone: FAKE_PHONE, waName: "יעל כהן" });
+    expect(mockSendOwnerEmail).toHaveBeenCalledOnce();
+    const [to, subject, body] = mockSendOwnerEmail.mock.calls[0] as [string, string, string];
+    expect(to).toBe("yafa@shaked-ins.com");
+    expect(subject).toBe('פנייה חדשה מהבוט — ביטוח נסיעות לחו"ל');
+    expect(body).toContain("היי יפה,");
+    expect(body).toContain('סוג הביטוח: ביטוח נסיעות לחו"ל');
+    expect(body).toContain("תודה, דידי");
   });
 
   it("other → no email (dead silence), even in send mode", async () => {

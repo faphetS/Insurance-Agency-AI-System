@@ -15,9 +15,10 @@ const STAFF_ROUTES: Record<string, { to: string[]; firstNameHe: string | null }>
   vehicle: { to: ["merav@shaked-ins.com"], firstNameHe: "מירב" },
   home: { to: ["hodaya@shaked-ins.com"], firstNameHe: "הודיה" },
   business: { to: ["giti@shaked-ins.com"], firstNameHe: "גיטי" },
+  travel: { to: ["yafa@shaked-ins.com"], firstNameHe: "יפה" },
   life_health_pension: { to: LIFE_FINANCE_TEAM, firstNameHe: null },
   finance: { to: LIFE_FINANCE_TEAM, firstNameHe: null },
-  // travel: intentionally ABSENT — dead silence (owner decision); other removed from the menu, legacy value kept
+  // other removed from the menu; legacy value kept → no route, dead silence
 };
 
 export async function sendStaffLeadEmail(
