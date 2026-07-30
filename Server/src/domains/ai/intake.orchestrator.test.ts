@@ -28,6 +28,7 @@ const {
   mockBuildCallbackAlert,
   mockSendCallbackRequestEmail,
   mockNotifyOwner,
+  mockAssignConversationForInquiry,
 } = vi.hoisted(() => ({
   mockSendInteractiveButtons: vi.fn().mockResolvedValue({ idMessage: "btn-1" }),
   mockSendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "txt-1" }),
@@ -41,6 +42,7 @@ const {
   mockBuildCallbackAlert: vi.fn(() => "📞 CALLBACK ALERT"),
   mockSendCallbackRequestEmail: vi.fn().mockResolvedValue(undefined),
   mockNotifyOwner: vi.fn().mockResolvedValue(true),
+  mockAssignConversationForInquiry: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../config/supabase.js", () => ({ supabaseAdmin: { from: mockFromImpl } }));
@@ -70,6 +72,9 @@ vi.mock("./intake-notify.service.js", () => ({
   sendCallbackRequestEmail: mockSendCallbackRequestEmail,
 }));
 vi.mock("../operations/owner-notify.js", () => ({ notifyOwner: mockNotifyOwner }));
+vi.mock("../chatwoot/chatwoot.assign.js", () => ({
+  assignConversationForInquiry: mockAssignConversationForInquiry,
+}));
 
 import { handleIntake } from "./intake.orchestrator.js";
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
@@ -259,6 +264,8 @@ describe("menu slot — insurance buttons 1-6", () => {
     expect((updateInquiry["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ inquiry_type: "vehicle" });
     expect(mockSendStaffLeadEmail).toHaveBeenCalledOnce();
     expect(mockSendStaffLeadEmail.mock.calls[0]?.[0]).toBe("vehicle");
+    expect(mockAssignConversationForInquiry).toHaveBeenCalledOnce();
+    expect(mockAssignConversationForInquiry).toHaveBeenCalledWith("chat@c.us", "vehicle");
     expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("תודה על פנייתך! קיבלנו את הפרטים וניצור איתך קשר בהקדם.");
 
     expect((endUpdate["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
@@ -319,6 +326,8 @@ describe("menu slot — callback_didi (button 7)", () => {
     expect(mockNotifyOwner).toHaveBeenCalledOnce();
     expect(mockNotifyOwner.mock.calls[0]?.[0]).toBe("📞 CALLBACK ALERT");
     expect(mockSendStaffLeadEmail).not.toHaveBeenCalled();
+    expect(mockAssignConversationForInquiry).toHaveBeenCalledOnce();
+    expect(mockAssignConversationForInquiry).toHaveBeenCalledWith("chat@c.us", "callback");
     expect(mockSendCallbackRequestEmail).toHaveBeenCalledOnce();
     expect(mockSendCallbackRequestEmail.mock.calls[0]?.[0]).toMatchObject({
       phone: "972501234567",
@@ -354,6 +363,8 @@ describe("menu slot — meeting_didi (button 8)", () => {
     expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
     const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
     expect(buttons.map((b) => b.buttonId)).toEqual(["existing_client", "new_client"]);
+    expect(mockAssignConversationForInquiry).toHaveBeenCalledOnce();
+    expect(mockAssignConversationForInquiry).toHaveBeenCalledWith("chat@c.us", "meeting");
   });
 });
 

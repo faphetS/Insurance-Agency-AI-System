@@ -167,6 +167,25 @@ async function ensureIds(
   return ids;
 }
 
+// Read-only counterpart to ensureIds — never creates a contact/conversation,
+// just resolves the conversation id for callers (e.g. auto-assignment) that
+// must no-op when the mirror hasn't run for this chat yet.
+export async function resolveConversationId(chatId: string): Promise<number | null> {
+  const cached = idCache.get(chatId);
+  if (cached) return cached.conversationId;
+
+  const { supabaseAdmin } = await import("../../config/supabase.js");
+  const { data: row } = await supabaseAdmin
+    .from("conversations")
+    .select("chatwoot_conversation_id")
+    .eq("whatsapp_chat_id", chatId)
+    .maybeSingle();
+
+  const dbRow = row as { chatwoot_conversation_id: number | null } | null;
+  const conversationId = Number(dbRow?.chatwoot_conversation_id ?? 0);
+  return conversationId > 0 ? conversationId : null;
+}
+
 async function clearIds(chatId: string): Promise<void> {
   idCache.delete(chatId);
   const { supabaseAdmin } = await import("../../config/supabase.js");

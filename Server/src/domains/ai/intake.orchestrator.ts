@@ -24,6 +24,7 @@ import {
   sendCallbackRequestEmail,
 } from "./intake-notify.service.js";
 import { displayName } from "../whatsapp/whatsapp.util.js";
+import { assignConversationForInquiry } from "../chatwoot/chatwoot.assign.js";
 
 const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -283,6 +284,7 @@ async function handleMenu(
     void sendStaffLeadEmail(id, { phone, waName: displayName(fullName, phone) }).catch(
       (err: unknown) => logger.warn({ err, inquiryId: id }, "intake: staff lead email failed"),
     );
+    void assignConversationForInquiry(chatId, id);
     await sendTextPrompt(conversationId, chatId, "thanks_menu");
     await endFlow(conversationId, clientId, "new_lead");
     return;
@@ -291,6 +293,7 @@ async function handleMenu(
   // Button 7 — request a callback from Didi.
   if (id === "callback_didi") {
     await updateClient(clientId, { inquiry_type: "callback" });
+    void assignConversationForInquiry(chatId, "callback");
     const { phone, fullName } = await loadContact(clientId);
     try {
       await notifyOwner(buildCallbackAlert(phone, displayName(fullName, phone)));
@@ -310,6 +313,7 @@ async function handleMenu(
   // Button 8 — meeting request → existing/new sub-choice.
   if (id === "meeting_didi") {
     await updateClient(clientId, { inquiry_type: "meeting", client_type: null });
+    void assignConversationForInquiry(chatId, "meeting");
     await advanceTo(conversationId, chatId, clientId, "meeting_type");
     return;
   }
