@@ -169,10 +169,17 @@ async function ensureIds(
 
 // Read-only counterpart to ensureIds — never creates a contact/conversation,
 // just resolves the conversation id for callers (e.g. auto-assignment) that
-// must no-op when the mirror hasn't run for this chat yet.
-export async function resolveConversationId(chatId: string): Promise<number | null> {
-  const cached = idCache.get(chatId);
-  if (cached) return cached.conversationId;
+// must no-op when the mirror hasn't run for this chat yet. Pass skipCache=true
+// to bypass the warm cache and re-read the DB row directly (e.g. after a 404
+// indicates the cached conversation id is dead).
+export async function resolveConversationId(
+  chatId: string,
+  skipCache = false,
+): Promise<number | null> {
+  if (!skipCache) {
+    const cached = idCache.get(chatId);
+    if (cached) return cached.conversationId;
+  }
 
   const { supabaseAdmin } = await import("../../config/supabase.js");
   const { data: row } = await supabaseAdmin

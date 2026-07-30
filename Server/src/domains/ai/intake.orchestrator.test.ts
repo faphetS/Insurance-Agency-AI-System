@@ -78,6 +78,7 @@ vi.mock("../chatwoot/chatwoot.assign.js", () => ({
 }));
 
 import { handleIntake } from "./intake.orchestrator.js";
+import { env } from "../../config/env.js";
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
 
 function makeBuilder(result: unknown) {
@@ -658,6 +659,28 @@ describe("id_photo slot", () => {
     expect(sent).toContain("https://example.com/book-new");
     expect((convPause["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ bot_paused: true });
     expect(mockNotifyOwner).not.toHaveBeenCalled(); // silent completion
+  });
+
+  it("GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT unset → completion message falls back to GOOGLE_CALENDAR_BOOKING_URL", async () => {
+    const original = env.GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT;
+    (env as { GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT?: string }).GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT =
+      undefined;
+    try {
+      mockValidateIdPhoto.mockResolvedValue({ valid: true, hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: "משה לוי" });
+      mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
+      mockUploadLeadDocument.mockResolvedValue({ fileId: "d1", webViewLink: "https://drive/x" });
+
+      setupIdPhoto({ full_name: "old", phone: "972501234567" });
+
+      await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+      const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
+      expect(sent).toContain("https://example.com/book");
+      expect(sent).not.toContain("https://example.com/book-new");
+    } finally {
+      (env as { GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT?: string }).GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT =
+        original;
+    }
   });
 
   it("valid ID with no OCR name → Drive name falls back to phone digits", async () => {

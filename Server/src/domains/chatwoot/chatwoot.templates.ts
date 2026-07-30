@@ -85,16 +85,37 @@ export async function fetchApprovedTemplates(): Promise<unknown[] | null> {
   }
 }
 
+function parseHideList(raw: string | undefined): Set<string> {
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+}
+
 // Best-effort — never throws. Replaces the inbox's whole additional_attributes jsonb,
 // so message_templates and agent_reply_time_window are always sent together.
 export async function syncTemplatesToChatwoot(): Promise<boolean> {
-  const templates = await fetchApprovedTemplates();
-  if (!templates) return false;
+  const fetched = await fetchApprovedTemplates();
+  if (!fetched) return false;
+
+  const hideSet = parseHideList(env.CHATWOOT_TEMPLATE_HIDE);
+  const templates =
+    hideSet.size > 0
+      ? fetched.filter((t) => !hideSet.has((t as { name?: string })?.name ?? ""))
+      : fetched;
+
+  const hidden = fetched.length - templates.length;
+  if (hidden > 0) {
+    logger.info({ hidden }, `chatwoot templates: hiding ${hidden} templates from picker`);
+  }
 
   const base = env.CHATWOOT_BASE_URL;
   const account = env.CHATWOOT_ACCOUNT_ID;
   const inbox = env.CHATWOOT_INBOX_ID;
-  const token = env.CHATWOOT_ADMIN_TOKEN ?? env.CHATWOOT_BOT_TOKEN;
+  const token = env.CHATWOOT_ADMIN_TOKEN || env.CHATWOOT_BOT_TOKEN;
   if (!base || !account || !inbox || !token) {
     logger.warn("chatwoot templates: Chatwoot inbox config incomplete — skipping sync");
     return false;

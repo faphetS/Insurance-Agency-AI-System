@@ -81,6 +81,8 @@ const envSchema = z.object({
   // Administrator user token for the inbox PATCH that injects approved templates
   // (falls back to CHATWOOT_BOT_TOKEN — the mirror-bot user may lack admin rights).
   CHATWOOT_ADMIN_TOKEN: z.string().optional(),
+  // Comma-separated template names to hide from the Chatwoot picker (stay approved on Meta).
+  CHATWOOT_TEMPLATE_HIDE: z.string().optional(),
 
   // GreenAPI instance #2: scanning / operational bot (leave blank until provisioned)
   GREENAPI_SCAN_ID_INSTANCE: z.string().optional(),
@@ -104,7 +106,11 @@ const envSchema = z.object({
   GOOGLE_CALENDAR_BOOKING_URL: z.string().url(),
   // New-client booking link (3-day notice Calendly event type); existing clients
   // keep GOOGLE_CALENDAR_BOOKING_URL (1-day). Falls back to it when unset.
-  GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT: z.string().url().optional(),
+  // blank = unset (dotenv turns `KEY=` into "", which z.string().url() would otherwise reject).
+  GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
 
   // Google Workspace OAuth 2.0 (Sheets + Drive + Gmail — agency account)
   GOOGLE_WS_CLIENT_ID: z.string().optional(),

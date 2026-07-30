@@ -9,6 +9,7 @@ const envMock = {
   CHATWOOT_INBOX_ID: "2" as string | undefined,
   CHATWOOT_BOT_TOKEN: "bot-token" as string | undefined,
   CHATWOOT_ADMIN_TOKEN: undefined as string | undefined,
+  CHATWOOT_TEMPLATE_HIDE: undefined as string | undefined,
 };
 
 vi.mock("../../config/env.js", () => ({ get env() { return envMock; } }));
@@ -38,6 +39,7 @@ beforeEach(() => {
   envMock.CHATWOOT_INBOX_ID = "2";
   envMock.CHATWOOT_BOT_TOKEN = "bot-token";
   envMock.CHATWOOT_ADMIN_TOKEN = undefined;
+  envMock.CHATWOOT_TEMPLATE_HIDE = undefined;
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -221,6 +223,21 @@ describe("syncTemplatesToChatwoot", () => {
     expect((init.headers as Record<string, string>).api_access_token).toBe("admin-token");
   });
 
+  it("CHATWOOT_ADMIN_TOKEN='' (present but blank) → PATCH still sent using CHATWOOT_BOT_TOKEN", async () => {
+    envMock.CHATWOOT_ADMIN_TOKEN = "";
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: [{ name: "a", status: "APPROVED" }] }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await syncTemplatesToChatwoot();
+
+    expect(result).toBe(true);
+    const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).api_access_token).toBe("bot-token");
+  });
+
   it("returns false on a 401 PATCH without throwing", async () => {
     const mockFetch = vi
       .fn()
@@ -239,5 +256,97 @@ describe("syncTemplatesToChatwoot", () => {
 
     await expect(syncTemplatesToChatwoot()).resolves.toBe(false);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("hides templates named in CHATWOOT_TEMPLATE_HIDE from the PATCH body", async () => {
+    envMock.CHATWOOT_TEMPLATE_HIDE = "ragil,hello_1_copy";
+    const fetched = [
+      { name: "ragil", status: "APPROVED" },
+      { name: "hello_1_copy", status: "APPROVED" },
+      { name: "welcome", status: "APPROVED" },
+    ];
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: fetched }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await syncTemplatesToChatwoot();
+
+    expect(result).toBe(true);
+    const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.channel.additional_attributes.message_templates).toEqual([
+      { name: "welcome", status: "APPROVED" },
+    ]);
+    expect(vi.mocked(logger.info)).toHaveBeenCalledWith(
+      { hidden: 2 },
+      expect.stringContaining("2"),
+    );
+  });
+
+  it("trims whitespace in CHATWOOT_TEMPLATE_HIDE entries", async () => {
+    envMock.CHATWOOT_TEMPLATE_HIDE = " ragil , hello_1_copy ";
+    const fetched = [
+      { name: "ragil", status: "APPROVED" },
+      { name: "hello_1_copy", status: "APPROVED" },
+      { name: "welcome", status: "APPROVED" },
+    ];
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: fetched }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await syncTemplatesToChatwoot();
+
+    const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.channel.additional_attributes.message_templates).toEqual([
+      { name: "welcome", status: "APPROVED" },
+    ]);
+  });
+
+  it("syncs all templates unchanged when CHATWOOT_TEMPLATE_HIDE is unset/empty", async () => {
+    envMock.CHATWOOT_TEMPLATE_HIDE = undefined;
+    const fetched = [
+      { name: "ragil", status: "APPROVED" },
+      { name: "welcome", status: "APPROVED" },
+    ];
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: fetched }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await syncTemplatesToChatwoot();
+
+    const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.channel.additional_attributes.message_templates).toEqual(fetched);
+    expect(vi.mocked(logger.info)).toHaveBeenCalledWith(
+      { count: fetched.length },
+      expect.any(String),
+    );
+  });
+
+  it("is a harmless no-op when the hidden name isn't in the fetched list", async () => {
+    envMock.CHATWOOT_TEMPLATE_HIDE = "does_not_exist";
+    const fetched = [{ name: "welcome", status: "APPROVED" }];
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: fetched }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await syncTemplatesToChatwoot();
+
+    const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.channel.additional_attributes.message_templates).toEqual(fetched);
+    expect(vi.mocked(logger.info)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ hidden: expect.any(Number) }),
+      expect.anything(),
+    );
   });
 });

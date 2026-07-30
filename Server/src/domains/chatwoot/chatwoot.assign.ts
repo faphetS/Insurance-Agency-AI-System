@@ -35,7 +35,7 @@ export function resetAssignCache(): void {
 function config(): ChatwootConfig | null {
   const base = env.CHATWOOT_BASE_URL;
   const account = env.CHATWOOT_ACCOUNT_ID;
-  const token = env.CHATWOOT_ADMIN_TOKEN ?? env.CHATWOOT_BOT_TOKEN;
+  const token = env.CHATWOOT_ADMIN_TOKEN || env.CHATWOOT_BOT_TOKEN;
   if (!base || !account || !token) return null;
   return { apiBase: `${base}/api/v1/accounts/${account}`, token };
 }
@@ -71,7 +71,7 @@ async function fetchDirectory(
 async function getAgentsMap(cfg: ChatwootConfig, force = false): Promise<Map<string, number> | null> {
   if (agentsCache && !force) return agentsCache;
   const map = await fetchDirectory(cfg, "/agents", (r) =>
-    typeof r["email"] === "string" ? r["email"] : null,
+    typeof r["email"] === "string" ? r["email"].trim().toLowerCase() : null,
   );
   if (map) agentsCache = map;
   return map;
@@ -80,7 +80,7 @@ async function getAgentsMap(cfg: ChatwootConfig, force = false): Promise<Map<str
 async function getTeamsMap(cfg: ChatwootConfig, force = false): Promise<Map<string, number> | null> {
   if (teamsCache && !force) return teamsCache;
   const map = await fetchDirectory(cfg, "/teams", (r) =>
-    typeof r["name"] === "string" ? r["name"] : null,
+    typeof r["name"] === "string" ? r["name"].trim() : null,
   );
   if (map) teamsCache = map;
   return map;
@@ -91,11 +91,12 @@ async function resolveAssignmentBody(
   route: Route,
 ): Promise<Record<string, number> | null> {
   if (route.kind === "agent") {
+    const email = route.email.trim().toLowerCase();
     let map = await getAgentsMap(cfg);
-    let id = map?.get(route.email);
+    let id = map?.get(email);
     if (id === undefined) {
       map = await getAgentsMap(cfg, true);
-      id = map?.get(route.email);
+      id = map?.get(email);
     }
     if (id === undefined) {
       logger.warn({ email: route.email }, "chatwoot assign: agent not found in directory — skipping");
@@ -104,11 +105,12 @@ async function resolveAssignmentBody(
     return { assignee_id: id };
   }
 
+  const name = route.name.trim();
   let map = await getTeamsMap(cfg);
-  let id = map?.get(route.name);
+  let id = map?.get(name);
   if (id === undefined) {
     map = await getTeamsMap(cfg, true);
-    id = map?.get(route.name);
+    id = map?.get(name);
   }
   if (id === undefined) {
     logger.warn({ name: route.name }, "chatwoot assign: team not found in directory — skipping");
@@ -117,8 +119,20 @@ async function resolveAssignmentBody(
   return { team_id: id };
 }
 
-// Best-effort — never throws. Fires on every button tap ("latest wins": the
-// most recent tap's assignment POST always overwrites the previous one).
+function postAssignment(
+  cfg: ChatwootConfig,
+  conversationId: number,
+  body: Record<string, number>,
+): Promise<Response> {
+  return fetch(`${cfg.apiBase}/conversations/${conversationId}/assignments`, {
+    method: "POST",
+    headers: { api_access_token: cfg.token, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// Best-effort — never throws. Fires on every button tap; in practice the latest tap wins
+// (taps are seconds apart), but POST ordering is not strictly guaranteed under concurrency.
 export async function assignConversationForInquiry(chatId: string, buttonId: string): Promise<void> {
   try {
     const route = ROUTES[buttonId];
@@ -142,15 +156,35 @@ export async function assignConversationForInquiry(chatId: string, buttonId: str
     const body = await resolveAssignmentBody(cfg, route);
     if (!body) return;
 
-    const res = await fetch(`${cfg.apiBase}/conversations/${conversationId}/assignments`, {
-      method: "POST",
-      headers: { api_access_token: cfg.token, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let finalConversationId = conversationId;
+    let res = await postAssignment(cfg, finalConversationId, body);
+
+    if (res.status === 404) {
+      // Conversation deleted in Chatwoot — the mirror path rebuilds a new one on its own
+      // message; give it a moment, then re-resolve without the warm cache and retry once.
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const freshId = await resolveConversationId(chatId, true);
+      if (!freshId) {
+        logger.warn(
+          { chatId, buttonId, conversationId },
+          "chatwoot assign: conversation gone and could not be re-resolved — giving up",
+        );
+        return;
+      }
+      finalConversationId = freshId;
+      res = await postAssignment(cfg, finalConversationId, body);
+      if (res.status === 404) {
+        logger.warn(
+          { chatId, buttonId, conversationId: finalConversationId },
+          "chatwoot assign: conversation still not found after retry — giving up",
+        );
+        return;
+      }
+    }
 
     if (res.ok) {
       logger.info(
-        { chatId, buttonId, conversationId, ...body },
+        { chatId, buttonId, conversationId: finalConversationId, ...body },
         `chatwoot assign — routed ${buttonId} to ${route.kind === "agent" ? route.email : route.name}`,
       );
     } else {

@@ -205,4 +205,105 @@ describe("assignConversationForInquiry — routing + assignment POST", () => {
     await expect(assignConversationForInquiry(CHAT, "vehicle")).resolves.toBeUndefined();
     expect(vi.mocked(logger.warn)).toHaveBeenCalled();
   });
+
+  it("CHATWOOT_ADMIN_TOKEN='' (present but blank) → falls through to CHATWOOT_BOT_TOKEN", async () => {
+    envMock.CHATWOOT_ADMIN_TOKEN = "";
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, AGENTS))
+      .mockResolvedValueOnce(jsonResponse(200, {}));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await assignConversationForInquiry(CHAT, "vehicle");
+
+    const [, agentsInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect((agentsInit.headers as Record<string, string>)["api_access_token"]).toBe("bot-token");
+  });
+
+  it("directory entries with padded/uppercased emails still match the lowercase route", async () => {
+    const messyAgents = [{ id: 10, email: "  Merav@Shaked-Ins.com " }];
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, messyAgents))
+      .mockResolvedValueOnce(jsonResponse(200, {}));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await assignConversationForInquiry(CHAT, "vehicle");
+
+    const [, postInit] = mockFetch.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(postInit.body as string)).toEqual({ assignee_id: 10 });
+  });
+
+  it("team name with trailing space in the API response still matches", async () => {
+    const messyTeams = [{ id: 50, name: "מחלקת חיים, בריאות, פנסיה ופיננסים  " }];
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, messyTeams))
+      .mockResolvedValueOnce(jsonResponse(200, {}));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await assignConversationForInquiry(CHAT, "finance");
+
+    const [, postInit] = mockFetch.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(postInit.body as string)).toEqual({ team_id: 50 });
+  });
+
+  describe("assignment POST 404 (conversation deleted in Chatwoot)", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("re-resolves without cache and retries once → succeeds", async () => {
+      mockResolveConversationId.mockResolvedValueOnce(34).mockResolvedValueOnce(99);
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(200, AGENTS)) // agents directory
+        .mockResolvedValueOnce(jsonResponse(404, { error: "not found" })) // first assignment POST
+        .mockResolvedValueOnce(jsonResponse(200, {})); // retried assignment POST
+      vi.stubGlobal("fetch", mockFetch);
+
+      const promise = assignConversationForInquiry(CHAT, "vehicle");
+      await vi.advanceTimersByTimeAsync(5000);
+      await promise;
+
+      expect(mockResolveConversationId).toHaveBeenCalledTimes(2);
+      expect(mockResolveConversationId).toHaveBeenNthCalledWith(2, CHAT, true);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      const [postUrl] = mockFetch.mock.calls[2] as [string];
+      expect(postUrl).toBe("https://cw.test/api/v1/accounts/1/conversations/99/assignments");
+      expect(vi.mocked(logger.info)).toHaveBeenCalled();
+    });
+
+    it("re-resolve returns null → warns, no retry POST, no throw", async () => {
+      mockResolveConversationId.mockResolvedValueOnce(34).mockResolvedValueOnce(null);
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(200, AGENTS))
+        .mockResolvedValueOnce(jsonResponse(404, { error: "not found" }));
+      vi.stubGlobal("fetch", mockFetch);
+
+      const promise = assignConversationForInquiry(CHAT, "vehicle");
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(promise).resolves.toBeUndefined();
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(logger.warn)).toHaveBeenCalled();
+    });
+
+    it("retry also 404s → warns, no throw", async () => {
+      mockResolveConversationId.mockResolvedValueOnce(34).mockResolvedValueOnce(99);
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(200, AGENTS))
+        .mockResolvedValueOnce(jsonResponse(404, { error: "not found" }))
+        .mockResolvedValueOnce(jsonResponse(404, { error: "still not found" }));
+      vi.stubGlobal("fetch", mockFetch);
+
+      const promise = assignConversationForInquiry(CHAT, "vehicle");
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(promise).resolves.toBeUndefined();
+
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(logger.warn)).toHaveBeenCalled();
+    });
+  });
 });
