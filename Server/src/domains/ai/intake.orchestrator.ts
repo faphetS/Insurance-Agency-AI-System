@@ -510,7 +510,7 @@ async function handleIdPhoto(
   await sendText(
     conversationId,
     chatId,
-    `${INTAKE_PROMPTS.done_new.text}\n\n${env.GOOGLE_CALENDAR_BOOKING_URL}`,
+    `${INTAKE_PROMPTS.done_new.text}\n\n${env.GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT ?? env.GOOGLE_CALENDAR_BOOKING_URL}`,
   );
   await endFlow(conversationId, clientId, "meeting_scheduling");
 }

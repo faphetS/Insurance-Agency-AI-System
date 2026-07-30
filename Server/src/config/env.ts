@@ -102,6 +102,9 @@ const envSchema = z.object({
   GOOGLE_REDIRECT_URI: z.string().url(),
   GOOGLE_CALENDAR_ID: z.string().min(1),
   GOOGLE_CALENDAR_BOOKING_URL: z.string().url(),
+  // New-client booking link (3-day notice Calendly event type); existing clients
+  // keep GOOGLE_CALENDAR_BOOKING_URL (1-day). Falls back to it when unset.
+  GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT: z.string().url().optional(),
 
   // Google Workspace OAuth 2.0 (Sheets + Drive + Gmail — agency account)
   GOOGLE_WS_CLIENT_ID: z.string().optional(),

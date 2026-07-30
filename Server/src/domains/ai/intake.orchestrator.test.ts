@@ -49,6 +49,7 @@ vi.mock("../../config/supabase.js", () => ({ supabaseAdmin: { from: mockFromImpl
 vi.mock("../../config/env.js", () => ({
   env: {
     GOOGLE_CALENDAR_BOOKING_URL: "https://example.com/book",
+    GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT: "https://example.com/book-new",
     WELCOME_IMAGE_URL: "https://example.com/brand.jpeg",
     BACKEND_URL: "https://example.com",
     NODE_ENV: "test",
@@ -469,6 +470,7 @@ describe("email slot", () => {
     const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
     expect(sent).toContain("לקביעת פגישה");
     expect(sent).toContain("https://example.com/book");
+    expect(sent).not.toContain("book-new");
     expect((endUpdate["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
       intake_state: "completed",
       intake_current_slot: "done",
@@ -653,7 +655,7 @@ describe("id_photo slot", () => {
     });
     const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
     expect(sent).toContain("תודה רבה! קיבלנו את כל הפרטים");
-    expect(sent).toContain("https://example.com/book");
+    expect(sent).toContain("https://example.com/book-new");
     expect((convPause["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ bot_paused: true });
     expect(mockNotifyOwner).not.toHaveBeenCalled(); // silent completion
   });
