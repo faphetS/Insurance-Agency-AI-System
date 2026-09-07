@@ -236,3 +236,79 @@ describe("mirrorLeadToSheet — edge and error paths", () => {
     (env as Record<string, unknown>)["LEADS_MIRROR_ENABLED"] = true;
   });
 });
+
+// ---------------------------------------------------------------------------
+// Documents captured mid-intake: a lead who sent a file before choosing a menu
+// option still needs a row, since the sheet is the only place the link surfaces.
+// ---------------------------------------------------------------------------
+
+describe("mirrorLeadToSheet — photo-bearing lead with no menu choice", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpsertLeadRow.mockResolvedValue(true);
+  });
+
+  it("'general' + an id_photo_url → row IS written, col C blank, into the new-leads tab", async () => {
+    setupFromSequence([
+      makeBuilder({
+        data: clientRow({
+          inquiry_type: "general",
+          id_photo_url: "https://drive.google.com/file/d/cap/view",
+        }),
+        error: null,
+      }),
+    ]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
+    const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
+    expect(row[2]).toBe(""); // C inquiry — still unknown
+    expect(row[3]).toBe("https://drive.google.com/file/d/cap/view"); // D link
+    expect(tab).toBe("לידים חדשים");
+  });
+
+  it("null inquiry_type + an id_photo_url → row IS written", async () => {
+    setupFromSequence([
+      makeBuilder({
+        data: clientRow({ inquiry_type: null, id_photo_url: "https://drive.google.com/x" }),
+        error: null,
+      }),
+    ]);
+    await mirrorLeadToSheet(CLIENT_ID);
+    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
+  });
+
+  it("guards col C as set-once while the inquiry is unknown (returning lead keeps its label)", async () => {
+    setupFromSequence([
+      makeBuilder({
+        data: clientRow({ inquiry_type: "general", id_photo_url: "https://drive.google.com/x" }),
+        error: null,
+      }),
+    ]);
+    await mirrorLeadToSheet(CLIENT_ID);
+    const [, , opts] = mockUpsertLeadRow.mock.calls[0] as [string[], string, { setOnceColumns: number[] }];
+    expect(opts).toEqual({ setOnceColumns: [2, 5, 6] });
+  });
+
+  it("a known inquiry still overwrites col C (setOnce stays [5,6])", async () => {
+    setupFromSequence([
+      makeBuilder({
+        data: clientRow({ inquiry_type: "vehicle", id_photo_url: "https://drive.google.com/x" }),
+        error: null,
+      }),
+    ]);
+    await mirrorLeadToSheet(CLIENT_ID);
+    const [row, , opts] = mockUpsertLeadRow.mock.calls[0] as [string[], string, { setOnceColumns: number[] }];
+    expect(row[2]).toBe("ביטוח רכב");
+    expect(opts).toEqual({ setOnceColumns: [5, 6] });
+  });
+
+  it("still skips 'general' when there is no document yet", async () => {
+    setupFromSequence([
+      makeBuilder({ data: clientRow({ inquiry_type: "general", id_photo_url: null }), error: null }),
+    ]);
+    await mirrorLeadToSheet(CLIENT_ID);
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+});

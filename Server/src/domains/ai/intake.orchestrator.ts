@@ -13,8 +13,7 @@ import {
   type IntakeSlot,
 } from "./intake.prompts.js";
 import { validateIdPhoto } from "./ai.service.js";
-import { fetchRemoteFile } from "../../lib/storage.js";
-import { downloadMetaMedia } from "../whatsapp/meta/meta.media.js";
+import { resolveInboundMedia, captureIntakeDocument } from "./intake-media.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
 import { notifyOwner } from "../operations/owner-notify.js";
@@ -418,19 +417,6 @@ async function handleConsent(
   await sendTextPrompt(conversationId, chatId, "consent_reprompt");
 }
 
-/** Resolve inbound media bytes: GreenAPI delivers a fileUrl, Meta a mediaId. */
-async function resolveInboundMedia(payload: MessagePayload): Promise<Buffer | null> {
-  if (payload.kind === "text") return null;
-  if (payload.fileUrl) {
-    return fetchRemoteFile(payload.fileUrl);
-  }
-  if (payload.mediaId) {
-    const media = await downloadMetaMedia(payload.mediaId);
-    return media?.bytes ?? null;
-  }
-  return null;
-}
-
 async function handleIdPhoto(
   conversationId: string,
   chatId: string,
@@ -585,6 +571,15 @@ export async function handleIntake(
   // Operator escape hatch — skipped conversations fall through to the AI layer.
   if (state === "skipped") {
     return { consumed: false };
+  }
+
+  // Leads routinely send the ID (or any document) instead of tapping a button. Archive
+  // whatever arrives while intake is running — detached, so the reply is never delayed.
+  // The id_photo slot is excluded: handleIdPhoto uploads it itself, OCR-gated.
+  if ((payload.kind === "image" || payload.kind === "document") && slot !== "id_photo") {
+    void captureIntakeDocument(clientId, payload).catch((err: unknown) =>
+      logger.warn({ err, clientId }, "intake: document capture failed — continuing"),
+    );
   }
 
   // 2. Completed / terminal + unpaused (post-cooldown) → fresh menu restart.

@@ -29,6 +29,7 @@ const {
   mockSendCallbackRequestEmail,
   mockNotifyOwner,
   mockAssignConversationForInquiry,
+  mockCaptureIntakeDocument,
 } = vi.hoisted(() => ({
   mockSendInteractiveButtons: vi.fn().mockResolvedValue({ idMessage: "btn-1" }),
   mockSendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "txt-1" }),
@@ -43,6 +44,7 @@ const {
   mockSendCallbackRequestEmail: vi.fn().mockResolvedValue(undefined),
   mockNotifyOwner: vi.fn().mockResolvedValue(true),
   mockAssignConversationForInquiry: vi.fn().mockResolvedValue(undefined),
+  mockCaptureIntakeDocument: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../config/supabase.js", () => ({ supabaseAdmin: { from: mockFromImpl } }));
@@ -64,7 +66,16 @@ vi.mock("../whatsapp/whatsapp.service.js", () => ({
   sendFileByUrl: mockSendFileByUrl,
 }));
 vi.mock("./ai.service.js", () => ({ validateIdPhoto: mockValidateIdPhoto }));
-vi.mock("../../lib/storage.js", () => ({ fetchRemoteFile: mockFetchRemoteFile }));
+vi.mock("../../lib/storage.js", () => ({
+  fetchRemoteFile: mockFetchRemoteFile,
+  extFor: vi.fn(() => "jpg"),
+}));
+// Keep the real resolveInboundMedia (it drives the mocked fetchRemoteFile above); only the
+// Drive/sheet capture is stubbed, so these tests assert the wiring, not the upload itself.
+vi.mock("./intake-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./intake-media.js")>()),
+  captureIntakeDocument: mockCaptureIntakeDocument,
+}));
 vi.mock("../integrations/google/google.drive.js", () => ({ uploadLeadDocument: mockUploadLeadDocument }));
 vi.mock("../integrations/google/leads-mirror.service.js", () => ({ mirrorLeadToSheet: mockMirrorLeadToSheet }));
 vi.mock("./intake-notify.service.js", () => ({
@@ -128,6 +139,7 @@ beforeEach(() => {
   mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt" });
   mockSendFileByUrl.mockResolvedValue({ idMessage: "file" });
   mockMirrorLeadToSheet.mockResolvedValue(undefined);
+  mockCaptureIntakeDocument.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -833,5 +845,75 @@ describe("entry gates", () => {
     ]);
     const result = await handleIntake("conv", "client", "chat@c.us", textPayload("hi"));
     expect(result.consumed).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mid-intake document capture — leads send the ID instead of tapping a button
+// ---------------------------------------------------------------------------
+
+describe("mid-intake document capture", () => {
+  const docPayload = (): MessagePayload => ({
+    kind: "document",
+    mediaId: "meta-doc-1",
+    mimeType: "application/pdf",
+    fileName: "teudat.pdf",
+  });
+
+  it("image at the menu slot → captured for Drive + sheet", async () => {
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
+
+    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(mockCaptureIntakeDocument).toHaveBeenCalledOnce();
+    expect(mockCaptureIntakeDocument).toHaveBeenCalledWith("client", expect.objectContaining({ kind: "image" }));
+  });
+
+  it("document at the menu slot → captured too", async () => {
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
+
+    await handleIntake("conv", "client", "chat@c.us", docPayload());
+
+    expect(mockCaptureIntakeDocument).toHaveBeenCalledOnce();
+    expect(mockCaptureIntakeDocument).toHaveBeenCalledWith("client", expect.objectContaining({ kind: "document" }));
+  });
+
+  it("image at the id_photo slot → NOT captured (handleIdPhoto owns the OCR-gated upload)", async () => {
+    mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
+    mockValidateIdPhoto.mockResolvedValue({ valid: false, hasIdCard: true, hasAppendix: false });
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("id_photo")), makeBuilder({ data: null, error: null })]);
+
+    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(mockCaptureIntakeDocument).not.toHaveBeenCalled();
+  });
+
+  it("plain text is never captured", async () => {
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
+
+    await handleIntake("conv", "client", "chat@c.us", textPayload("שלום"));
+
+    expect(mockCaptureIntakeDocument).not.toHaveBeenCalled();
+  });
+
+  it("a capture failure never breaks the intake reply", async () => {
+    mockCaptureIntakeDocument.mockRejectedValue(new Error("drive down"));
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
+  });
+
+  it("a paused conversation captures nothing (human takeover)", async () => {
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder({ data: { bot_paused: true, bot_paused_until: null }, error: null }),
+    ]);
+
+    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(mockCaptureIntakeDocument).not.toHaveBeenCalled();
   });
 });

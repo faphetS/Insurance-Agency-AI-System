@@ -60,7 +60,10 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
     }
 
     const inquiry = c.inquiry_type;
-    if (!inquiry || inquiry === "general") {
+    // A lead who sent a document before picking a menu option still needs a row: the
+    // sheet is the only place staff can reach the Drive link (Chatwoot shows [תמונה] only).
+    const noMenuChoice = !inquiry || inquiry === "general";
+    if (noMenuChoice && !c.id_photo_url) {
       logger.debug({ clientId, inquiry }, "leads-mirror: no menu choice yet — skipping");
       return;
     }
@@ -88,8 +91,9 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
     ];
 
     // F = relevance is human-owned (dropdown) and must survive re-mirrors fired on every
-    // intake slot advance; G = creation date.
-    await upsertLeadRow(row, tab, { setOnceColumns: [5, 6] });
+    // intake slot advance; G = creation date. C joins them only while the inquiry is still
+    // unknown, so a returning lead (reset to "general") never blanks the label already there.
+    await upsertLeadRow(row, tab, { setOnceColumns: noMenuChoice ? [2, 5, 6] : [5, 6] });
   } catch (err) {
     logger.error({ err, clientId }, "leads-mirror: unexpected error");
   }
