@@ -133,7 +133,7 @@ describe("buildUnansweredEmail", () => {
     const { body } = buildUnansweredEmail([{ subject: "Policy renewal", from: "Name <a@b.com>" }]);
     expect(body).toBe(
       "היי דידי — אלו המיילים מ־24 השעות האחרונות שעדיין לא הגבת עליהם:\n\n" +
-        "• Policy renewal — מאת: Name\n\n" +
+        "1. Policy renewal — מאת: Name\n\n" +
         "(מייל אוטומטי מהמערכת)",
     );
   });
@@ -145,8 +145,8 @@ describe("buildUnansweredEmail", () => {
     ]);
     expect(body).toBe(
       "היי דידי — אלו המיילים מ־24 השעות האחרונות שעדיין לא הגבת עליהם:\n\n" +
-        "• Policy renewal — מאת: Name\n" +
-        "• Claim status — מאת: שרית עזרא\n\n" +
+        "1. Policy renewal — מאת: Name\n" +
+        "2. Claim status — מאת: שרית עזרא\n\n" +
         "(מייל אוטומטי מהמערכת)",
     );
   });

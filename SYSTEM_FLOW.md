@@ -438,7 +438,7 @@ Gmail.
 - **Notify:** empty list → nothing sent (watermark still advances). Otherwise ONE Hebrew email to
   **Didi himself** (`sendOwnerEmail(ownAddress …)`, address from `users.getProfile`): subject
   `מיילים שלא נענו מאתמול`, body `היי דידי — אלו המיילים מ־24 השעות האחרונות שעדיין לא הגבת עליהם:` +
-  `• <subject> — מאת: <sender>` bullets (oldest first, `(ללא נושא)` fallback) + `(מייל אוטומטי מהמערכת)`.
+  `<n>. <subject> — מאת: <sender>` numbered lines (oldest first, `(ללא נושא)` fallback) + `(מייל אוטומטי מהמערכת)`.
   Gated by **`STAFF_EMAIL_NOTIFY_MODE`** (`log` = pm2 dry-run, `send` = real self-email). Self-send from
   the own account can't be spam-flagged; 1 email/day max, no pacing needed.
 

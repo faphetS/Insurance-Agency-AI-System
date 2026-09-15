@@ -168,7 +168,8 @@ export async function sendOwnerEmail(
   const gmail = google.gmail({ version: "v1", auth: client });
 
   const encodedSubject = `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
-  const html = `<div dir="rtl" style="text-align:right; white-space:pre-line; font-family:Arial,sans-serif; font-size:14px;">${escapeHtml(bodyText)}</div>`;
+  // Outlook desktop ignores `white-space:pre-line`, so line breaks must be real <br> tags.
+  const html = `<div dir="rtl" style="text-align:right; font-family:Arial,sans-serif; font-size:14px;">${escapeHtml(bodyText).replace(/\n/g, "<br>")}</div>`;
   const encodedBody = Buffer.from(html, "utf8").toString("base64");
 
   const raw = [

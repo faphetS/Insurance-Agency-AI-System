@@ -61,13 +61,13 @@ function subjectOrPlaceholder(subject: string | null): string {
 export function buildUnansweredEmail(
   rows: { subject: string | null; from: string }[],
 ): { subject: string; body: string } {
-  const bullets = rows
-    .map((r) => `• ${subjectOrPlaceholder(r.subject)} — מאת: ${senderDisplayName(r.from)}`)
+  const lines = rows
+    .map((r, i) => `${i + 1}. ${subjectOrPlaceholder(r.subject)} — מאת: ${senderDisplayName(r.from)}`)
     .join("\n");
 
   const body =
     `היי דידי — אלו המיילים מ־24 השעות האחרונות שעדיין לא הגבת עליהם:\n\n` +
-    `${bullets}\n\n` +
+    `${lines}\n\n` +
     `(מייל אוטומטי מהמערכת)`;
 
   return { subject: "מיילים שלא נענו מאתמול", body };

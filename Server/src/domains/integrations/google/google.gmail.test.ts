@@ -50,7 +50,7 @@ beforeEach(() => {
 });
 
 describe("sendOwnerEmail — HTML RTL body", () => {
-  it("sends an HTML message with dir=rtl and the escaped, line-preserved body", async () => {
+  it("sends an HTML message with dir=rtl, escaped text and <br> line breaks", async () => {
     const bodyText = "שלום דידי,\nיש לך פגישה עם לקוח <VIP> & \"חשוב\" ב-15:00.";
     await sendOwnerEmail("owner@example.com", "עדכון", bodyText);
 
@@ -63,11 +63,21 @@ describe("sendOwnerEmail — HTML RTL body", () => {
     const html = Buffer.from(encodedBody!, "base64").toString("utf8");
 
     expect(html).toContain('dir="rtl"');
-    expect(html).toContain("white-space:pre-line");
+    expect(html).not.toContain("white-space:pre-line");
     expect(html).toContain(
-      "שלום דידי,\nיש לך פגישה עם לקוח &lt;VIP&gt; &amp; &quot;חשוב&quot; ב-15:00.",
+      "שלום דידי,<br>יש לך פגישה עם לקוח &lt;VIP&gt; &amp; &quot;חשוב&quot; ב-15:00.",
     );
+    expect(html).not.toContain("\n");
     expect(html).not.toContain("<VIP>");
+  });
+
+  it("renders a blank line as two <br> tags and never escapes the inserted tags", async () => {
+    await sendOwnerEmail("owner@example.com", "נושא", "שורה 1\n\nשורה 2\n<br>");
+
+    const [, encodedBody] = decodeRawArg().split("\r\n\r\n");
+    const html = Buffer.from(encodedBody!, "base64").toString("utf8");
+
+    expect(html).toContain("שורה 1<br><br>שורה 2<br>&lt;br&gt;");
   });
 
   it("returns the sent message id and preserves subject/log behaviour", async () => {
