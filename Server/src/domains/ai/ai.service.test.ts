@@ -61,83 +61,48 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("validateIdPhoto — idNumber extraction and normalization", () => {
-  it("accepts a 9-digit Israeli ת\"ז and returns it unchanged", async () => {
-    mockLLMResponse("123456789");
+  it("accepts a valid 9-digit Israeli ת\"ז", async () => {
+    mockLLMResponse("123456782");
     const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBe("123456789");
+    expect(result.idNumber).toBe("123456782");
     expect(result.valid).toBe(true);
   });
 
-  it("accepts an 8-digit Israeli ת\"ז", async () => {
-    mockLLMResponse("12345678");
+  it("left-pads a valid 8-digit ת\"ז to 9 digits", async () => {
+    mockLLMResponse("12345674");
     const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBe("12345678");
+    expect(result.idNumber).toBe("012345674");
   });
 
-  it("accepts an alphanumeric foreign ID with a dash (Philippine-style)", async () => {
+  it("strips spaces and dashes the model may insert between groups", async () => {
+    mockLLMResponse("12-345 6782");
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.idNumber).toBe("123456782");
+  });
+
+  it("accepts the number when the model returns it as a JSON number", async () => {
+    mockCreate.mockResolvedValue(
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: 123456782 })),
+    );
+    const result = await validateIdPhoto("https://example.com/id.jpg");
+    expect(result.idNumber).toBe("123456782");
+  });
+
+  it("rejects a foreign alphanumeric id → null (photo itself still valid)", async () => {
     mockLLMResponse("A01-2345678");
     const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBe("A01-2345678");
-  });
-
-  it("normalizes lowercase letters to uppercase", async () => {
-    mockLLMResponse("ab1-234567");
-    const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBe("AB1-234567");
-  });
-
-  it("strips surrounding whitespace before accepting", async () => {
-    mockLLMResponse("  123456789  ");
-    const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBe("123456789");
-  });
-
-  it("strips internal whitespace (e.g. model adds spaces between groups)", async () => {
-    mockLLMResponse("A01 2345678");
-    const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBe("A012345678");
-  });
-
-  it("rejects a value that is too short (< 5 chars) → null", async () => {
-    mockLLMResponse("A1B");
-    const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.idNumber).toBeNull();
+    expect(result.valid).toBe(true);
   });
 
-  it("rejects a value that is too long (> 30 chars) → null", async () => {
-    mockLLMResponse("A".repeat(15) + "1".repeat(16));
-    const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBeNull();
-  });
-
-  it("rejects an all-letters value with fewer than 2 digits → null", async () => {
-    mockLLMResponse("ABCDEFGH");
-    const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBeNull();
-  });
-
-  it("rejects a value with only 1 digit → null", async () => {
-    mockLLMResponse("ABCDEF1GH");
-    const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBeNull();
-  });
-
-  it("rejects a value containing disallowed characters (e.g. slash) → null", async () => {
-    mockLLMResponse("A01/2345678");
+  it("rejects a number that fails the ת\"ז check digit → null", async () => {
+    mockLLMResponse("123456780");
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.idNumber).toBeNull();
   });
 
   it("returns null when model returns null for idNumber", async () => {
     mockLLMResponse(null);
-    const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBeNull();
-  });
-
-  it("returns null when model returns non-string for idNumber", async () => {
-    mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: 123456789 })),
-    );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.idNumber).toBeNull();
   });
@@ -163,11 +128,11 @@ describe("validateIdPhoto — idNumber extraction and normalization", () => {
   it("strips markdown code fences from model response before parsing", async () => {
     mockCreate.mockResolvedValue(
       makeCompletion(
-        "```json\n" + JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789" }) + "\n```",
+        "```json\n" + JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456782" }) + "\n```",
       ),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
-    expect(result.idNumber).toBe("123456789");
+    expect(result.idNumber).toBe("123456782");
     expect(result.valid).toBe(true);
   });
 });
@@ -178,7 +143,7 @@ describe("validateIdPhoto — idNumber extraction and normalization", () => {
 
 describe("validateIdPhoto — hasIdCard / hasAppendix → valid derivation", () => {
   it("card-only (hasIdCard:true, hasAppendix:false) → invalid", async () => {
-    mockLLMResponse("123456789", { hasAppendix: false });
+    mockLLMResponse("123456782", { hasAppendix: false });
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.valid).toBe(false);
     expect(result.hasIdCard).toBe(true);
@@ -186,7 +151,7 @@ describe("validateIdPhoto — hasIdCard / hasAppendix → valid derivation", () 
   });
 
   it("appendix-only (hasIdCard:false, hasAppendix:true) → invalid", async () => {
-    mockLLMResponse("123456789", { hasIdCard: false });
+    mockLLMResponse("123456782", { hasIdCard: false });
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.valid).toBe(false);
     expect(result.hasIdCard).toBe(false);
@@ -194,7 +159,7 @@ describe("validateIdPhoto — hasIdCard / hasAppendix → valid derivation", () 
   });
 
   it("both card and appendix present → valid", async () => {
-    mockLLMResponse("123456789");
+    mockLLMResponse("123456782");
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.valid).toBe(true);
     expect(result.hasIdCard).toBe(true);
@@ -210,7 +175,7 @@ describe("validateIdPhoto — fullName extraction", () => {
   it("returns the printed full name (collapses whitespace, trims)", async () => {
     mockCreate.mockResolvedValue(
       makeCompletion(
-        JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: "  יעל   כהן  " }),
+        JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456782", fullName: "  יעל   כהן  " }),
       ),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
@@ -219,7 +184,7 @@ describe("validateIdPhoto — fullName extraction", () => {
 
   it("returns null when the model omits fullName", async () => {
     mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789" })),
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456782" })),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.fullName).toBeNull();
@@ -227,7 +192,7 @@ describe("validateIdPhoto — fullName extraction", () => {
 
   it("returns null when fullName is null", async () => {
     mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: null })),
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456782", fullName: null })),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.fullName).toBeNull();
@@ -235,7 +200,7 @@ describe("validateIdPhoto — fullName extraction", () => {
 
   it("returns null when fullName is under 2 chars", async () => {
     mockCreate.mockResolvedValue(
-      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: "א" })),
+      makeCompletion(JSON.stringify({ hasIdCard: true, hasAppendix: true, idNumber: "123456782", fullName: "א" })),
     );
     const result = await validateIdPhoto("https://example.com/id.jpg");
     expect(result.fullName).toBeNull();

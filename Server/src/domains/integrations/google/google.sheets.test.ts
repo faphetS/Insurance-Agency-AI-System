@@ -82,7 +82,7 @@ vi.mock("./google.auth.js", () => ({
 // ---------------------------------------------------------------------------
 // Import under test
 // ---------------------------------------------------------------------------
-import { upsertLeadRow, appendLeadRow } from "./google.sheets.js";
+import { upsertLeadRow, appendLeadRow, canonicalPhone } from "./google.sheets.js";
 
 // ---------------------------------------------------------------------------
 // Fake system_settings KV store — realistic cache-miss-then-cache-hit behaviour keyed
@@ -105,6 +105,12 @@ function createSettingsStore(): { fromImpl: (table: string) => Builder; store: M
     });
     builder["upsert"] = vi.fn((payload: { key: string; value: string }) => {
       store.set(payload.key, payload.value);
+      return builder;
+    });
+    builder["delete"] = vi.fn().mockReturnValue(builder);
+    builder["like"] = vi.fn((_col: string, pattern: string) => {
+      const prefix = pattern.replace(/%$/, "");
+      for (const k of [...store.keys()]) if (k.startsWith(prefix)) store.delete(k);
       return builder;
     });
     builder["maybeSingle"] = vi.fn(() =>
@@ -174,7 +180,7 @@ describe("upsertLeadRow — phone found → values.update", () => {
     mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["טלפון"], ["972501234567"]], [], []]));
     mockSheetsUpdate.mockResolvedValue({});
 
-    const row = ["972501234567", "יעל כהן", "yael@example.com", "ביטוח חיים", "", "", "123456789", ""];
+    const row = ["972501234567", "יעל כהן", "yael@example.com", "ביטוח חיים", "", "", "123456782", ""];
     const result = await upsertLeadRow(row);
 
     expect(result).toBe(true);
@@ -505,11 +511,18 @@ describe("row formatting on append", () => {
               };
             };
           },
+          {
+            repeatCell: {
+              range: { startColumnIndex: number; endColumnIndex: number };
+              cell: { userEnteredFormat: { wrapStrategy: string } };
+              fields: string;
+            };
+          },
         ];
       };
     };
     const requests = batchArg.requestBody.requests;
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(3);
 
     const repeatCell = requests[0].repeatCell;
     expect(repeatCell.range.sheetId).toBe(SHEETID_NEW);
@@ -535,6 +548,12 @@ describe("row formatting on append", () => {
     ]);
     expect(setDataValidation.rule.strict).toBe(true);
     expect(setDataValidation.rule.showCustomUi).toBe(true);
+
+    const wrap = requests[2].repeatCell;
+    expect(wrap.range.startColumnIndex).toBe(3);
+    expect(wrap.range.endColumnIndex).toBe(4);
+    expect(wrap.cell.userEnteredFormat.wrapStrategy).toBe("WRAP");
+    expect(wrap.fields).toBe("userEnteredFormat.wrapStrategy");
   });
 
   it("upsertLeadRow append branch also triggers the repeatCell batchUpdate", async () => {
@@ -562,7 +581,7 @@ describe("row formatting on append", () => {
       };
     };
     const requests = batchArg.requestBody.requests;
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(3);
     expect(requests[0].repeatCell.range.startRowIndex).toBe(4);
     expect(requests[0].repeatCell.range.endRowIndex).toBe(5);
     expect(requests[1].setDataValidation.range.startRowIndex).toBe(4);
@@ -613,5 +632,345 @@ describe("row formatting on append", () => {
     const result = await appendLeadRow(row);
 
     expect(result).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New row per inquiry — match the phone's NEWEST row (col G) against startedAt
+// ---------------------------------------------------------------------------
+
+describe("upsertLeadRow — startedAt (new row per inquiry)", () => {
+  const OLD = "01/09/2026 10:00";
+  const NEWER = "20/09/2026 12:30";
+
+  it("updates the phone's newest row when it was created after startedAt", async () => {
+    mockSheetsBatchGet.mockResolvedValue(
+      batchGetFixture([[["972501234567", "a", "", "", "", "", OLD], ["972501234567", "b", "", "", "", "", NEWER]], [], []]),
+    );
+    mockSheetsUpdate.mockResolvedValue({});
+
+    const row = ["972501234567", "Name", "ביטוח רכב", "", "", "", "20/09/2026 12:31"];
+    const result = await upsertLeadRow(row, TAB_NEW, { startedAt: new Date("2026-09-20T09:00:00Z") }); // 12:00 Israel
+
+    expect(result).toBe(true);
+    expect(mockSheetsAppend).not.toHaveBeenCalled();
+    const updateArg = mockSheetsUpdate.mock.calls[0]?.[0] as { range: string };
+    expect(updateArg.range).toBe(`'${TAB_NEW}'!A2:G2`);
+  });
+
+  it("appends a fresh row when the newest row predates startedAt", async () => {
+    mockSheetsBatchGet.mockResolvedValue(
+      batchGetFixture([[["972501234567", "a", "", "", "", "", OLD], ["972501234567", "b", "", "", "", "", NEWER]], [], []]),
+    );
+    mockSheetsAppend.mockResolvedValue({});
+
+    const row = ["972501234567", "Name", "ביטוח דירה", "", "", "", "04/10/2026 10:00"];
+    const result = await upsertLeadRow(row, TAB_NEW, { startedAt: new Date("2026-10-04T07:00:00Z") }); // 10:00 Israel
+
+    expect(result).toBe(true);
+    expect(mockSheetsUpdate).not.toHaveBeenCalled();
+    expect(mockSheetsAppend).toHaveBeenCalledOnce();
+  });
+
+  it("the newest row wins even when it sits in another tab", async () => {
+    mockSheetsBatchGet.mockResolvedValue(
+      batchGetFixture([[["972501234567", "a", "", "", "", "", OLD]], [], [["972501234567", "moved", "", "", "", "", NEWER]]]),
+    );
+    mockSheetsUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW, { startedAt: new Date("2026-09-20T09:00:00Z") });
+
+    const updateArg = mockSheetsUpdate.mock.calls[0]?.[0] as { range: string };
+    expect(updateArg.range).toBe(`'${TAB_IRRELEVANT}'!A1:G1`);
+  });
+
+  it("a row with no parsable creation date counts as old → append", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["972501234567", "typed by hand"]], [], []]));
+    mockSheetsAppend.mockResolvedValue({});
+
+    await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW, { startedAt: new Date("2026-10-04T07:00:00Z") });
+
+    expect(mockSheetsAppend).toHaveBeenCalledOnce();
+    expect(mockSheetsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows one minute of slack between the stamp and the row's creation date", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["972501234567", "a", "", "", "", "", "04/10/2026 09:59"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW, { startedAt: new Date("2026-10-04T07:00:20Z") }); // 10:00:20 Israel
+
+    expect(mockSheetsUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("without startedAt keeps the legacy behaviour: newest row is updated", async () => {
+    mockSheetsBatchGet.mockResolvedValue(
+      batchGetFixture([[["972501234567", "a", "", "", "", "", OLD], ["972501234567", "b", "", "", "", "", NEWER]], [], []]),
+    );
+    mockSheetsUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW);
+
+    const updateArg = mockSheetsUpdate.mock.calls[0]?.[0] as { range: string };
+    expect(updateArg.range).toBe(`'${TAB_NEW}'!A2:G2`);
+  });
+});
+
+describe("upsertLeadRow — phone normalisation (F2)", () => {
+  it("a hand-typed 05x number matches the 972 lead", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["054-123-4567"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["972541234567", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(mockSheetsUpdate).toHaveBeenCalledOnce();
+    expect(mockSheetsAppend).not.toHaveBeenCalled();
+  });
+
+  it("a 9-digit landline typed with a leading 0 also matches", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["02-6244791"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["97226244791", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(mockSheetsUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("a 05x typed into a default-format cell (stored as a number, leading 0 gone) still matches", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["541234567"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["972541234567", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(mockSheetsUpdate).toHaveBeenCalledOnce();
+    expect(mockSheetsAppend).not.toHaveBeenCalled();
+  });
+
+  it("an 8-digit landline that lost its leading 0 the same way also matches", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["26244791"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["97226244791", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(mockSheetsUpdate).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["972541234567", "972541234567"],
+    ["+972-54-123-4567", "972541234567"],
+    ["054-123-4567", "972541234567"],
+    ["541234567", "972541234567"],
+    ["02-6244791", "97226244791"],
+    ["26244791", "97226244791"],
+    ["14155551234", "14155551234"], // a foreign number keeps its own country code
+    ["4155551234", "4155551234"], // 10 digits without a 0 is not an Israeli national number
+    ["1234567", "1234567"],
+    ["טלפון", ""],
+  ])("canonicalPhone(%j) → %j", (raw, expected) => {
+    expect(canonicalPhone(raw)).toBe(expected);
+  });
+});
+
+describe("upsertLeadRow — column D wrap on update", () => {
+  it("sets WRAP on D when the written cell has several lines", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["972501234567"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+    mockSheetsBatchUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["972501234567", "n", "", "https://a\nhttps://b", "", "", ""], TAB_NEW);
+
+    expect(mockSheetsBatchUpdate).toHaveBeenCalledOnce();
+    const arg = mockSheetsBatchUpdate.mock.calls[0]?.[0] as {
+      requestBody: { requests: [{ repeatCell: { range: { sheetId: number; startRowIndex: number; endRowIndex: number; startColumnIndex: number; endColumnIndex: number }; cell: { userEnteredFormat: { wrapStrategy: string } } } }] };
+    };
+    const req = arg.requestBody.requests[0].repeatCell;
+    expect(req.range).toEqual({ sheetId: SHEETID_NEW, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 3, endColumnIndex: 4 });
+    expect(req.cell.userEnteredFormat.wrapStrategy).toBe("WRAP");
+  });
+
+  it("does not touch formatting when D is a single line", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["972501234567"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+
+    await upsertLeadRow(["972501234567", "n", "", "https://a", "", "", ""], TAB_NEW);
+
+    expect(mockSheetsBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  it("a wrap failure never fails the update", async () => {
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["972501234567"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+    mockSheetsBatchUpdate.mockRejectedValue(new Error("format API down"));
+
+    const result = await upsertLeadRow(["972501234567", "n", "", "https://a\nhttps://b", "", "", ""], TAB_NEW);
+
+    expect(result).toBe(true);
+  });
+});
+
+describe("upsertLeadRow — stale tab cache self-heals (F1)", () => {
+  it("a 400 drops every leads_sheet_* cache key, re-resolves and retries once", async () => {
+    mockSheetsBatchGet
+      .mockRejectedValueOnce(Object.assign(new Error("Unable to parse range: 'לידים חדשים '!A:G"), { code: 400 }))
+      .mockResolvedValueOnce(batchGetFixture([[], [], []]));
+    mockSheetsAppend.mockResolvedValue({});
+
+    const result = await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(result).toBe(true);
+    expect(mockSpreadsheetsGet).toHaveBeenCalled(); // cache miss after invalidation → live resolution
+    expect(mockSheetsBatchGet).toHaveBeenCalledTimes(2);
+    expect(mockSheetsAppend).toHaveBeenCalledOnce();
+    expect(store.get(`leads_sheet_tab_resolved:${TAB_NEW}`)).toBe(TAB_NEW); // re-cached
+  });
+
+  it("a second 400 is not retried again", async () => {
+    mockSheetsBatchGet.mockRejectedValue(Object.assign(new Error("bad range"), { code: 400 }));
+
+    const result = await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(result).toBe(false);
+    expect(mockSheetsBatchGet).toHaveBeenCalledTimes(2);
+  });
+
+  it("a 500 is not a cache problem → no retry", async () => {
+    mockSheetsBatchGet.mockRejectedValue(Object.assign(new Error("backend"), { code: 500 }));
+
+    const result = await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(result).toBe(false);
+    expect(mockSheetsBatchGet).toHaveBeenCalledOnce();
+    expect(store.get(`leads_sheet_tab_resolved:${TAB_NEW}`)).toBe(TAB_NEW); // untouched
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A recreated tab (same title, new sheetId) leaves a stale cached gid that only the
+// gid-based format/wrap calls ever hit — their 400 must drop the cache as well.
+// ---------------------------------------------------------------------------
+
+describe("upsertLeadRow — stale cached sheet gid self-heals (F1, recreated tab)", () => {
+  const STALE_GID = "999";
+  const noGridError = () =>
+    Object.assign(new Error(`Invalid requests[0].repeatCell: No grid with id: ${STALE_GID}`), { code: 400 });
+
+  it("append: a 400 from the row repaint drops the stale gid; the next append repaints with the live gid", async () => {
+    store.set(`leads_sheet_gid:${TAB_NEW}`, STALE_GID);
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[], [], []]));
+    mockSheetsAppend.mockResolvedValue({ data: { updates: { updatedRange: `'${TAB_NEW}'!A5:G5` } } });
+    mockSheetsBatchUpdate.mockRejectedValueOnce(noGridError()).mockResolvedValue({});
+
+    const first = await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(first).toBe(true);
+    expect(mockSheetsAppend).toHaveBeenCalledOnce(); // a format failure never re-appends
+    expect(store.has(`leads_sheet_gid:${TAB_NEW}`)).toBe(false);
+
+    await upsertLeadRow(["972509999999", "n", "", "", "", "", ""], TAB_NEW);
+
+    const second = mockSheetsBatchUpdate.mock.calls[1]?.[0] as {
+      requestBody: { requests: [{ repeatCell: { range: { sheetId: number } } }] };
+    };
+    expect(second.requestBody.requests[0].repeatCell.range.sheetId).toBe(SHEETID_NEW);
+    expect(store.get(`leads_sheet_gid:${TAB_NEW}`)).toBe(String(SHEETID_NEW));
+  });
+
+  it("update: a 400 from the column-D wrap drops the stale gid; the update stands", async () => {
+    store.set(`leads_sheet_gid:${TAB_NEW}`, STALE_GID);
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["972501234567"]], [], []]));
+    mockSheetsUpdate.mockResolvedValue({});
+    mockSheetsBatchUpdate.mockRejectedValue(noGridError());
+
+    const result = await upsertLeadRow(["972501234567", "n", "", "https://a\nhttps://b", "", "", ""], TAB_NEW);
+
+    expect(result).toBe(true);
+    expect(mockSheetsUpdate).toHaveBeenCalledOnce();
+    expect(store.has(`leads_sheet_gid:${TAB_NEW}`)).toBe(false);
+  });
+
+  it("a non-range formatting failure (500) leaves the cache alone", async () => {
+    store.set(`leads_sheet_gid:${TAB_NEW}`, String(SHEETID_NEW));
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[], [], []]));
+    mockSheetsAppend.mockResolvedValue({ data: { updates: { updatedRange: `'${TAB_NEW}'!A5:G5` } } });
+    mockSheetsBatchUpdate.mockRejectedValue(Object.assign(new Error("backend"), { code: 500 }));
+
+    const result = await upsertLeadRow(["972501234567", "n", "", "", "", "", ""], TAB_NEW);
+
+    expect(result).toBe(true);
+    expect(store.get(`leads_sheet_gid:${TAB_NEW}`)).toBe(String(SHEETID_NEW));
+    expect(store.get(`leads_sheet_tab_resolved:${TAB_NEW}`)).toBe(TAB_NEW);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure logs — a GaxiosError carries its request body (the row) in config and
+// response.config, so only status + message may reach the logger.
+// ---------------------------------------------------------------------------
+
+describe("Sheets write failure logs carry no row data (ID number, name)", () => {
+  const ID_NUMBER = "314159265";
+  const NAME = "ישראל ישראלי";
+  const row = ["972501234567", NAME, "ביטוח רכב", "https://a", ID_NUMBER, "", "04/10/2026 10:00"];
+
+  function gaxiosError(message: string, status: number) {
+    const config = { method: "PUT", data: { values: [row] }, body: JSON.stringify({ values: [row] }) };
+    return Object.assign(new Error(message), {
+      code: status,
+      status,
+      config,
+      response: { status, config, data: { error: { code: status, message } } },
+    });
+  }
+
+  async function loggedText(): Promise<string> {
+    const { logger } = await import("../../../config/logger.js");
+    return JSON.stringify([...vi.mocked(logger.warn).mock.calls, ...vi.mocked(logger.error).mock.calls]);
+  }
+
+  it("a 400 on update: the retry warn and the final error log status + message only", async () => {
+    const message = `Unable to parse range: '${TAB_NEW}'!A1:G1`;
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[["972501234567"]], [], []]));
+    mockSheetsUpdate.mockRejectedValue(gaxiosError(message, 400));
+
+    const result = await upsertLeadRow(row, TAB_NEW);
+
+    expect(result).toBe(false);
+    const { logger } = await import("../../../config/logger.js");
+    expect(logger.warn).toHaveBeenCalledWith({ err: { status: 400, message } }, expect.stringContaining("retrying once"));
+    expect(logger.error).toHaveBeenCalledWith({ err: { status: 400, message } }, "google.sheets: upsertLeadRow failed");
+    const logged = await loggedText();
+    expect(logged).not.toContain(ID_NUMBER);
+    expect(logged).not.toContain(NAME);
+  });
+
+  it("a 503 on append: the error logs status + message only", async () => {
+    const message = "The service is currently unavailable.";
+    mockSheetsBatchGet.mockResolvedValue(batchGetFixture([[], [], []]));
+    mockSheetsAppend.mockRejectedValue(gaxiosError(message, 503));
+
+    const result = await upsertLeadRow(row, TAB_NEW);
+
+    expect(result).toBe(false);
+    const { logger } = await import("../../../config/logger.js");
+    expect(logger.error).toHaveBeenCalledWith({ err: { status: 503, message } }, "google.sheets: upsertLeadRow failed");
+    const logged = await loggedText();
+    expect(logged).not.toContain(ID_NUMBER);
+    expect(logged).not.toContain(NAME);
+  });
+
+  // The relevance mover sends whole A–G rows (E = ID number) through appendLeadRow.
+  it("a 503 on appendLeadRow: the error logs status + message only", async () => {
+    const message = "The service is currently unavailable.";
+    mockSheetsAppend.mockRejectedValue(gaxiosError(message, 503));
+
+    const result = await appendLeadRow(row, TAB_IRRELEVANT);
+
+    expect(result).toBe(false);
+    expect(mockSheetsAppend).toHaveBeenCalledOnce();
+    const { logger } = await import("../../../config/logger.js");
+    expect(logger.error).toHaveBeenCalledWith({ err: { status: 503, message } }, "google.sheets: appendLeadRow failed");
+    const logged = await loggedText();
+    expect(logged).not.toContain(ID_NUMBER);
+    expect(logged).not.toContain(NAME);
   });
 });

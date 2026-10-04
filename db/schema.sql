@@ -123,7 +123,11 @@ CREATE TABLE public.clients (
 
   -- Free-text issue description collected from existing clients before the
   -- representative/meeting choice. Stored in column I of the לקוח קיים sheet.
-  issue_description    text
+  issue_description    text,
+
+  -- Start of the lead's current intake run (creation + every post-cooldown restart).
+  -- The CRM-sheet mirror appends a NEW row when the lead's newest row predates it.
+  intake_started_at    timestamptz
 );
 
 -- ============================================================

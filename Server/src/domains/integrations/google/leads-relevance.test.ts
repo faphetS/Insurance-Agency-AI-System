@@ -7,6 +7,7 @@ const {
   mockResolveLeadsTabTitle,
   mockResolveLeadsSheetId,
   mockAppendLeadRow,
+  mockInvalidateLeadsSheetCache,
   mockGetAuthenticatedClient,
   mockSheetsBatchUpdate,
   mockSheetsBatchGet,
@@ -14,6 +15,7 @@ const {
   mockResolveLeadsTabTitle: vi.fn(),
   mockResolveLeadsSheetId: vi.fn(),
   mockAppendLeadRow: vi.fn(),
+  mockInvalidateLeadsSheetCache: vi.fn(),
   mockGetAuthenticatedClient: vi.fn(),
   mockSheetsBatchUpdate: vi.fn(),
   mockSheetsBatchGet: vi.fn(),
@@ -42,7 +44,8 @@ vi.mock("./google.auth.js", () => ({
 }));
 
 // Use the REAL relevanceValidationRule (so this test stays honest about the rule the two
-// call sites must share); mock the rest as before.
+// call sites must share) and the REAL isRangeError (the 400/404 classification under test);
+// mock the rest as before.
 vi.mock("./google.sheets.js", async () => {
   const actual = await vi.importActual<typeof import("./google.sheets.js")>("./google.sheets.js");
   return {
@@ -51,6 +54,8 @@ vi.mock("./google.sheets.js", async () => {
     appendLeadRow: mockAppendLeadRow,
     quoteA1Title: (title: string) => `'${title.replace(/'/g, "''")}'`,
     relevanceValidationRule: actual.relevanceValidationRule,
+    isRangeError: actual.isRangeError,
+    invalidateLeadsSheetCache: mockInvalidateLeadsSheetCache,
   };
 });
 
@@ -103,6 +108,24 @@ function setupResolvedTabs(): void {
 
 function emptyBatchGet() {
   return { data: { valueRanges: [{ values: [] }, { values: [] }, { values: [] }] } };
+}
+
+// What Sheets answers when a cached sheetId belongs to a tab that was deleted and
+// recreated under the same title (the title still resolves; the gid does not).
+function noGridError(request: "deleteDimension" | "setDataValidation") {
+  return Object.assign(new Error(`Invalid requests[0].${request}: No grid with id: 0`), { code: 400 });
+}
+
+function oneMoveNewToExisting() {
+  return {
+    data: {
+      valueRanges: [
+        { values: [["972501234567", "Name", "inquiry", "", "", TAB_EXISTING_TRIMMED, "10/07/2026 09:00"]] },
+        { values: [] },
+        { values: [] },
+      ],
+    },
+  };
 }
 
 beforeEach(() => {
@@ -190,6 +213,26 @@ describe("applyRelevanceDropdowns", () => {
 
     expect(result).toEqual({ tabsApplied: 0 });
     expect(mockSheetsBatchUpdate).not.toHaveBeenCalled();
+  });
+
+  it("a 400 (stale cached sheetId of a recreated tab) drops the leads_sheet_* cache", async () => {
+    setupResolvedTabs();
+    mockSheetsBatchUpdate.mockRejectedValue(noGridError("setDataValidation"));
+
+    const result = await applyRelevanceDropdowns();
+
+    expect(result).toEqual({ tabsApplied: 0 });
+    expect(mockInvalidateLeadsSheetCache).toHaveBeenCalledOnce();
+  });
+
+  it("a non-range failure (500) leaves the cache alone", async () => {
+    setupResolvedTabs();
+    mockSheetsBatchUpdate.mockRejectedValue(Object.assign(new Error("backend"), { code: 500 }));
+
+    const result = await applyRelevanceDropdowns();
+
+    expect(result).toEqual({ tabsApplied: 0 });
+    expect(mockInvalidateLeadsSheetCache).not.toHaveBeenCalled();
   });
 });
 
@@ -327,6 +370,30 @@ describe("sweepRelevanceMoves", () => {
     };
     expect(batchArg.requestBody.requests).toHaveLength(1);
     expect(batchArg.requestBody.requests[0].deleteDimension.range.startIndex).toBe(2);
+  });
+
+  it("a 400 on the source-row delete (stale cached sheetId) drops the leads_sheet_* cache for the next tick", async () => {
+    setupResolvedTabs();
+    mockSheetsBatchGet.mockResolvedValue(oneMoveNewToExisting());
+    mockAppendLeadRow.mockResolvedValue(true);
+    mockSheetsBatchUpdate.mockRejectedValue(noGridError("deleteDimension"));
+
+    const result = await sweepRelevanceMoves();
+
+    expect(result).toEqual({ scanned: 1, moved: 0, ignoredEmpty: 0, ignoredInvalid: 0, errors: 1 });
+    expect(mockInvalidateLeadsSheetCache).toHaveBeenCalledOnce();
+  });
+
+  it("a non-range delete failure (500) leaves the cache alone", async () => {
+    setupResolvedTabs();
+    mockSheetsBatchGet.mockResolvedValue(oneMoveNewToExisting());
+    mockAppendLeadRow.mockResolvedValue(true);
+    mockSheetsBatchUpdate.mockRejectedValue(Object.assign(new Error("backend"), { code: 500 }));
+
+    const result = await sweepRelevanceMoves();
+
+    expect(result).toEqual({ scanned: 1, moved: 0, ignoredEmpty: 0, ignoredInvalid: 0, errors: 1 });
+    expect(mockInvalidateLeadsSheetCache).not.toHaveBeenCalled();
   });
 
   it("resolves with errors > 0 when batchGet rejects, never throws", async () => {

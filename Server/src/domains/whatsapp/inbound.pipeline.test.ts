@@ -4,10 +4,12 @@ const {
   mockHandleIntake,
   mockIsStaffChat,
   mockFromImpl,
+  mockCaptureLeadFile,
 } = vi.hoisted(() => ({
   mockHandleIntake: vi.fn().mockResolvedValue({ consumed: false }),
   mockIsStaffChat: vi.fn().mockResolvedValue(null),
   mockFromImpl: vi.fn(),
+  mockCaptureLeadFile: vi.fn().mockResolvedValue(undefined),
 }));
 
 const envMock = {
@@ -29,6 +31,8 @@ vi.mock("../../config/supabase.js", () => ({
 vi.mock("../ai/intake.orchestrator.js", () => ({
   handleIntake: mockHandleIntake,
 }));
+
+vi.mock("../ai/intake-media.js", () => ({ captureLeadFile: mockCaptureLeadFile }));
 
 vi.mock("./whatsapp.util.js", async () => {
   const actual = await vi.importActual<typeof import("./whatsapp.util.js")>("./whatsapp.util.js");
@@ -90,6 +94,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockIsStaffChat.mockResolvedValue(null);
   mockHandleIntake.mockResolvedValue({ consumed: false });
+  mockCaptureLeadFile.mockResolvedValue(undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -318,5 +323,148 @@ describe("processInboundCustomerMessage — client link/create", () => {
     await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, textPayload("hi")));
 
     expect(mockHandleIntake).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unsupported message types — stored with their placeholder label
+// ---------------------------------------------------------------------------
+
+describe("processInboundCustomerMessage — kind:other", () => {
+  it("stores the placeholder label as the message body and still runs intake", async () => {
+    const msgBuilder = makeBuilder({ data: { id: "msg1" }, error: null });
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      msgBuilder,
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    const payload: MessagePayload = { kind: "other", subtype: "audio", label: "[הודעה קולית]" };
+    await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, payload, "meta"));
+
+    const inserted = (msgBuilder["insert"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { body: string };
+    expect(inserted.body).toBe("[הודעה קולית]");
+    expect(mockHandleIntake).toHaveBeenCalledWith("conv1", "client-1", LEAD_CHAT_ID, payload);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// File capture runs for every linked lead, independent of what the bot does
+// ---------------------------------------------------------------------------
+
+describe("processInboundCustomerMessage — file capture", () => {
+  const imagePayload = (): MessagePayload => ({ kind: "image", mediaId: "m1", mimeType: "image/jpeg" });
+
+  it("an image from a linked client is handed to captureLeadFile once intake has had its turn", async () => {
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, imagePayload(), "meta"));
+
+    expect(mockCaptureLeadFile).toHaveBeenCalledWith("client-1", expect.objectContaining({ kind: "image" }));
+    expect(mockHandleIntake).toHaveBeenCalledOnce();
+    // The id_photo step's answer decides, so it must come first.
+    expect(mockHandleIntake.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockCaptureLeadFile.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("an image the id_photo step took (fileHandled) is not archived a second time", async () => {
+    mockHandleIntake.mockResolvedValue({ consumed: true, fileHandled: true });
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, imagePayload(), "meta"));
+
+    expect(mockHandleIntake).toHaveBeenCalledOnce();
+    expect(mockCaptureLeadFile).not.toHaveBeenCalled();
+  });
+
+  it("a document intake answered without taking it (a PDF at the id_photo step) is archived", async () => {
+    mockHandleIntake.mockResolvedValue({ consumed: true, fileHandled: false });
+    const pdf: MessagePayload = { kind: "document", mediaId: "m2", mimeType: "application/pdf", fileName: "id.pdf" };
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, pdf, "meta"));
+
+    expect(mockCaptureLeadFile).toHaveBeenCalledWith("client-1", pdf);
+  });
+
+  it("a file is still archived when intake throws", async () => {
+    mockHandleIntake.mockRejectedValue(new Error("intake blew up"));
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    await expect(processInboundCustomerMessage(inbound(LEAD_CHAT_ID, imagePayload(), "meta"))).resolves.toBeUndefined();
+
+    expect(mockCaptureLeadFile).toHaveBeenCalledOnce();
+  });
+
+  it("the capture still runs when intake is not consumed (paused / disabled bot)", async () => {
+    mockHandleIntake.mockResolvedValue({ consumed: false });
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, imagePayload(), "meta"));
+
+    expect(mockCaptureLeadFile).toHaveBeenCalledOnce();
+  });
+
+  it("a capture failure never breaks the pipeline", async () => {
+    mockCaptureLeadFile.mockRejectedValue(new Error("drive down"));
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    await expect(processInboundCustomerMessage(inbound(LEAD_CHAT_ID, imagePayload(), "meta"))).resolves.toBeUndefined();
+    expect(mockHandleIntake).toHaveBeenCalledOnce();
+  });
+
+  it("text messages are never captured", async () => {
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, textPayload("שלום"), "meta"));
+
+    expect(mockCaptureLeadFile).not.toHaveBeenCalled();
+  });
+
+  it("a brand-new client is created with intake_started_at stamped", async () => {
+    const clientInsert = makeBuilder({ data: { id: "client-new" }, error: null });
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      makeBuilder({ data: { id: "msg1" }, error: null }),
+      makeBuilder({ data: { id: "conv1", client_id: null }, error: null }),
+      makeBuilder({ data: null, error: null }), // no existing client by phone
+      makeBuilder({ data: { id: "staff-1" }, error: null }),
+      clientInsert,
+      makeBuilder({ data: null, error: null }), // link update
+    ]);
+
+    await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, textPayload("שלום"), "meta"));
+
+    const inserted = (clientInsert["insert"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { intake_started_at: string };
+    expect(inserted.intake_started_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });

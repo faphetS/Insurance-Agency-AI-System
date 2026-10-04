@@ -113,7 +113,11 @@ export type MessagePayload =
       mimeType?: string;
       fileName?: string;
       caption?: string;
-    };
+    }
+  // Message types the bot cannot act on (voice notes, video, stickers, locations,
+  // contact cards, anything Meta adds later). Carried through so the lead still
+  // gets a reply, staff still see a placeholder, and the volume can be measured.
+  | { kind: "other"; subtype: string; label: string };
 
 /**
  * Extract a normalised MessagePayload from a validated inbound GreenAPI message.

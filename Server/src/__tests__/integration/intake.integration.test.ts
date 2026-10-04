@@ -288,7 +288,7 @@ describe("intake v4 — meeting → new client → consent → ID", () => {
       valid: true,
       hasIdCard: true,
       hasAppendix: true,
-      idNumber: "123456789",
+      idNumber: "123456782",
       fullName: "משה לוי",
     });
     mockFetchRemoteFile.mockResolvedValueOnce(Buffer.from("fake-bytes"));
@@ -317,7 +317,7 @@ describe("intake v4 — meeting → new client → consent → ID", () => {
     );
     expect(rows[0]?.id_photo_url).toBe(idWebViewLink);
     expect(rows[0]?.id_validated).toBe(true);
-    expect(rows[0]?.id_number).toBe("123456789");
+    expect(rows[0]?.id_number).toBe("123456782");
     expect(rows[0]?.full_name).toBe("משה לוי");
     expect(rows[0]?.intake_state).toBe("completed");
     expect(rows[0]?.intake_current_slot).toBe("done");

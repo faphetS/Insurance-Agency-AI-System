@@ -29,6 +29,7 @@ import { env } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { AppError, globalErrorHandler } from "./lib/errors.js";
 import { audit } from "./middleware/audit.js";
+import { isRateLimitExempt } from "./middleware/rate-limit-exempt.js";
 import { requestId } from "./middleware/requestId.js";
 import apiRoutes from "./routes/index.js";
 import filesRouter from "./domains/files/files.routes.js";
@@ -109,7 +110,7 @@ app.use(
     standardHeaders: true,
     legacyHeaders: false,
     message: { status: "error", code: "RATE_LIMITED", message: "Too many requests" },
-    skip: (req) => req.path === "/whatsapp/webhook" || req.path === "/whatsapp/meta-webhook",
+    skip: (req) => isRateLimitExempt(req.path),
   }),
 );
 

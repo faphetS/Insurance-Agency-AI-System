@@ -100,16 +100,83 @@ describe("extractMetaPayload", () => {
     expect(extractMetaPayload(msg({ type: "reaction" }))).toBeNull();
   });
 
-  it("sticker → null", () => {
-    expect(extractMetaPayload(msg({ type: "sticker" }))).toBeNull();
+  it("sticker → kind:other with the sticker label", () => {
+    expect(extractMetaPayload(msg({ type: "sticker" }))).toEqual({
+      kind: "other",
+      subtype: "sticker",
+      label: "[סטיקר]",
+    });
   });
 
-  it("unsupported → null", () => {
-    expect(extractMetaPayload(msg({ type: "unsupported" }))).toBeNull();
+  it("voice note (audio) → kind:other with the voice label", () => {
+    expect(extractMetaPayload(msg({ type: "audio", audio: { id: "m1", voice: true } }))).toEqual({
+      kind: "other",
+      subtype: "audio",
+      label: "[הודעה קולית]",
+    });
   });
 
-  it("unknown type → null", () => {
-    expect(extractMetaPayload(msg({ type: "order" }))).toBeNull();
+  it("video / location / contacts → their labels", () => {
+    expect(extractMetaPayload(msg({ type: "video" }))).toMatchObject({ kind: "other", label: "[וידאו]" });
+    expect(extractMetaPayload(msg({ type: "location" }))).toMatchObject({ kind: "other", label: "[מיקום]" });
+    expect(extractMetaPayload(msg({ type: "contacts" }))).toMatchObject({ kind: "other", label: "[איש קשר]" });
+  });
+
+  it("unsupported and unknown types → the generic label", () => {
+    expect(extractMetaPayload(msg({ type: "unsupported" }))).toEqual({
+      kind: "other",
+      subtype: "unsupported",
+      label: "[הודעה לא נתמכת]",
+    });
+    expect(extractMetaPayload(msg({ type: "order" }))).toMatchObject({ kind: "other", subtype: "order" });
+  });
+
+  it("request_welcome → null (an 'opened the chat' event, not a message)", () => {
+    expect(extractMetaPayload(msg({ type: "request_welcome" }))).toBeNull();
+  });
+
+  it("system → null (a number / identity change notice, not a message)", () => {
+    expect(extractMetaPayload(msg({ type: "system", system: { type: "user_changed_number" } }))).toBeNull();
+    expect(extractMetaPayload(msg({ type: "system", system: { type: "customer_identity_changed" } }))).toBeNull();
+  });
+
+  it("template quick-reply (type button) → a button tap with the payload as id", () => {
+    expect(
+      extractMetaPayload(msg({ type: "button", button: { payload: "callback_didi", text: "אשמח שדידי יחזור אליי" } })),
+    ).toEqual({ kind: "text", text: "callback_didi", isButtonReply: true, buttonTitle: "אשמח שדידי יחזור אליי" });
+  });
+
+  it("template quick-reply without payload falls back to the visible text", () => {
+    expect(extractMetaPayload(msg({ type: "button", button: { text: "מאשר" } }))).toEqual({
+      kind: "text",
+      text: "מאשר",
+      isButtonReply: true,
+      buttonTitle: "מאשר",
+    });
+  });
+
+  it("template quick-reply with an EMPTY payload also falls back to the visible text", () => {
+    expect(extractMetaPayload(msg({ type: "button", button: { payload: "", text: "מאשר" } }))).toMatchObject({
+      kind: "text",
+      text: "מאשר",
+      isButtonReply: true,
+    });
+  });
+
+  it("template quick-reply with neither payload nor text → placeholder, never silently dropped", () => {
+    expect(extractMetaPayload(msg({ type: "button", button: {} }))).toEqual({
+      kind: "other",
+      subtype: "button",
+      label: "[הודעה לא נתמכת]",
+    });
+  });
+
+  it("an inherited object key as the type gets the generic label, not a prototype value", () => {
+    expect(extractMetaPayload(msg({ type: "constructor" }))).toEqual({
+      kind: "other",
+      subtype: "constructor",
+      label: "[הודעה לא נתמכת]",
+    });
   });
 });
 

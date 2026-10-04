@@ -53,4 +53,11 @@ router.post(
   operationsController.runLeadsRelevance,
 );
 
+router.post(
+  "/leads-backfill/run",
+  authenticate,
+  authorize("admin"),
+  operationsController.runLeadsBackfill,
+);
+
 export default router;

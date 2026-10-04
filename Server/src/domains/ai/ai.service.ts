@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { AppError } from "../../lib/errors.js";
+import { normalizeIsraeliId } from "./israeli-id.js";
 
 const openai = new OpenAI({ apiKey: env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api/v1" });
 const FALLBACK_MODEL = env.AI_FALLBACK_MODEL;
@@ -66,16 +67,6 @@ export async function generateReply(
   }
 }
 
-const ID_PLAUSIBLE_RE = /^[A-Z0-9-]{5,30}$/;
-
-function normalizeIdNumber(raw: string): string | null {
-  const normalized = raw.trim().toUpperCase().replace(/\s+/g, "");
-  if (!ID_PLAUSIBLE_RE.test(normalized)) return null;
-  const digitCount = (normalized.match(/\d/g) ?? []).length;
-  if (digitCount < 2) return null;
-  return normalized;
-}
-
 /**
  * Single vision pass that validates the ID photo AND extracts the document's
  * primary ID number plus the printed full name. Strict: the photo must show
@@ -115,12 +106,12 @@ export async function validateIdPhoto(imageUrl: string): Promise<{
     const parsed = JSON.parse(cleaned) as {
       hasIdCard?: boolean;
       hasAppendix?: boolean;
-      idNumber?: string | null;
+      idNumber?: string | number | null;
       fullName?: string | null;
     };
     const hasIdCard = parsed.hasIdCard === true;
     const hasAppendix = parsed.hasAppendix === true;
-    const idNumber = typeof parsed.idNumber === "string" ? normalizeIdNumber(parsed.idNumber) : null;
+    const idNumber = normalizeIsraeliId(parsed.idNumber);
     let fullName: string | null = null;
     if (typeof parsed.fullName === "string") {
       const cleanedName = parsed.fullName.replace(/\s+/g, " ").trim();

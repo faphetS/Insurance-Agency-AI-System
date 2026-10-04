@@ -13,7 +13,7 @@ import {
   type IntakeSlot,
 } from "./intake.prompts.js";
 import { validateIdPhoto } from "./ai.service.js";
-import { resolveInboundMedia, captureIntakeDocument } from "./intake-media.js";
+import { resolveInboundMedia } from "./intake-media.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
 import { notifyOwner } from "../operations/owner-notify.js";
@@ -43,6 +43,7 @@ interface ClientIntakeUpdate {
   id_number?: string | null;
   intake_state?: string;
   intake_current_slot?: string;
+  intake_started_at?: string;
   intake_completed_at?: string | null;
   pipeline_stage?: string | null;
   client_type?: string | null;
@@ -243,6 +244,12 @@ async function handleWelcome(
   sendWelcomeImage(conversationId, chatId);
 }
 
+/** The opening-menu button whose id or Hebrew label equals the message, if any. */
+function findMenuButton(val: string) {
+  const v = val.trim();
+  return INTAKE_PROMPTS.menu.buttons.find((b) => b.buttonId === v || b.buttonText === v);
+}
+
 async function handleMenu(
   conversationId: string,
   chatId: string,
@@ -255,9 +262,7 @@ async function handleMenu(
   }
 
   const val = payload.text.trim();
-  const matched = INTAKE_PROMPTS.menu.buttons.find(
-    (b) => b.buttonId === val || b.buttonText === val,
-  );
+  const matched = findMenuButton(val);
 
   if (!matched) {
     // Legacy grace: pre-2026-07-29 WhatsApp list messages stay tappable in a
@@ -405,10 +410,12 @@ async function handleConsent(
   clientId: string,
   payload: MessagePayload,
 ): Promise<void> {
+  // Match the bot's own button id only. A quick-reply on a template an agent sent also
+  // arrives as isButtonReply and carries its visible text, which may read "מאשר".
   if (
     payload.kind === "text" &&
     payload.isButtonReply &&
-    (payload.text === "consent_approve" || payload.text === "מאשר")
+    payload.text === "consent_approve"
   ) {
     await advanceTo(conversationId, chatId, clientId, "id_photo");
     return;
@@ -478,20 +485,33 @@ async function handleIdPhoto(
     return;
   }
 
-  await supabaseAdmin.from("documents").insert({
+  // Logged with code + message only: Postgres' DETAIL would carry the row (ID number, name).
+  const { error: docErr } = await supabaseAdmin.from("documents").insert({
     client_id: clientId,
     type: "id_photo",
     file_url: up.webViewLink,
     file_name: payload.fileName ?? null,
     mime_type: payload.mimeType ?? null,
   });
+  if (docErr) {
+    logger.error(
+      { clientId, fileId: up.fileId, code: docErr.code, message: docErr.message },
+      "intake: id_photo documents insert failed — file is in Drive but not listed in column D",
+    );
+  }
 
-  await updateClient(clientId, {
+  const { error: idErr } = await updateClient(clientId, {
     id_photo_url: up.webViewLink,
     id_validated: true,
     ...(extractedIdNumber ? { id_number: extractedIdNumber } : {}),
     ...(ocrName ? { full_name: ocrName } : {}),
   });
+  if (idErr) {
+    logger.error(
+      { clientId, fileId: up.fileId, code: idErr.code, message: idErr.message },
+      "intake: id_photo client update failed — number and name not saved",
+    );
+  }
 
   await sendText(
     conversationId,
@@ -505,12 +525,17 @@ async function handleIdPhoto(
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/**
+ * `fileHandled` = the `id_photo` step took this image: it uploaded an accepted photo itself
+ * or asked for another. The pipeline archives every other file, including any the step
+ * never saw (bot off, paused, skipped) and documents, which it only answers with its prompt.
+ */
 export async function handleIntake(
   conversationId: string,
   clientId: string,
   chatId: string,
   payload: MessagePayload,
-): Promise<{ consumed: boolean }> {
+): Promise<{ consumed: boolean; fileHandled?: boolean }> {
   // 0. Respect bot_settings.enabled — if bot is off, skip intake entirely
   const { data: botSettings } = await supabaseAdmin
     .from("bot_settings")
@@ -573,27 +598,35 @@ export async function handleIntake(
     return { consumed: false };
   }
 
-  // Leads routinely send the ID (or any document) instead of tapping a button. Archive
-  // whatever arrives while intake is running — detached, so the reply is never delayed.
-  // The id_photo slot is excluded: handleIdPhoto uploads it itself, OCR-gated.
-  if ((payload.kind === "image" || payload.kind === "document") && slot !== "id_photo") {
-    void captureIntakeDocument(clientId, payload).catch((err: unknown) =>
-      logger.warn({ err, clientId }, "intake: document capture failed — continuing"),
-    );
-  }
-
-  // 2. Completed / terminal + unpaused (post-cooldown) → fresh menu restart.
+  // 2. Completed / terminal + unpaused (post-cooldown) → fresh inquiry. A tap on the old
+  // menu is a real choice — honour it instead of answering with yet another menu.
   if (state === "completed" || slot === "done") {
-    await updateClient(clientId, {
+    const tapped = payload.kind === "text" ? findMenuButton(payload.text) : undefined;
+    const { error: resetErr } = await updateClient(clientId, {
       intake_state: "collecting",
-      intake_current_slot: "welcome",
+      intake_current_slot: tapped ? "menu" : "welcome",
+      intake_started_at: new Date().toISOString(),
       consent_prompted_at: null,
       stall_notified_at: null,
       intake_completed_at: null,
       inquiry_type: "general",
       client_type: null,
     });
-    await handleWelcome(conversationId, chatId, clientId);
+    // Carrying on after a failed reset would advance the slot under a still-'completed'
+    // inquiry, so every later message would restart again (a menu loop). Code + message
+    // only: a clients-row DETAIL carries the whole row, ID number and name included.
+    if (resetErr) {
+      logger.error(
+        { conversationId, clientId, code: resetErr.code, message: resetErr.message },
+        "intake: post-cooldown reset failed — not restarting",
+      );
+      return { consumed: false };
+    }
+    if (tapped) {
+      await handleMenu(conversationId, chatId, clientId, payload);
+    } else {
+      await handleWelcome(conversationId, chatId, clientId);
+    }
     return { consumed: true };
   }
 
@@ -618,7 +651,7 @@ export async function handleIntake(
       break;
     case "id_photo":
       await handleIdPhoto(conversationId, chatId, clientId, payload);
-      break;
+      return { consumed: true, fileHandled: payload.kind === "image" };
     default:
       logger.warn(
         { conversationId, slot },
