@@ -7,6 +7,7 @@ import { runStaffEmailNotify } from "./email-mentions.service.js";
 import { runUnansweredEmailNotify } from "./unanswered-emails.service.js";
 import { sweepUnanswered, sendCallbackReminders } from "./unanswered-wa.service.js";
 import { applyRelevanceDropdowns, sweepRelevanceMoves } from "../integrations/google/leads-relevance.service.js";
+import { backfillLeadDocuments } from "../integrations/google/leads-mirror.service.js";
 
 export const operationsController = {
   async runCallReminder(_req: Request, res: Response): Promise<void> {
@@ -51,5 +52,11 @@ export const operationsController = {
     const dropdowns = await applyRelevanceDropdowns();
     const sweep = await sweepRelevanceMoves();
     res.json({ status: "success", dropdowns, sweep });
+  },
+
+  async runLeadsBackfill(_req: Request, res: Response): Promise<void> {
+    logger.info("operations: manual leads-backfill trigger");
+    const result = await backfillLeadDocuments();
+    res.json({ status: "success", ...result });
   },
 };

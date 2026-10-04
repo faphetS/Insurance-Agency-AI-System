@@ -38,4 +38,10 @@ describe("mirrorInboundHook", () => {
 
     expect(mockMirrorInbound).toHaveBeenCalledWith("972500000000@c.us", "שלום", undefined);
   });
+
+  it("mirrors the placeholder label for unsupported message types", async () => {
+    await mirrorInboundHook("972500000000@c.us", { kind: "other", subtype: "audio", label: "[הודעה קולית]" });
+
+    expect(mockMirrorInbound).toHaveBeenCalledWith("972500000000@c.us", "[הודעה קולית]", undefined);
+  });
 });

@@ -38,6 +38,11 @@ const metaMessageSchema = z
       })
       .passthrough()
       .optional(),
+    button: z
+      .object({ payload: z.string().optional(), text: z.string().optional() })
+      .passthrough()
+      .optional(),
+    system: z.object({ type: z.string().optional() }).passthrough().optional(),
   })
   .passthrough();
 
@@ -121,9 +126,23 @@ export function chatIdToWaId(chatId: string): string {
   return chatId.split("@")[0] ?? chatId;
 }
 
+const OTHER_LABELS: Record<string, string> = {
+  audio: "[הודעה קולית]",
+  video: "[וידאו]",
+  sticker: "[סטיקר]",
+  location: "[מיקום]",
+  contacts: "[איש קשר]",
+};
+const UNSUPPORTED_LABEL = "[הודעה לא נתמכת]";
+
+// Not messages: a reaction edits an earlier message; request_welcome fires when a
+// lead merely opens the chat from an ad; system is Meta's notice that the lead changed
+// number or identity. Handled as messages, a system notice would restart a finished lead.
+const IGNORED_TYPES = new Set(["reaction", "request_welcome", "system"]);
+
 /**
  * Normalise a Meta inbound message into the shared MessagePayload union.
- * Returns null for types we explicitly ignore (reaction/sticker/unsupported/unknown).
+ * Returns null for reaction / request_welcome / system (not messages) and for a tap without a reply id.
  */
 export function extractMetaPayload(msg: MetaMessage): MessagePayload | null {
   if (msg.type === "text" && msg.text) {
@@ -157,5 +176,16 @@ export function extractMetaPayload(msg: MetaMessage): MessagePayload | null {
     };
   }
 
-  return null;
+  // Quick-reply button on a TEMPLATE an agent sent (different shape from interactive).
+  if (msg.type === "button" && msg.button) {
+    // `||`, not `??`: a template button with an empty payload still carries its visible text.
+    const id = msg.button.payload || msg.button.text;
+    if (!id) return { kind: "other", subtype: "button", label: UNSUPPORTED_LABEL };
+    return { kind: "text", text: id, isButtonReply: true, buttonTitle: msg.button.text };
+  }
+
+  if (IGNORED_TYPES.has(msg.type)) return null;
+
+  const label = Object.hasOwn(OTHER_LABELS, msg.type) ? OTHER_LABELS[msg.type]! : UNSUPPORTED_LABEL;
+  return { kind: "other", subtype: msg.type, label };
 }

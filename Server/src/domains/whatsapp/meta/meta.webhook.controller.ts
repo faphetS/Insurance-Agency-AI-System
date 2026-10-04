@@ -57,8 +57,16 @@ async function processMetaValue(value: MetaValue): Promise<void> {
   for (const msg of value.messages ?? []) {
     const payload = extractMetaPayload(msg);
     if (!payload) {
-      logger.debug({ type: msg.type, wamid: msg.id }, "Meta message type ignored");
+      if (msg.type === "system") {
+        // Never log system.body / new_wa_id: they carry the profile name and both numbers.
+        logger.info({ wamid: msg.id, systemType: msg.system?.type }, "Meta system notice ignored");
+      } else {
+        logger.debug({ type: msg.type, wamid: msg.id }, "Meta message type ignored");
+      }
       continue;
+    }
+    if (payload.kind === "other") {
+      logger.info({ type: msg.type, wamid: msg.id }, "Meta message type not supported by the bot — carried as a placeholder");
     }
     await processInboundCustomerMessage({
       chatId: waIdToChatId(msg.from),

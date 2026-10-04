@@ -28,6 +28,7 @@ vi.mock("../inbound.pipeline.js", () => ({
 }));
 
 import { metaWebhookController } from "./meta.webhook.controller.js";
+import { logger } from "../../../config/logger.js";
 
 function makeBuilder(result: unknown) {
   const b: Record<string, unknown> = {};
@@ -305,6 +306,61 @@ describe("handleWebhook — statuses and batching", () => {
 
     expect(mockProcessInbound).toHaveBeenCalledOnce();
     expect(mockProcessInbound.mock.calls[0]![0]).toMatchObject({ messageId: "wamid.R2" });
+  });
+
+  it("a system notice (number change) is skipped and logged as wamid + subtype only", async () => {
+    const body = inboundEnvelope([
+      {
+        from: "972500000000",
+        id: "wamid.S1",
+        type: "system",
+        system: {
+          body: "Meta Tester changed from 972500000000 to 972511111111",
+          new_wa_id: "972511111111",
+          type: "user_changed_number",
+        },
+      },
+      { from: "972500000000", id: "wamid.S2", type: "text", text: { body: "still here" } },
+    ]);
+    const req = makePostReq(body);
+    const res = makeRes();
+
+    metaWebhookController.handleWebhook(req, res);
+    await flushImmediates();
+
+    expect(mockProcessInbound).toHaveBeenCalledOnce();
+    expect(mockProcessInbound.mock.calls[0]![0]).toMatchObject({ messageId: "wamid.S2" });
+    expect(logger.info).toHaveBeenCalledWith(
+      { wamid: "wamid.S1", systemType: "user_changed_number" },
+      "Meta system notice ignored",
+    );
+    const allLogs = JSON.stringify(
+      [logger.info, logger.warn, logger.error, logger.debug].map((fn) => vi.mocked(fn).mock.calls),
+    );
+    expect(allLogs).not.toContain("972511111111");
+    expect(allLogs).not.toContain("changed from");
+  });
+
+  it("a voice note is processed with the placeholder payload (not dropped)", async () => {
+    const body = inboundEnvelope([
+      { from: "972500000000", id: "wamid.V1", type: "audio", audio: { id: "m1", mime_type: "audio/ogg", voice: true } },
+    ]);
+    const req = makePostReq(body);
+    const res = makeRes();
+
+    metaWebhookController.handleWebhook(req, res);
+    await flushImmediates();
+
+    expect(mockProcessInbound).toHaveBeenCalledOnce();
+    expect(mockProcessInbound.mock.calls[0]![0]).toMatchObject({
+      messageId: "wamid.V1",
+      payload: { kind: "other", subtype: "audio", label: "[הודעה קולית]" },
+    });
+    // The volume metric for unsupported types — the post-deploy log check greps this line.
+    expect(logger.info).toHaveBeenCalledWith(
+      { type: "audio", wamid: "wamid.V1" },
+      expect.stringContaining("not supported by the bot"),
+    );
   });
 
   it("image message → pipeline gets a mediaId payload", async () => {

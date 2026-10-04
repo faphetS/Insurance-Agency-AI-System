@@ -6,10 +6,11 @@ import { downloadMetaMedia } from "../whatsapp/meta/meta.media.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
 import { displayName } from "../whatsapp/whatsapp.util.js";
+import { validateIdPhoto } from "./ai.service.js";
 
 /** Resolve inbound media bytes: GreenAPI delivers a fileUrl, Meta a mediaId. */
 export async function resolveInboundMedia(payload: MessagePayload): Promise<Buffer | null> {
-  if (payload.kind === "text") return null;
+  if (payload.kind !== "image" && payload.kind !== "document") return null;
   if (payload.fileUrl) {
     return fetchRemoteFile(payload.fileUrl);
   }
@@ -37,31 +38,38 @@ function driveStamp(): string {
 }
 
 /**
- * Archive a file a lead sent while intake was running: Drive upload, `documents` row,
- * and the link into the CRM sheet (column D) via the normal mirror.
+ * Archive any file a known lead sends: Drive upload, `documents` row, CRM-sheet sync.
+ * Images (including photos sent "as a file") are first run through the strict ID check;
+ * a valid תעודת זהות + ספח photo also fills the client's ID number and name.
  *
- * Best-effort — never throws, never blocks the bot reply. The `id_photo` slot does NOT
- * come through here: that path runs OCR first and owns the verified `id_photo_url`.
+ * Best-effort and silent — never throws, never replies to the lead, never blocks the bot.
+ * The pipeline does not call this for an image the `id_photo` step took (handleIntake
+ * reports `fileHandled`): that step runs its own OCR-gated upload and replies.
+ *
+ * The shim resolves `{ error }` instead of throwing, so every query is checked. Only code +
+ * message are logged: Postgres' DETAIL ("Failing row contains (…)") would put the row, ID
+ * number and name included, in the logs.
  */
-export async function captureIntakeDocument(
-  clientId: string,
-  payload: MessagePayload,
-): Promise<void> {
+export async function captureLeadFile(clientId: string, payload: MessagePayload): Promise<void> {
   if (payload.kind !== "image" && payload.kind !== "document") return;
 
   try {
-    const { data } = await supabaseAdmin
+    const { data, error: readErr } = await supabaseAdmin
       .from("clients")
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .select("phone, full_name, id_validated" as any)
+      .select("phone, full_name" as any)
       .eq("id", clientId)
       .maybeSingle();
 
-    const client = (data ?? null) as {
-      phone?: string | null;
-      full_name?: string | null;
-      id_validated?: boolean | null;
-    } | null;
+    if (readErr) {
+      logger.error(
+        { clientId, code: readErr.code, message: readErr.message },
+        "intake-media: client read failed — skipping capture",
+      );
+      return;
+    }
+
+    const client = (data ?? null) as { phone?: string | null; full_name?: string | null } | null;
 
     if (!client?.phone) {
       logger.warn({ clientId }, "intake-media: client has no phone — skipping capture");
@@ -76,42 +84,107 @@ export async function captureIntakeDocument(
 
     const mimeType =
       payload.mimeType ?? (payload.kind === "image" ? "image/jpeg" : "application/octet-stream");
+    const ocr = mimeType.startsWith("image/") ? await inspectIdPhoto(bytes, mimeType) : null;
+    const idPhoto = ocr && ocr.valid ? ocr : null;
+
+    const ext = extFor(mimeType, payload.fileName);
     const base = displayName(client.full_name, client.phone) ?? client.phone.replace(/\D/g, "");
+    const name = idPhoto?.fullName ? `${idPhoto.fullName} - ID.${ext}` : `${base} - ${driveStamp()}.${ext}`;
 
-    const up = await uploadLeadDocument({
-      name: `${base} - ${driveStamp()}.${extFor(mimeType, payload.fileName)}`,
-      mimeType,
-      bytes,
-    });
-    if (!up) return; // uploadLeadDocument already logged why
+    const up = await uploadLeadDocument({ name, mimeType, bytes });
+    if (!up) {
+      // uploadLeadDocument logs why, but without identifiers; this line says whom to ask to resend.
+      logger.warn({ clientId, kind: payload.kind, mimeType }, "intake-media: Drive upload failed — file not archived");
+      return;
+    }
 
-    await supabaseAdmin.from("documents").insert({
+    // Column D is rebuilt from `documents` alone: without this row the link never reaches the
+    // sheet. The fileId lets staff find the file in Drive.
+    const { error: docErr } = await supabaseAdmin.from("documents").insert({
       client_id: clientId,
-      type: "other",
+      type: idPhoto ? "id_photo" : "other",
       file_url: up.webViewLink,
       file_name: payload.fileName ?? null,
       mime_type: mimeType,
     });
-
-    // An OCR-verified ID photo outranks anything captured here — never overwrite it.
-    if (client.id_validated) {
-      logger.info({ clientId, fileId: up.fileId }, "intake-media: archived to Drive (verified ID kept in sheet)");
-      return;
+    if (docErr) {
+      logger.error(
+        { clientId, fileId: up.fileId, code: docErr.code, message: docErr.message },
+        "intake-media: documents insert failed — file is in Drive but not listed in column D",
+      );
     }
 
-    await supabaseAdmin
-      .from("clients")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .update({ id_photo_url: up.webViewLink } as any)
-      .eq("id", clientId);
+    // Saved even when the documents row failed: the number and name do not depend on it.
+    let clientErr: { code?: string; message: string } | null = null;
+    if (idPhoto) {
+      // Newest verified ID wins; a client is never downgraded (id_validated only ever becomes true).
+      // The name moves only together with a readable number, so columns B and E always describe
+      // the same card — a family member's ID with an unreadable number changes neither.
+      const { error } = await supabaseAdmin
+        .from("clients")
+        .update({
+          id_photo_url: up.webViewLink,
+          ...(idPhoto.idNumber
+            ? {
+                id_number: idPhoto.idNumber,
+                id_validated: true,
+                ...(idPhoto.fullName ? { full_name: idPhoto.fullName } : {}),
+              }
+            : {}),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any)
+        .eq("id", clientId);
+      clientErr = error;
+      if (clientErr) {
+        logger.error(
+          { clientId, fileId: up.fileId, code: clientErr.code, message: clientErr.message },
+          "intake-media: client ID update failed — number and name not saved",
+        );
+      }
+      if (!idPhoto.idNumber) {
+        logger.warn({ clientId, fileId: up.fileId }, "intake-media: ID photo without a readable number — columns B and E unchanged");
+      }
+    }
 
-    await mirrorLeadToSheet(clientId);
+    const docSaved = !docErr;
+    const idSaved = idPhoto !== null && !clientErr;
+    // When neither write landed the sheet has nothing new to show.
+    if (docSaved || idSaved) await mirrorLeadToSheet(clientId);
 
-    logger.info(
-      { clientId, kind: payload.kind, fileId: up.fileId },
-      "intake-media: lead document archived to Drive and mirrored to the sheet",
-    );
+    const summary = {
+      clientId,
+      kind: payload.kind,
+      mimeType,
+      isIdPhoto: idPhoto !== null,
+      hasIdCard: ocr?.hasIdCard ?? null,
+      hasAppendix: ocr?.hasAppendix ?? null,
+      idOk: !!idPhoto?.idNumber,
+      fileId: up.fileId,
+      docSaved,
+      clientSaved: idPhoto ? idSaved : null,
+    };
+    // "archived" is the success marker the rollout greps for: only a fully recorded file earns it.
+    if (docSaved && !clientErr) {
+      logger.info(summary, "intake-media: lead file archived");
+    } else {
+      logger.warn(summary, "intake-media: lead file is in Drive but not fully recorded");
+    }
   } catch (err) {
     logger.error({ err, clientId }, "intake-media: capture failed — continuing");
+  }
+}
+
+// The vision pass is best-effort here: a model or API failure means "not an ID",
+// never a lost file. The bytes go as a data URL because Meta media URLs need a
+// Bearer header OpenRouter cannot send.
+async function inspectIdPhoto(
+  bytes: Buffer,
+  mimeType: string,
+): Promise<Awaited<ReturnType<typeof validateIdPhoto>> | null> {
+  try {
+    return await validateIdPhoto(`data:${mimeType};base64,${bytes.toString("base64")}`);
+  } catch (err) {
+    logger.warn({ err }, "intake-media: ID inspection failed — archiving as a plain file");
+    return null;
   }
 }

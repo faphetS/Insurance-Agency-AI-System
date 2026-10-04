@@ -2,6 +2,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { supabaseAdmin } from "../../config/supabase.js";
 import { handleIntake } from "../ai/intake.orchestrator.js";
+import { captureLeadFile } from "../ai/intake-media.js";
 import { mirrorInboundHook, type ConversationalChannel } from "./transport.resolve.js";
 import type { MessagePayload } from "./whatsapp.validator.js";
 import { isStaffChat } from "./whatsapp.util.js";
@@ -18,7 +19,7 @@ export interface InboundCustomerMessage {
  * Shared inbound gate chain — runs post-ACK for both providers (GreenAPI
  * controller and Meta webhook controller): staff intercept →
  * conversation upsert (+ channel stamp) → message insert (dedup) → allowlist →
- * client link/create → mirror hook → intake.
+ * client link/create → mirror hook → intake → file capture.
  */
 export async function processInboundCustomerMessage(
   msg: InboundCustomerMessage,
@@ -29,9 +30,11 @@ export async function processInboundCustomerMessage(
   const messageBody =
     payload.kind === "text"
       ? payload.text
-      : payload.kind === "image"
-        ? payload.caption ?? "[image]"
-        : payload.caption ?? "[document]";
+      : payload.kind === "other"
+        ? payload.label
+        : payload.kind === "image"
+          ? payload.caption ?? "[image]"
+          : payload.caption ?? "[document]";
 
   // Derive phone from chatId (format: "1234567890@c.us" or "group@g.us")
   const contactPhone = chatId.split("@")[0] ?? chatId;
@@ -143,6 +146,7 @@ export async function processInboundCustomerMessage(
               inquiry_type: "general",
               id_validated: false,
               assigned_to: staffRow.id,
+              intake_started_at: new Date().toISOString(),
             })
             .select("id")
             .single();
@@ -200,16 +204,30 @@ export async function processInboundCustomerMessage(
     logger.warn({ err, chatId }, "mirrorInboundHook failed — continuing"),
   );
 
+  let fileHandled = false;
   try {
     if (linkedClientId) {
-      await handleIntake(
+      const result = await handleIntake(
         conversationId,
         linkedClientId,
         chatId,
         payload,
       );
+      fileHandled = result.fileHandled === true;
     }
   } catch (err) {
     logger.error({ conversationId, err }, "Async message processing error");
+  }
+
+  // Every file a known lead sends is archived (Drive + sheet) whatever the bot did with the
+  // message: paused, switched off, mid-intake or failed. The one exception is an image the
+  // id_photo step took (it uploads it or asks for another). Deciding after the step, from
+  // its own answer, leaves no second read of the slot to race. Detached: the reply has
+  // already gone out.
+  if (linkedClientId && !fileHandled && (payload.kind === "image" || payload.kind === "document")) {
+    const clientId = linkedClientId;
+    void captureLeadFile(clientId, payload).catch((err: unknown) =>
+      logger.warn({ err, clientId }, "captureLeadFile failed — continuing"),
+    );
   }
 }

@@ -47,7 +47,14 @@ export async function uploadLeadDocument(opts: {
 
     return { fileId, webViewLink };
   } catch (err) {
-    logger.error({ err, name: opts.name }, "google.drive: uploadLeadDocument failed");
+    // The file name carries the lead's name (for a valid ID photo, the one read off the card),
+    // and a GaxiosError keeps the request that carried it, plus any image bytes still buffered,
+    // for pino to copy; so only status + message are logged.
+    const e = err as { message?: string; code?: number | string; response?: { status?: number } } | null;
+    logger.error(
+      { err: { status: e?.response?.status ?? e?.code, message: e?.message }, mimeType: opts.mimeType },
+      "google.drive: uploadLeadDocument failed",
+    );
     return null;
   }
 }

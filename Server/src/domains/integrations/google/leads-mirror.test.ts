@@ -60,7 +60,23 @@ function setupFromSequence(builders: Builder[]): void {
   });
 }
 
-import { mirrorLeadToSheet } from "./leads-mirror.service.js";
+function setupClient(clientOver: Record<string, unknown>, docUrls: string[] = []) {
+  setupFromSequence([
+    makeBuilder({ data: clientRow(clientOver), error: null }),
+    makeBuilder(docsResult(docUrls)),
+  ]);
+}
+
+// Each document's created_at spelled out: with no menu choice, only a file from the current
+// inquiry (on/after intake_started_at, 1 min slack) opens a row.
+function setupClientDocsAt(clientOver: Record<string, unknown>, docs: [url: string, createdAt: string][]) {
+  setupFromSequence([
+    makeBuilder({ data: clientRow(clientOver), error: null }),
+    makeBuilder({ data: docs.map(([file_url, created_at]) => ({ file_url, created_at })), error: null }),
+  ]);
+}
+
+import { mirrorLeadToSheet, backfillLeadDocuments } from "./leads-mirror.service.js";
 
 const CLIENT_ID = "client-abc-123";
 
@@ -70,10 +86,15 @@ function clientRow(over: Record<string, unknown>) {
     full_name: "יעל כהן",
     inquiry_type: "vehicle",
     client_type: null,
-    id_photo_url: null,
     id_number: null,
+    intake_started_at: "2026-10-04T07:00:00.000Z",
+    created_at: "2026-09-01T08:00:00.000Z",
     ...over,
   };
+}
+
+function docsResult(urls: string[]) {
+  return { data: urls.map((u, i) => ({ file_url: u, created_at: `2026-10-0${i + 1}T08:00:00.000Z` })), error: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -86,18 +107,11 @@ describe("mirrorLeadToSheet — 7-col row into the new-leads tab", () => {
     mockUpsertLeadRow.mockResolvedValue(true);
   });
 
-  it("builds A→G with insurance label, id photo, id number, empty relevance, creation date", async () => {
-    setupFromSequence([
-      makeBuilder({
-        data: clientRow({
-          inquiry_type: "life_health_pension",
-          id_photo_url: "https://drive.google.com/file/d/abc/view",
-          id_number: "123456789",
-          client_type: "new",
-        }),
-        error: null,
-      }),
-    ]);
+  it("builds A→G with insurance label, document link, id number, empty relevance, creation date", async () => {
+    setupClient(
+      { inquiry_type: "life_health_pension", id_number: "123456782", client_type: "new" },
+      ["https://drive.google.com/file/d/abc/view"],
+    );
 
     await mirrorLeadToSheet(CLIENT_ID);
 
@@ -107,18 +121,16 @@ describe("mirrorLeadToSheet — 7-col row into the new-leads tab", () => {
     expect(row[0]).toBe("972501234567"); // A phone
     expect(row[1]).toBe("יעל כהן"); // B name
     expect(row[2]).toBe("ביטוח חיים/בריאות/פנסיה"); // C inquiry
-    expect(row[3]).toBe("https://drive.google.com/file/d/abc/view"); // D id photo
-    expect(row[4]).toBe("123456789"); // E id number
+    expect(row[3]).toBe("https://drive.google.com/file/d/abc/view"); // D document links
+    expect(row[4]).toBe("123456782"); // E id number
     expect(row[5]).toBe(""); // F relevance (manual — always blank)
     expect(row[6]).toMatch(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/); // G creation date
     expect(tab).toBe("לידים חדשים");
-    expect(opts).toEqual({ setOnceColumns: [5, 6] });
+    expect(opts).toEqual({ setOnceColumns: [5, 6], startedAt: new Date("2026-10-04T07:00:00.000Z") });
   });
 
   it("col B is empty when full_name equals the phone (never echoes the phone)", async () => {
-    setupFromSequence([
-      makeBuilder({ data: clientRow({ full_name: "972501234567" }), error: null }),
-    ]);
+    setupClient({ full_name: "972501234567" });
 
     await mirrorLeadToSheet(CLIENT_ID);
 
@@ -127,7 +139,7 @@ describe("mirrorLeadToSheet — 7-col row into the new-leads tab", () => {
   });
 
   it("callback inquiry → col C 'בקשת שיחה חוזרת', new-leads tab", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "callback" }), error: null })]);
+    setupClient({ inquiry_type: "callback" });
     await mirrorLeadToSheet(CLIENT_ID);
     const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
     expect(row[2]).toBe("בקשת שיחה חוזרת");
@@ -135,7 +147,7 @@ describe("mirrorLeadToSheet — 7-col row into the new-leads tab", () => {
   });
 
   it("meeting + client_type old → 'תיאום פגישה — לקוח קיים', existing-client tab", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "meeting", client_type: "old" }), error: null })]);
+    setupClient({ inquiry_type: "meeting", client_type: "old" });
     await mirrorLeadToSheet(CLIENT_ID);
     const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
     expect(row[2]).toBe("תיאום פגישה — לקוח קיים");
@@ -143,7 +155,7 @@ describe("mirrorLeadToSheet — 7-col row into the new-leads tab", () => {
   });
 
   it("meeting + client_type new → 'תיאום פגישה — לקוח חדש', new-leads tab", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "meeting", client_type: "new" }), error: null })]);
+    setupClient({ inquiry_type: "meeting", client_type: "new" });
     await mirrorLeadToSheet(CLIENT_ID);
     const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
     expect(row[2]).toBe("תיאום פגישה — לקוח חדש");
@@ -151,14 +163,14 @@ describe("mirrorLeadToSheet — 7-col row into the new-leads tab", () => {
   });
 
   it("vehicle inquiry → new-leads tab", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "vehicle" }), error: null })]);
+    setupClient({ inquiry_type: "vehicle" });
     await mirrorLeadToSheet(CLIENT_ID);
     const [, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
     expect(tab).toBe("לידים חדשים");
   });
 
   it("mirrors non-meeting inquiries regardless of client_type", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ client_type: null, inquiry_type: "home" }), error: null })]);
+    setupClient({ client_type: null, inquiry_type: "home" });
     await mirrorLeadToSheet(CLIENT_ID);
     expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
     const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
@@ -178,19 +190,19 @@ describe("mirrorLeadToSheet — routing gates", () => {
   });
 
   it("skips when inquiry_type is 'general' (no menu choice yet)", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "general" }), error: null })]);
+    setupClient({ inquiry_type: "general" });
     await mirrorLeadToSheet(CLIENT_ID);
     expect(mockUpsertLeadRow).not.toHaveBeenCalled();
   });
 
   it("skips when inquiry_type is null", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: null }), error: null })]);
+    setupClient({ inquiry_type: null });
     await mirrorLeadToSheet(CLIENT_ID);
     expect(mockUpsertLeadRow).not.toHaveBeenCalled();
   });
 
   it("skips a meeting request before the existing/new sub-choice (client_type null)", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ inquiry_type: "meeting", client_type: null }), error: null })]);
+    setupClient({ inquiry_type: "meeting", client_type: null });
     await mirrorLeadToSheet(CLIENT_ID);
     expect(mockUpsertLeadRow).not.toHaveBeenCalled();
   });
@@ -207,7 +219,7 @@ describe("mirrorLeadToSheet — edge and error paths", () => {
   });
 
   it("skips when the client has no phone", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({ phone: null }), error: null })]);
+    setupClient({ phone: null });
     await mirrorLeadToSheet(CLIENT_ID);
     expect(mockUpsertLeadRow).not.toHaveBeenCalled();
   });
@@ -218,8 +230,31 @@ describe("mirrorLeadToSheet — edge and error paths", () => {
     expect(mockUpsertLeadRow).not.toHaveBeenCalled();
   });
 
+  it("a failed client read is logged as the DB error it is, not as 'client not found'", async () => {
+    const error = { message: 'column "intake_started_at" does not exist', code: "42703" };
+    setupFromSequence([makeBuilder({ data: null, error })]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+    const { logger } = await import("../../../config/logger.js");
+    expect(logger.error).toHaveBeenCalledWith({ clientId: CLIENT_ID, error }, "leads-mirror: client read failed — skipping");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("a failed documents read writes nothing, so the links already in col D are never blanked", async () => {
+    const error = { message: "Connection terminated unexpectedly" };
+    setupFromSequence([makeBuilder({ data: clientRow({}), error: null }), makeBuilder({ data: null, error })]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+    const { logger } = await import("../../../config/logger.js");
+    expect(logger.error).toHaveBeenCalledWith({ clientId: CLIENT_ID, error }, "leads-mirror: documents read failed — skipping");
+  });
+
   it("never throws even if upsertLeadRow throws", async () => {
-    setupFromSequence([makeBuilder({ data: clientRow({}), error: null })]);
+    setupClient({});
     mockUpsertLeadRow.mockRejectedValue(new Error("sheets API down"));
     await expect(mirrorLeadToSheet(CLIENT_ID)).resolves.toBeUndefined();
   });
@@ -238,77 +273,161 @@ describe("mirrorLeadToSheet — edge and error paths", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Documents captured mid-intake: a lead who sent a file before choosing a menu
-// option still needs a row, since the sheet is the only place the link surfaces.
+// Column D = every file the lead sent (documents rows, oldest first). A lead who
+// sent a file in this inquiry before choosing a menu option still needs a row, since
+// the sheet is the only place the links surface.
 // ---------------------------------------------------------------------------
 
-describe("mirrorLeadToSheet — photo-bearing lead with no menu choice", () => {
+describe("mirrorLeadToSheet — column D from documents", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUpsertLeadRow.mockResolvedValue(true);
   });
 
-  it("'general' + an id_photo_url → row IS written, col C blank, into the new-leads tab", async () => {
-    setupFromSequence([
-      makeBuilder({
-        data: clientRow({
-          inquiry_type: "general",
-          id_photo_url: "https://drive.google.com/file/d/cap/view",
-        }),
-        error: null,
-      }),
+  it("joins every document link oldest-first, one per line", async () => {
+    setupClient({ inquiry_type: "vehicle" }, ["https://drive/1", "https://drive/2", "https://drive/3"]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
+    expect(row[3]).toBe("https://drive/1\nhttps://drive/2\nhttps://drive/3");
+  });
+
+  it("reads documents ordered by created_at ascending", async () => {
+    const docs = makeBuilder(docsResult(["https://drive/1"]));
+    setupFromSequence([makeBuilder({ data: clientRow({}), error: null }), docs]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(docs["eq"]).toHaveBeenCalledWith("client_id", CLIENT_ID);
+    expect(docs["order"]).toHaveBeenCalledWith("created_at", { ascending: true });
+  });
+
+  it("'general' + a document from this inquiry → row IS written, col C blank, into the new-leads tab", async () => {
+    setupClientDocsAt({ inquiry_type: "general" }, [
+      ["https://drive.google.com/file/d/cap/view", "2026-10-04T07:05:00.000Z"],
     ]);
 
     await mirrorLeadToSheet(CLIENT_ID);
 
     expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
-    const [row, tab] = mockUpsertLeadRow.mock.calls[0] as [string[], string];
-    expect(row[2]).toBe(""); // C inquiry — still unknown
-    expect(row[3]).toBe("https://drive.google.com/file/d/cap/view"); // D link
+    const [row, tab, opts] = mockUpsertLeadRow.mock.calls[0] as [string[], string, { setOnceColumns: number[] }];
+    expect(row[2]).toBe("");
+    expect(row[3]).toBe("https://drive.google.com/file/d/cap/view");
     expect(tab).toBe("לידים חדשים");
+    expect(opts.setOnceColumns).toEqual([2, 5, 6]);
   });
 
-  it("null inquiry_type + an id_photo_url → row IS written", async () => {
-    setupFromSequence([
-      makeBuilder({
-        data: clientRow({ inquiry_type: null, id_photo_url: "https://drive.google.com/x" }),
-        error: null,
-      }),
-    ]);
+  it("still skips 'general' when there is no document", async () => {
+    setupClient({ inquiry_type: "general" }, []);
     await mirrorLeadToSheet(CLIENT_ID);
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+
+  it("a returning lead back on 'general' whose files all predate this inquiry → no row (they sit on the previous inquiry's row)", async () => {
+    setupClientDocsAt({ inquiry_type: "general" }, [
+      ["https://drive/old-id", "2026-09-20T08:00:00.000Z"],
+      ["https://drive/old-2", "2026-10-04T06:58:59.000Z"], // 61 s before intake_started_at
+    ]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+
+  it("a returning lead's new file opens the row, and col D still lists every link, old ones included", async () => {
+    setupClientDocsAt({ inquiry_type: "general" }, [
+      ["https://drive/old-id", "2026-09-20T08:00:00.000Z"],
+      ["https://drive/new", "2026-10-04T07:05:00.000Z"],
+    ]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
+    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
+    const [row] = mockUpsertLeadRow.mock.calls[0] as [string[]];
+    expect(row[3]).toBe("https://drive/old-id\nhttps://drive/new");
+  });
+
+  it("a file that raced the restart stamp (under 1 min before intake_started_at) still counts", async () => {
+    setupClientDocsAt({ inquiry_type: "general" }, [["https://drive/raced", "2026-10-04T06:59:30.000Z"]]);
+
+    await mirrorLeadToSheet(CLIENT_ID);
+
     expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
   });
 
-  it("guards col C as set-once while the inquiry is unknown (returning lead keeps its label)", async () => {
-    setupFromSequence([
-      makeBuilder({
-        data: clientRow({ inquiry_type: "general", id_photo_url: "https://drive.google.com/x" }),
-        error: null,
-      }),
-    ]);
+  it("a pre-migration lead (no intake_started_at) on 'general' with a file still gets a row: created_at stands in", async () => {
+    setupClient({ inquiry_type: "general", intake_started_at: null }, ["https://drive/x"]);
+
     await mirrorLeadToSheet(CLIENT_ID);
-    const [, , opts] = mockUpsertLeadRow.mock.calls[0] as [string[], string, { setOnceColumns: number[] }];
-    expect(opts).toEqual({ setOnceColumns: [2, 5, 6] });
+
+    expect(mockUpsertLeadRow).toHaveBeenCalledOnce();
   });
 
   it("a known inquiry still overwrites col C (setOnce stays [5,6])", async () => {
-    setupFromSequence([
-      makeBuilder({
-        data: clientRow({ inquiry_type: "vehicle", id_photo_url: "https://drive.google.com/x" }),
-        error: null,
-      }),
-    ]);
+    setupClient({ inquiry_type: "vehicle" }, ["https://drive/x"]);
     await mirrorLeadToSheet(CLIENT_ID);
     const [row, , opts] = mockUpsertLeadRow.mock.calls[0] as [string[], string, { setOnceColumns: number[] }];
     expect(row[2]).toBe("ביטוח רכב");
-    expect(opts).toEqual({ setOnceColumns: [5, 6] });
+    expect(opts.setOnceColumns).toEqual([5, 6]);
   });
 
-  it("still skips 'general' when there is no document yet", async () => {
-    setupFromSequence([
-      makeBuilder({ data: clientRow({ inquiry_type: "general", id_photo_url: null }), error: null }),
-    ]);
+  it("falls back to created_at as startedAt when intake_started_at is null (pre-migration clients)", async () => {
+    setupClient({ intake_started_at: null });
     await mirrorLeadToSheet(CLIENT_ID);
+    const [, , opts] = mockUpsertLeadRow.mock.calls[0] as [string[], string, { startedAt: Date }];
+    expect(opts.startedAt).toEqual(new Date("2026-09-01T08:00:00.000Z"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One-off backfill: re-mirror every client that has at least one document
+// ---------------------------------------------------------------------------
+
+describe("backfillLeadDocuments", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpsertLeadRow.mockResolvedValue(true);
+  });
+
+  it("mirrors each distinct client once, in order", async () => {
+    const docsList = makeBuilder({
+      data: [{ client_id: "c1" }, { client_id: "c2" }, { client_id: "c1" }],
+      error: null,
+    });
+    // After the documents listing, each mirrorLeadToSheet does clients → documents.
+    setupFromSequence([
+      docsList,
+      makeBuilder({ data: clientRow({}), error: null }),
+      makeBuilder(docsResult(["https://drive/a"])),
+      makeBuilder({ data: clientRow({ phone: "972509999999" }), error: null }),
+      makeBuilder(docsResult(["https://drive/b"])),
+    ]);
+
+    const result = await backfillLeadDocuments();
+
+    expect(result).toEqual({ clients: 2 });
+    expect(mockUpsertLeadRow).toHaveBeenCalledTimes(2);
+    expect((mockUpsertLeadRow.mock.calls[0] as [string[]])[0][0]).toBe("972501234567");
+    expect((mockUpsertLeadRow.mock.calls[1] as [string[]])[0][0]).toBe("972509999999");
+  });
+
+  it("no documents → nothing mirrored", async () => {
+    setupFromSequence([makeBuilder({ data: [], error: null })]);
+    const result = await backfillLeadDocuments();
+    expect(result).toEqual({ clients: 0 });
     expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+  });
+
+  it("a failed documents listing fails the run instead of reporting success with 0 clients", async () => {
+    const error = { message: "Connection terminated unexpectedly" };
+    setupFromSequence([makeBuilder({ data: null, error })]);
+
+    await expect(backfillLeadDocuments()).rejects.toMatchObject({ statusCode: 500, code: "LEADS_BACKFILL_READ_FAILED" });
+
+    expect(mockUpsertLeadRow).not.toHaveBeenCalled();
+    const { logger } = await import("../../../config/logger.js");
+    expect(logger.error).toHaveBeenCalledWith({ error }, "leads-mirror: backfill documents read failed");
+    expect(logger.info).not.toHaveBeenCalled();
   });
 });

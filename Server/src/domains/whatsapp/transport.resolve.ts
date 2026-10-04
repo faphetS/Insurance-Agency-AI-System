@@ -143,6 +143,7 @@ export async function dispatchConversationalSend(
 
 function inboundMirrorText(payload: MessagePayload): string | null {
   if (payload.kind === "text") return payload.buttonTitle ?? payload.text;
+  if (payload.kind === "other") return payload.label;
   const label = payload.kind === "image" ? "[תמונה]" : "[מסמך]";
   return payload.caption ? `${label}\n${payload.caption}` : label;
 }

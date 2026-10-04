@@ -8,6 +8,15 @@
 > of the "אחר" (Other) opening-menu button** (§3.1 — menu is now 8 buttons; `other` stays a valid
 > legacy `inquiry_type` value, no longer offerable).
 >
+> **2026-10-04 (lead ID capture v2):** every image a lead sends, at any step and even while the bot
+> is paused, is silently run through the strict ID check (card + ספח in one photo); a valid ID fills
+> the sheet's ID-number column, everything else is archived as a plain file (one exception: an image
+> the button-8 `id_photo` step itself rejects is not kept — that step asks for a resend, as before).
+> Column D lists **every** Drive link (one
+> per line); a returning lead gets a **new sheet row per inquiry** (`clients.intake_started_at`);
+> voice notes/video/stickers/locations/contacts arrive as placeholders instead of being dropped; a
+> menu tap right after the 24h cooldown is honoured.
+>
 > **📍 The two bots each have a dedicated deep-dive doc — read those for feature-level detail:**
 > - **`.claude/CONVERSATIONAL_BOT.md`** — the customer-facing WhatsApp intake bot (v4.1 state machine,
 >   staff-email routing, lead mirror, control switches).
@@ -144,7 +153,13 @@ Single front door (`POST /api/whatsapp/webhook`). Always returns 200 fast; real 
 returns `{ kind: "image"|"document", fileUrl, ... }` — the URL is fetched server-side later (e.g. for
 Drive upload). Button taps are extracted from `interactiveButtonsResponse.selectedId` /
 `templateButtonReplyMessage.selectedId` / `buttonsResponseMessage.selectedButtonId` (all three shapes
-are checked in order against both the Zod-parsed payload and the raw body).
+are checked in order against both the Zod-parsed payload and the raw body). Any other Meta type
+(audio/voice note, video, sticker, location, contacts, unknown) becomes `{kind:"other", label}` —
+stored with a Hebrew placeholder, mirrored to Chatwoot, and answered with the slot's normal re-prompt.
+Template quick-reply taps (type `button`) are treated as button taps. Only `reaction`,
+`request_welcome` and `system` (Meta's notice that the lead changed number or identity) are
+ignored: they are not messages. A `system` notice is logged at info with its `wamid` and subtype
+only, never its body (profile name and both numbers).
 
 ---
 
@@ -195,24 +210,38 @@ All prompts in Hebrew, masculine-generic (Didi's style), no emojis in client mes
   **New** → advance to `consent`, stamp `clients.consent_prompted_at`
   (starts the 3h stall clock, §3.6) and clear `stall_notified_at`.
 - **consent** — single button `consent_approve` "מאשר" (data-pull consent: מסלקה פנסיונית + הר הביטוח).
-  Advances **only on a real button TAP** (`payload.isButtonReply` set by `extractPayload`'s
-  button-response branch); typed "מאשר" or anything else → re-prompt
+  Advances **only on a TAP of that button** (`payload.isButtonReply` with id `consent_approve`); typed
+  "מאשר", a tap on an agent template's quick-reply (even one reading "מאשר" — the label match was
+  removed 2026-10-04), or anything else → re-prompt
   `'כדי להמשיך, יש ללחוץ על כפתור "מאשר"'`. If the buttons-send fell back to a text list, tapping is
   impossible → the stall alert is the designed safety net.
-- **id_photo** — image only. `validateIdPhoto()` is **lenient**: any readable government ID passes
-  (the ספח is requested in the prompt but its absence never invalidates); extracts `idNumber` +
-  **`fullName` as printed on the ID**. On success: bytes fetched from the GreenAPI `downloadUrl` →
+- **id_photo** — image only. `validateIdPhoto()` is **STRICT** (since `7e8ec05`, 2026-07-14): the
+  photo must show BOTH the תעודת זהות AND its ספח; the ID number is normalised as an Israeli ת"ז
+  (8–9 digits, check digit) or left null; `fullName` is read from the ID. Invalid → the fixed Hebrew
+  re-ask. On success: bytes fetched from the GreenAPI `downloadUrl` →
   **Google Drive** upload named `"<OCR name> - ID"` (fallback: phone digits) → `documents` row +
   `clients.id_photo_url`/`id_number`/`id_validated=true`, and `full_name` is **upgraded to the OCR
   name**. Then booking-link terminal → `endFlow('meeting_scheduling')` — **silent completion** (the
-  Sheet row + Drive file are the record). Invalid/unreadable → Hebrew `{reason}` re-prompt.
+  Sheet row + Drive file are the record).
 - **`endFlow(pipelineStage)`** (replaces the old finalize/finalizeRepresentative) — sets
   `intake_state='completed'`, slot `done`, `intake_completed_at`, `pipeline_stage` (`new_lead` for
   buttons 1-7, `meeting_scheduling` for the button-8 terminals), mirrors the lead, and pauses the
   conversation for a **24h cooldown** (`bot_paused=true`, `bot_paused_until=now+24h`) — NOT permanent.
+- **Universal file capture (v2, 2026-10-04) — `ai/intake-media.ts` `captureLeadFile`, called from
+  `inbound.pipeline.ts` right after `handleIntake` for every image/document from a linked client,
+  detached, regardless of pause/kill-switch/slot. The only file it skips is an image the `id_photo`
+  step took itself (`fileHandled`: that step uploads an accepted one and re-asks for a rejected one);
+  a document at that step, or a file sent while the step is paused/off/skipped, is captured:** images
+  (incl. photos sent as files) go through `validateIdPhoto`; a valid ID → Drive file
+  `<OCR name> - ID.<ext>`, `documents.type='id_photo'`, `clients.id_photo_url` + `id_number` +
+  `id_validated=true` (both only if the number passed the check digit) + `full_name` upgraded;
+  anything else → `documents.type='other'`. Every capture re-mirrors the sheet. The lead is never
+  told anything by this path.
 - **Fresh restart:** a message from a completed client after the cooldown expired (or after a manual
   unpause) resets intake (`collecting`/`welcome`, clears consent/stall/completed stamps) and re-runs
-  the menu in the same call. No meetings row and no complexity classification exist anymore.
+  the menu in the same call. The restart stamps `clients.intake_started_at`; if the first
+  post-cooldown message is a menu button (id or label) it is processed as that choice instead of
+  re-sending the menu. No meetings row and no complexity classification exist anymore.
 
 **Removed in v4:** slots `client_type`/`inquiry_type`(as a slot)/`issue`/`action_choice`/`full_name`/
 `email`/`poa`; the department-routing WhatsApp ping (`department-routing.ts` deleted —
@@ -617,12 +646,14 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   `inquiry_type` incl. `callback`/`meeting`, `consent_prompted_at`/`stall_notified_at`, `id_number`,
   `id_validated`, `full_name` upgraded to the OCR name, `pipeline_stage`, `intake_completed_at`).
   On each advance + at `endFlow` → **Google Sheet** row (every branch, single tab, §10).
-- **ID photo** → **Google Drive** (anyone-with-link, `"<OCR name> - ID"`) **+** `documents` row
-  (`file_url`=webViewLink) **+** `clients.id_photo_url`/`id_number`. **`endFlow`** → `clients`
-  (completed, `pipeline_stage='new_lead'|'meeting_scheduling'`) **+** `conversations.bot_paused=true` /
-  `bot_paused_until=now+24h`. No `meetings` insert, no POA path anymore. **Bot replies** → `messages`
-  (`sent_by='bot'`). **Staff lead email** (buttons 1-6) → Gmail (or pm2 log in `log` mode); **callback/
-  stall alerts** → Didi's WhatsApp (not stored as our `messages`).
+- **Any file from a lead** → Google Drive + `documents` row (type `id_photo` / `other`); a verified ID
+  also → `clients.id_photo_url`/`id_number`/`id_validated`/`full_name`. **Sheet column D** = every
+  `documents.file_url` of the client, one per line (rebuilt on each sync, never deleted).
+- **`endFlow`** → `clients` (completed, `pipeline_stage='new_lead'|'meeting_scheduling'`) **+**
+  `conversations.bot_paused=true` / `bot_paused_until=now+24h`. No `meetings` insert, no POA path
+  anymore. **Bot replies** → `messages` (`sent_by='bot'`). **Staff lead email** (buttons 1-6) → Gmail
+  (or pm2 log in `log` mode); **callback/stall alerts** → Didi's WhatsApp (not stored as our
+  `messages`).
 - **Booking sync (re-enabled v4.1)** → `system_settings.google_calendar_last_sync`; `meetings` —
   always a fresh INSERT per event (`calendar_event_id` partial-unique, `scheduled_at`,
   `status='scheduled'`, `type=zoom|google_meet`, latest conversation attached); `clients`
@@ -735,10 +766,20 @@ Refresh token in `system_settings.google_ws_refresh_token`. Routes
 `sendOwnerEmail` (the client-summary and staff-mention emails) and the Gmail sent-mail scan.
 
 **During intake (the Drive upload path in §3.1, v4):**
-- **ID photo** (only after the lenient OCR passes) is uploaded to Drive folder `LEADS_DRIVE_FOLDER_ID`
-  as `"<OCR name> - ID"` (fallback: phone digits), set **anyone-with-link** reader. The Drive
-  `webViewLink` is stored in `clients.id_photo_url` **and** `documents.file_url`. On Drive/fetch
-  failure the bot re-prompts a resend (no data loss). The POA upload path is gone with the `poa` slot.
+- **Universal file capture (v2, 2026-10-04) — `ai/intake-media.ts` `captureLeadFile`, called from
+  `inbound.pipeline.ts` right after `handleIntake` for every image/document from a linked client,
+  detached, regardless of pause/kill-switch/slot. The only file it skips is an image the `id_photo`
+  step took itself (`fileHandled`: that step uploads an accepted one and re-asks for a rejected one);
+  a document at that step, or a file sent while the step is paused/off/skipped, is captured:** images
+  (incl. photos sent as files) go through `validateIdPhoto`; a valid ID → Drive file
+  `<OCR name> - ID.<ext>`, `documents.type='id_photo'`, `clients.id_photo_url` + `id_number` +
+  `id_validated=true` (both only if the number passed the check digit) + `full_name` upgraded;
+  anything else → `documents.type='other'`. Every capture re-mirrors the sheet. The lead is never
+  told anything by this path.
+- Uploads go to Drive folder `LEADS_DRIVE_FOLDER_ID`, set **anyone-with-link** reader; the Drive
+  `webViewLink` is stored in `documents.file_url` (and, for a valid ID, `clients.id_photo_url`). On a
+  Drive/fetch failure the `id_photo` step re-prompts a resend; the silent capture only logs it. The
+  POA upload path is gone with the `poa` slot.
 
 **Lead row mirror — `mirrorLeadToSheet(clientId)`** (v4 rewrite; called on each slot advance + at
 `endFlow`, EVERY branch, best-effort, never blocks intake):
@@ -747,18 +788,30 @@ Refresh token in `system_settings.google_ws_refresh_token`. Routes
   The bot never *appends* to `לא רלוונטי` (`LEADS_SHEET_TAB_IRRELEVANT`, new env 2026-07-10) — rows only
   arrive there via the relevance mover below. Tab titles resolved against live metadata (trim-match) and
   cached in `system_settings.leads_sheet_tab_resolved:<tab>` (+ `leads_sheet_gid:<title>` for sheetIds).
-- **7 columns A→G:** phone · name (`displayName` — blank if the WA name is just the phone) · inquiry
-  type (1-6, plus legacy `other` via the grace path → Hebrew via `INQUIRY_TYPE_HE`; `callback` → `בקשת שיחה חוזרת`; `meeting` →
-  `תיאום פגישה — לקוח קיים/חדש` per `client_type`; `general` → blank) · ID-photo Drive URL · ID number ·
-  רלוונטיות (**human-owned dropdown**, bot writes blank — see mover below) · creation date
-  `DD/MM/YYYY HH:mm` Asia/Jerusalem. **Set-once columns `[5, 6]`** (2026-07-10, was `[6]`): a
-  manually-picked relevance value AND the creation date survive every re-mirror.
-- **Idempotency is phone-based across ALL 3 tabs** (2026-07-10): `upsertLeadRow` batch-reads column A of
+  **A lead with no menu choice yet** gets a row only if it sent a file **in the current inquiry**
+  (a `documents` row created since `intake_started_at`, −1 min): new-leads tab, column C blank.
+- **7 columns A→G:** A phone · B name · C inquiry · D every Drive link (newline-separated, wrap) · E ID
+  number (check-digit verified) · F relevance · G creation date. B = `displayName` (blank if the WA
+  name is just the phone); C = inquiry type (1-6, plus legacy `other` via the grace path → Hebrew via
+  `INQUIRY_TYPE_HE`; `callback` → `בקשת שיחה חוזרת`; `meeting` → `תיאום פגישה — לקוח קיים/חדש` per
+  `client_type`; `general` → blank); F = רלוונטיות (**human-owned dropdown**, bot writes blank — see
+  mover below); G = `DD/MM/YYYY HH:mm` Asia/Jerusalem. **Set-once columns `[5, 6]`** (2026-07-10, was
+  `[6]`): a manually-picked relevance value AND the creation date survive every re-mirror. While the
+  inquiry is still unknown (no menu choice) it is **`[2, 5, 6]`**, so a returning lead never blanks the
+  label already in column C.
+- **Idempotency is phone-based across ALL 3 tabs** (2026-07-10): `upsertLeadRow` batch-reads `A:G` of
   `[target, new, existing, irrelevant]` (deduped by trim, target first) and updates the row **in the tab
-  where it lives** — a returning lead you already triaged into `לקוח קיים`/`לא רלוונטי` is updated in
-  place there, never duplicated into new-leads. Appends to the target tab only when the phone is found
-  nowhere. All same-process sheet writers are serialized by `withSheetLock` (`sheets-lock.ts`). (The
-  `clients.mirrored_to_sheet_at` column is **not** used by this code.)
+  where it lives** — a current-inquiry row you already triaged into `לקוח קיים`/`לא רלוונטי` is updated
+  in place there, never duplicated into new-leads. Appends to the target tab when the phone is found
+  nowhere or its newest row belongs to an earlier inquiry (next bullet). All same-process sheet writers
+  are serialized by `withSheetLock` (`sheets-lock.ts`). (The `clients.mirrored_to_sheet_at` column is
+  **not** used by this code.)
+- **One row per inquiry (2026-10-04):** `upsertLeadRow` matches the phone in canonical form (05x ≡
+  972…) across the 3 tabs, picks the NEWEST row by col G, and updates it only if it was created
+  at/after `clients.intake_started_at` (−1 min); otherwise it appends a fresh row. A client with a NULL
+  `intake_started_at` (created before 2026-10-05) falls back to `created_at`, so it keeps updating its
+  existing row until its next post-cooldown restart. A 400/404 from Sheets wipes the `leads_sheet_*`
+  cache and retries once. Backfill: `POST /api/operations/leads-backfill/run`.
 - One-time restructure script (7 headers on all 3 tabs + test-row wipe):
   `scripts/oneoff/restructure-crm-sheet.mjs` (run on the VPS).
 

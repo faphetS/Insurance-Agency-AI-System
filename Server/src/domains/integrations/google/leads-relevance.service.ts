@@ -12,6 +12,8 @@ import {
   appendLeadRow,
   quoteA1Title,
   relevanceValidationRule,
+  isRangeError,
+  invalidateLeadsSheetCache,
 } from "./google.sheets.js";
 import { withSheetLock } from "./sheets-lock.js";
 
@@ -104,6 +106,9 @@ export async function applyRelevanceDropdowns(): Promise<{ tabsApplied: number }
     logger.info({ tabsApplied: tabs.length }, "leads-relevance: dropdowns applied");
     return { tabsApplied: tabs.length };
   } catch (err) {
+    // A tab deleted and recreated under the same title still resolves by title, but its
+    // cached sheetId is gone; drop the cache so the next sweep/apply uses the live one.
+    if (isRangeError(err)) await invalidateLeadsSheetCache();
     logger.error({ err }, "leads-relevance: applyRelevanceDropdowns failed");
     return { tabsApplied: 0 };
   }
@@ -244,6 +249,9 @@ async function runSweep(): Promise<RelevanceSweepResult> {
           moved += appended.length;
         } catch (err) {
           errors++;
+          // Stale cached sheetId (tab recreated under the same title): without this the rows
+          // would be re-appended every tick until some other write happened to refresh the gid.
+          if (isRangeError(err)) await invalidateLeadsSheetCache();
           logger.error(
             { err, tab: tabs[t]!.exactTitle },
             "leads-relevance: source rows not deleted; will re-append duplicates next tick — manual cleanup may be needed",

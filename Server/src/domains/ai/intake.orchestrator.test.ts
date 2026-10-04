@@ -6,9 +6,10 @@
  *  - meeting_type: either tap saves client_type ('old'/'new') and advances to the email ask
  *  - email: first email-looking token stored lowercased; old → booking link + 24h pause;
  *    new → consent buttons + consent_prompted_at; junk/image/button-tap → re-prompt
- *  - consent: tap-only advance; typed מאשר re-prompts
+ *  - consent: only the consent_approve tap advances; typed or template-tap מאשר re-prompts
  *  - id_photo: valid → Drive name from OCR name (phone fallback), full_name upgraded, terminal + pause
  *  - completed + unpaused → fresh menu restart
+ *  - kind:other (voice note, video, …) → each slot answers it as any non-text message
  *
  * All DB and external I/O is mocked. No live WhatsApp / email / GreenAPI calls.
  */
@@ -29,7 +30,6 @@ const {
   mockSendCallbackRequestEmail,
   mockNotifyOwner,
   mockAssignConversationForInquiry,
-  mockCaptureIntakeDocument,
 } = vi.hoisted(() => ({
   mockSendInteractiveButtons: vi.fn().mockResolvedValue({ idMessage: "btn-1" }),
   mockSendMessageWithTyping: vi.fn().mockResolvedValue({ idMessage: "txt-1" }),
@@ -44,7 +44,6 @@ const {
   mockSendCallbackRequestEmail: vi.fn().mockResolvedValue(undefined),
   mockNotifyOwner: vi.fn().mockResolvedValue(true),
   mockAssignConversationForInquiry: vi.fn().mockResolvedValue(undefined),
-  mockCaptureIntakeDocument: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../config/supabase.js", () => ({ supabaseAdmin: { from: mockFromImpl } }));
@@ -70,12 +69,6 @@ vi.mock("../../lib/storage.js", () => ({
   fetchRemoteFile: mockFetchRemoteFile,
   extFor: vi.fn(() => "jpg"),
 }));
-// Keep the real resolveInboundMedia (it drives the mocked fetchRemoteFile above); only the
-// Drive/sheet capture is stubbed, so these tests assert the wiring, not the upload itself.
-vi.mock("./intake-media.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./intake-media.js")>()),
-  captureIntakeDocument: mockCaptureIntakeDocument,
-}));
 vi.mock("../integrations/google/google.drive.js", () => ({ uploadLeadDocument: mockUploadLeadDocument }));
 vi.mock("../integrations/google/leads-mirror.service.js", () => ({ mirrorLeadToSheet: mockMirrorLeadToSheet }));
 vi.mock("./intake-notify.service.js", () => ({
@@ -90,6 +83,7 @@ vi.mock("../chatwoot/chatwoot.assign.js", () => ({
 
 import { handleIntake } from "./intake.orchestrator.js";
 import { env } from "../../config/env.js";
+import { logger } from "../../config/logger.js";
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
 
 function makeBuilder(result: unknown) {
@@ -124,6 +118,7 @@ const imagePayload = (): MessagePayload => ({
   fileName: "img.jpg",
   caption: undefined,
 });
+const voicePayload = (): MessagePayload => ({ kind: "other", subtype: "audio", label: "[הודעה קולית]" });
 
 const BOT_ENABLED = { data: { enabled: true }, error: null };
 const CONV_ACTIVE = { data: { bot_paused: false, bot_paused_until: null }, error: null };
@@ -139,7 +134,6 @@ beforeEach(() => {
   mockSendMessageWithTyping.mockResolvedValue({ idMessage: "txt" });
   mockSendFileByUrl.mockResolvedValue({ idMessage: "file" });
   mockMirrorLeadToSheet.mockResolvedValue(undefined);
-  mockCaptureIntakeDocument.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -200,6 +194,58 @@ describe("menu slot — free-text / image re-prompt", () => {
 
     expect(result.consumed).toBe(true);
     expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
+  });
+
+  it("voice note at menu → same re-prompt as any non-text message", async () => {
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
+
+    const result = await handleIntake("conv1", "client1", "chat1@c.us", voicePayload());
+
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// kind:other at every other slot — the same answer as any non-text message
+// ---------------------------------------------------------------------------
+
+describe("kind:other (voice note) at the other slots", () => {
+  it.each<[string, string, { consumed: boolean; fileHandled?: boolean }]>([
+    ["meeting_type", "אנא בחר אחת מהאפשרויות בתפריט למעלה", { consumed: true }],
+    ["email", "לא זיהינו כתובת מייל תקינה. נא לשלוח כתובת מייל, לדוגמה: name@example.com", { consumed: true }],
+    ["consent", 'כדי להמשיך, יש ללחוץ על כפתור "מאשר"', { consumed: true }],
+    // fileHandled is reported only for an image the step took.
+    [
+      "id_photo",
+      "תודה, לצורך הזמנת הנתונים נשמח לקבל צילום תעודת הזהות שלך (כולל ספח)",
+      { consumed: true, fileHandled: false },
+    ],
+  ])("%s → that slot's re-prompt, nothing advanced", async (slot, reprompt, expected) => {
+    const next = makeBuilder({ data: null, error: null });
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState(slot)), next]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", voicePayload());
+
+    expect(result).toEqual(expected);
+    expect(mockSendMessageWithTyping).toHaveBeenCalledOnce();
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe(reprompt);
+    expect(next["update"]).not.toHaveBeenCalled();
+    expect(mockValidateIdPhoto).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, ReturnType<typeof clientState>]>([
+    ["welcome", clientState("welcome")],
+    ["done (first message after the cooldown)", clientState("done", "completed")],
+  ])("%s → the opening menu, as for free text", async (_label, state) => {
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(state), makeBuilder({ data: null, error: null })]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", voicePayload());
+
+    expect(result.consumed).toBe(true);
+    expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
+    const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
+    expect(buttons).toHaveLength(8);
   });
 });
 
@@ -601,19 +647,17 @@ describe("consent slot — tap-only advance", () => {
     expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toContain("צילום תעודת הזהות");
   });
 
-  it("tap by Hebrew label 'מאשר' (isButtonReply) → also advances", async () => {
-    const updateSlot = makeBuilder({ data: null, error: null });
-    setupFrom([
-      makeBuilder(BOT_ENABLED),
-      makeBuilder(CONV_ACTIVE),
-      makeBuilder(clientState("consent")),
-      updateSlot,
-      makeBuilder({ data: null, error: null }),
-    ]);
+  it("agent template quick-reply reading 'מאשר' (isButtonReply, label as text) → re-prompt, no advance", async () => {
+    const next = makeBuilder({ data: null, error: null });
+    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("consent")), next]);
 
-    await handleIntake("conv", "client", "chat@c.us", buttonPayload("מאשר"));
+    const templateTap: MessagePayload = { kind: "text", text: "מאשר", isButtonReply: true, buttonTitle: "מאשר" };
+    const result = await handleIntake("conv", "client", "chat@c.us", templateTap);
 
-    expect((updateSlot["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ intake_current_slot: "id_photo" });
+    expect(result.consumed).toBe(true);
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe('כדי להמשיך, יש ללחוץ על כפתור "מאשר"');
+    expect(next["update"]).not.toHaveBeenCalled();
+    expect(mockMirrorLeadToSheet).not.toHaveBeenCalled();
   });
 });
 
@@ -622,9 +666,12 @@ describe("consent slot — tap-only advance", () => {
 // ---------------------------------------------------------------------------
 
 describe("id_photo slot", () => {
-  function setupIdPhoto(contactData: { full_name: string | null; phone: string }) {
+  function setupIdPhoto(
+    contactData: { full_name: string | null; phone: string },
+    docResult: unknown = { data: null, error: null },
+  ) {
     const contact = makeBuilder({ data: contactData, error: null });
-    const docInsert = makeBuilder({ data: null, error: null });
+    const docInsert = makeBuilder(docResult);
     const updatePhoto = makeBuilder({ data: null, error: null });
     const persist = makeBuilder({ data: null, error: null });
     const endUpdate = makeBuilder({ data: null, error: null });
@@ -644,7 +691,7 @@ describe("id_photo slot", () => {
   }
 
   it("valid ID → Drive name from OCR name, full_name upgraded, terminal #11 + pause", async () => {
-    mockValidateIdPhoto.mockResolvedValue({ valid: true, hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: "משה לוי" });
+    mockValidateIdPhoto.mockResolvedValue({ valid: true, hasIdCard: true, hasAppendix: true, idNumber: "123456782", fullName: "משה לוי" });
     mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
     mockUploadLeadDocument.mockResolvedValue({ fileId: "d1", webViewLink: "https://drive/x" });
 
@@ -663,7 +710,7 @@ describe("id_photo slot", () => {
     expect((updatePhoto["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
       id_photo_url: "https://drive/x",
       id_validated: true,
-      id_number: "123456789",
+      id_number: "123456782",
       full_name: "משה לוי",
     });
     const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
@@ -671,6 +718,31 @@ describe("id_photo slot", () => {
     expect(sent).toContain("https://example.com/book-new");
     expect((convPause["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({ bot_paused: true });
     expect(mockNotifyOwner).not.toHaveBeenCalled(); // silent completion
+    // The step uploaded it itself: the pipeline must not archive it a second time.
+    expect(result.fileHandled).toBe(true);
+  });
+
+  it("documents insert fails → logged without the number or name; the lead still gets the completion", async () => {
+    mockValidateIdPhoto.mockResolvedValue({ valid: true, hasIdCard: true, hasAppendix: true, idNumber: "123456782", fullName: "משה לוי" });
+    mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
+    mockUploadLeadDocument.mockResolvedValue({ fileId: "d1", webViewLink: "https://drive/x" });
+    setupIdPhoto(
+      { full_name: "old", phone: "972501234567" },
+      { data: null, error: { code: "XX000", message: "boom", details: "Failing row contains (123456782, משה לוי)" } },
+    );
+
+    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(logger.error).toHaveBeenCalledWith(
+      { clientId: "client", fileId: "d1", code: "XX000", message: "boom" },
+      "intake: id_photo documents insert failed — file is in Drive but not listed in column D",
+    );
+    const logged = JSON.stringify(
+      [logger.info, logger.warn, logger.error, logger.debug].map((fn) => vi.mocked(fn).mock.calls),
+    );
+    expect(logged).not.toContain("123456782");
+    expect(logged).not.toContain("משה לוי");
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toContain("תודה רבה! קיבלנו את כל הפרטים");
   });
 
   it("GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT unset → completion message falls back to GOOGLE_CALENDAR_BOOKING_URL", async () => {
@@ -678,7 +750,7 @@ describe("id_photo slot", () => {
     (env as { GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT?: string }).GOOGLE_CALENDAR_BOOKING_URL_NEW_CLIENT =
       undefined;
     try {
-      mockValidateIdPhoto.mockResolvedValue({ valid: true, hasIdCard: true, hasAppendix: true, idNumber: "123456789", fullName: "משה לוי" });
+      mockValidateIdPhoto.mockResolvedValue({ valid: true, hasIdCard: true, hasAppendix: true, idNumber: "123456782", fullName: "משה לוי" });
       mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
       mockUploadLeadDocument.mockResolvedValue({ fileId: "d1", webViewLink: "https://drive/x" });
 
@@ -719,12 +791,54 @@ describe("id_photo slot", () => {
       makeBuilder({ data: null, error: null }),
     ]);
 
-    await handleIntake("conv", "client", "chat@c.us", imagePayload());
+    const result = await handleIntake("conv", "client", "chat@c.us", imagePayload());
 
     const sent = mockSendMessageWithTyping.mock.calls[0]?.[1] as string;
     expect(sent).toContain("הספח");
     expect(sent).toContain("תעודת הזהות");
     expect(mockUploadLeadDocument).not.toHaveBeenCalled();
+    // A rejected photo is the step's too (it asked for another): the OCR-gated flow is kept.
+    expect(result.fileHandled).toBe(true);
+  });
+
+  it.each<[string, MessagePayload]>([
+    ["a PDF scan", { kind: "document", mediaId: "m-pdf", mimeType: "application/pdf", fileName: "id.pdf" }],
+    ["a photo sent as a file", { kind: "document", mediaId: "m-file", mimeType: "image/jpeg", fileName: "IMG_1.jpg" }],
+  ])("%s at id_photo → ID prompt again, file not taken, so the pipeline archives it", async (_label, payload) => {
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("id_photo")),
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", payload);
+
+    expect(result).toEqual({ consumed: true, fileHandled: false });
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toContain("צילום תעודת הזהות");
+    expect(mockValidateIdPhoto).not.toHaveBeenCalled();
+    expect(mockUploadLeadDocument).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, ReturnType<typeof makeBuilder>[]]>([
+    ["the bot is off", [makeBuilder({ data: { enabled: false }, error: null })]],
+    [
+      "the conversation is paused (staff takeover)",
+      [
+        makeBuilder(BOT_ENABLED),
+        makeBuilder({ data: { bot_paused: true, bot_paused_until: "2999-01-01T00:00:00.000Z" }, error: null }),
+      ],
+    ],
+    ["intake is skipped", [makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("id_photo", "skipped"))]],
+  ])("an ID photo at id_photo while %s → the step never runs, file not taken", async (_label, builders) => {
+    setupFrom(builders);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", imagePayload());
+
+    expect(result).toEqual({ consumed: false });
+    expect(mockFetchRemoteFile).not.toHaveBeenCalled();
+    expect(mockUploadLeadDocument).not.toHaveBeenCalled();
+    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
   });
 
   it("media download failure → resend request, OCR never runs", async () => {
@@ -780,6 +894,7 @@ describe("post-cooldown restart", () => {
     expect((reset["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
       intake_state: "collecting",
       intake_current_slot: "welcome",
+      intake_started_at: expect.any(String),
       consent_prompted_at: null,
       stall_notified_at: null,
       intake_completed_at: null,
@@ -789,6 +904,76 @@ describe("post-cooldown restart", () => {
     expect(mockSendInteractiveButtons).toHaveBeenCalledOnce();
     const [, , buttons] = mockSendInteractiveButtons.mock.calls[0] as [string, string, { buttonId: string }[]];
     expect(buttons).toHaveLength(8);
+  });
+
+  it("a menu tap as the first message after the cooldown is honoured, not answered with a new menu", async () => {
+    const reset = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("done", "completed")),
+      reset,
+      makeBuilder({ data: null, error: null }), // inquiry_type update
+      makeBuilder({ data: { phone: "972501234567", full_name: "דנה" }, error: null }), // loadContact
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", buttonPayload("vehicle"));
+
+    expect(result.consumed).toBe(true);
+    expect((reset["update"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      intake_state: "collecting",
+      intake_current_slot: "menu",
+      intake_started_at: expect.any(String),
+      inquiry_type: "general",
+    });
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+    expect(mockSendStaffLeadEmail).toHaveBeenCalledWith("vehicle", expect.anything());
+    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("תודה על פנייתך! קיבלנו את הפרטים וניצור איתך קשר בהקדם.");
+  });
+
+  it("a typed label after the cooldown counts as a tap too", async () => {
+    const reset = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("done", "completed")),
+      reset,
+      makeBuilder({ data: null, error: null }),
+    ]);
+
+    await handleIntake("conv", "client", "chat@c.us", textPayload("אשמח שדידי יחזור אליי"));
+
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+    expect(mockNotifyOwner).toHaveBeenCalledOnce();
+  });
+
+  it.each<[string, MessagePayload]>([
+    ["free text", textPayload("hi again")],
+    ["a menu tap", buttonPayload("vehicle")],
+  ])("a failed reset (%s) is logged and stops there — nothing advanced, nothing sent", async (_label, payload) => {
+    const missingColumn = 'column "intake_started_at" of relation "clients" does not exist';
+    const reset = makeBuilder({ data: null, error: { code: "42703", message: missingColumn } });
+    const next = makeBuilder({ data: null, error: null });
+    setupFrom([
+      makeBuilder(BOT_ENABLED),
+      makeBuilder(CONV_ACTIVE),
+      makeBuilder(clientState("done", "completed")),
+      reset,
+      next,
+    ]);
+
+    const result = await handleIntake("conv", "client", "chat@c.us", payload);
+
+    expect(result).toEqual({ consumed: false });
+    expect(logger.error).toHaveBeenCalledWith(
+      { conversationId: "conv", clientId: "client", code: "42703", message: missingColumn },
+      "intake: post-cooldown reset failed — not restarting",
+    );
+    expect(next["update"]).not.toHaveBeenCalled();
+    expect(mockSendInteractiveButtons).not.toHaveBeenCalled();
+    expect(mockSendMessageWithTyping).not.toHaveBeenCalled();
+    expect(mockSendStaffLeadEmail).not.toHaveBeenCalled();
   });
 });
 
@@ -845,75 +1030,5 @@ describe("entry gates", () => {
     ]);
     const result = await handleIntake("conv", "client", "chat@c.us", textPayload("hi"));
     expect(result.consumed).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Mid-intake document capture — leads send the ID instead of tapping a button
-// ---------------------------------------------------------------------------
-
-describe("mid-intake document capture", () => {
-  const docPayload = (): MessagePayload => ({
-    kind: "document",
-    mediaId: "meta-doc-1",
-    mimeType: "application/pdf",
-    fileName: "teudat.pdf",
-  });
-
-  it("image at the menu slot → captured for Drive + sheet", async () => {
-    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
-
-    await handleIntake("conv", "client", "chat@c.us", imagePayload());
-
-    expect(mockCaptureIntakeDocument).toHaveBeenCalledOnce();
-    expect(mockCaptureIntakeDocument).toHaveBeenCalledWith("client", expect.objectContaining({ kind: "image" }));
-  });
-
-  it("document at the menu slot → captured too", async () => {
-    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
-
-    await handleIntake("conv", "client", "chat@c.us", docPayload());
-
-    expect(mockCaptureIntakeDocument).toHaveBeenCalledOnce();
-    expect(mockCaptureIntakeDocument).toHaveBeenCalledWith("client", expect.objectContaining({ kind: "document" }));
-  });
-
-  it("image at the id_photo slot → NOT captured (handleIdPhoto owns the OCR-gated upload)", async () => {
-    mockFetchRemoteFile.mockResolvedValue(Buffer.from("bytes"));
-    mockValidateIdPhoto.mockResolvedValue({ valid: false, hasIdCard: true, hasAppendix: false });
-    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("id_photo")), makeBuilder({ data: null, error: null })]);
-
-    await handleIntake("conv", "client", "chat@c.us", imagePayload());
-
-    expect(mockCaptureIntakeDocument).not.toHaveBeenCalled();
-  });
-
-  it("plain text is never captured", async () => {
-    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
-
-    await handleIntake("conv", "client", "chat@c.us", textPayload("שלום"));
-
-    expect(mockCaptureIntakeDocument).not.toHaveBeenCalled();
-  });
-
-  it("a capture failure never breaks the intake reply", async () => {
-    mockCaptureIntakeDocument.mockRejectedValue(new Error("drive down"));
-    setupFrom([makeBuilder(BOT_ENABLED), makeBuilder(CONV_ACTIVE), makeBuilder(clientState("menu")), makeBuilder({ data: null, error: null })]);
-
-    const result = await handleIntake("conv", "client", "chat@c.us", imagePayload());
-
-    expect(result.consumed).toBe(true);
-    expect(mockSendMessageWithTyping.mock.calls[0]?.[1]).toBe("אנא בחר אחת מהאפשרויות בתפריט למעלה");
-  });
-
-  it("a paused conversation captures nothing (human takeover)", async () => {
-    setupFrom([
-      makeBuilder(BOT_ENABLED),
-      makeBuilder({ data: { bot_paused: true, bot_paused_until: null }, error: null }),
-    ]);
-
-    await handleIntake("conv", "client", "chat@c.us", imagePayload());
-
-    expect(mockCaptureIntakeDocument).not.toHaveBeenCalled();
   });
 });
