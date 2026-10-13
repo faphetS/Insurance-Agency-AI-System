@@ -27,6 +27,7 @@ vi.mock("./meta.transport.js", () => ({
 }));
 
 import { downloadMetaMedia, getBrandImageMediaId, invalidateBrandMediaId } from "./meta.media.js";
+import { logger } from "../../../config/logger.js";
 
 function makeBuilder(result: unknown) {
   const b: Record<string, unknown> = {};
@@ -125,16 +126,126 @@ describe("downloadMetaMedia", () => {
     expect(await downloadMetaMedia("media-1")).toBeNull();
   });
 
-  it("rejects files over the 15MB cap via Content-Length", async () => {
+  it("rejects files over Meta's 100MB cap via Content-Length", async () => {
     const mockFetch = vi
       .fn()
       .mockResolvedValueOnce(infoResponse("https://cdn.meta.example/big"))
-      .mockResolvedValueOnce(bytesResponse(Buffer.from("x"), 16 * 1024 * 1024))
+      .mockResolvedValueOnce(bytesResponse(Buffer.from("x"), 100 * 1024 * 1024 + 1))
       .mockResolvedValueOnce(infoResponse("https://cdn.meta.example/big"))
-      .mockResolvedValueOnce(bytesResponse(Buffer.from("x"), 16 * 1024 * 1024));
+      .mockResolvedValueOnce(bytesResponse(Buffer.from("x"), 100 * 1024 * 1024 + 1));
     vi.stubGlobal("fetch", mockFetch);
 
     expect(await downloadMetaMedia("media-big")).toBeNull();
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      { contentLength: String(100 * 1024 * 1024 + 1) },
+      "downloadMetaMedia: file exceeds 100MB limit",
+    );
+  });
+
+  it("accepts a file above the old 15MB cap (a large PDF)", async () => {
+    const bytes = Buffer.from("%PDF-big");
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(infoResponse("https://cdn.meta.example/pdf", "application/pdf"))
+      .mockResolvedValueOnce(bytesResponse(bytes, 40 * 1024 * 1024));
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await downloadMetaMedia("media-pdf");
+
+    expect(result?.bytes.equals(bytes)).toBe(true);
+    expect(result?.mimeType).toBe("application/pdf");
+  });
+
+  it("the media-info lookup is bounded by a 20s timeout", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(infoResponse("https://cdn.meta.example/file1"))
+        .mockResolvedValueOnce(bytesResponse(Buffer.from("b")));
+      vi.stubGlobal("fetch", mockFetch);
+
+      await downloadMetaMedia("media-1");
+
+      expect(timeoutSpy).toHaveBeenCalledWith(20_000);
+      const [, infoInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(infoInit.signal).toBe(timeoutSpy.mock.results[0]!.value);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("a media-info lookup that never answers ends as null, not a hang", async () => {
+    const timeoutError = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(timeoutError));
+
+    expect(await downloadMetaMedia("media-1")).toBeNull();
+  });
+
+  describe("download timeout", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    // Headers arrive at once; the body only ever ends by the abort signal.
+    function stalledBodyResponse(init: RequestInit) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        arrayBuffer: () =>
+          new Promise<ArrayBuffer>((_, reject) => {
+            init.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          }),
+      };
+    }
+
+    it("covers reading the body: a stalled stream is aborted after 60s and the id re-resolved", async () => {
+      const bytes = Buffer.from("fresh-bytes");
+      const signals: AbortSignal[] = [];
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(infoResponse("https://cdn.meta.example/stalls"))
+        .mockImplementationOnce((_url: string, init: RequestInit) => {
+          signals.push(init.signal!);
+          return Promise.resolve(stalledBodyResponse(init));
+        })
+        .mockResolvedValueOnce(infoResponse("https://cdn.meta.example/fresh"))
+        .mockResolvedValueOnce(bytesResponse(bytes));
+      vi.stubGlobal("fetch", mockFetch);
+
+      let settled = false;
+      const pending = downloadMetaMedia("media-1").then((r) => {
+        settled = true;
+        return r;
+      });
+
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).toBe(false);
+      expect(signals[0]!.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+
+      expect(signals[0]!.aborted).toBe(true);
+      expect(result?.bytes.equals(bytes)).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+    });
+
+    it("gives up with null when the retry stalls too", async () => {
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(infoResponse("https://cdn.meta.example/a"))
+        .mockImplementationOnce((_url: string, init: RequestInit) => Promise.resolve(stalledBodyResponse(init)))
+        .mockResolvedValueOnce(infoResponse("https://cdn.meta.example/b"))
+        .mockImplementationOnce((_url: string, init: RequestInit) => Promise.resolve(stalledBodyResponse(init)));
+      vi.stubGlobal("fetch", mockFetch);
+
+      const pending = downloadMetaMedia("media-1");
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(await pending).toBeNull();
+    });
   });
 
   it("returns null without fetching when META_ACCESS_TOKEN is blank", async () => {

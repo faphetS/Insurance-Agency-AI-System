@@ -87,7 +87,7 @@ export async function mirrorLeadToSheet(clientId: string): Promise<void> {
 
     const inquiry = c.inquiry_type;
     // A lead who sent a file in this inquiry before picking a menu option still needs a row:
-    // the sheet is the only place staff can reach the Drive links (Chatwoot shows [תמונה] only).
+    // the sheet is the only place staff can reach the Drive links (Chatwoot shows the file, not its link).
     // Files from an earlier inquiry are already on that inquiry's row, so they never open a
     // blank one. The minute of slack is upsertLeadRow's, and keeps a file that raced the
     // restart stamp.

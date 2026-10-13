@@ -1,25 +1,17 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { logger } from "../../config/logger.js";
 import type { MessagePayload } from "../whatsapp/whatsapp.validator.js";
-import { fetchRemoteFile, extFor } from "../../lib/storage.js";
-import { downloadMetaMedia } from "../whatsapp/meta/meta.media.js";
+import { extFor } from "../../lib/storage.js";
+import { resolveInboundMedia } from "../whatsapp/inbound-media.js";
 import { uploadLeadDocument } from "../integrations/google/google.drive.js";
 import { mirrorLeadToSheet } from "../integrations/google/leads-mirror.service.js";
 import { displayName } from "../whatsapp/whatsapp.util.js";
 import { validateIdPhoto } from "./ai.service.js";
 
-/** Resolve inbound media bytes: GreenAPI delivers a fileUrl, Meta a mediaId. */
-export async function resolveInboundMedia(payload: MessagePayload): Promise<Buffer | null> {
-  if (payload.kind !== "image" && payload.kind !== "document") return null;
-  if (payload.fileUrl) {
-    return fetchRemoteFile(payload.fileUrl);
-  }
-  if (payload.mediaId) {
-    const media = await downloadMetaMedia(payload.mediaId);
-    return media?.bytes ?? null;
-  }
-  return null;
-}
+export { resolveInboundMedia };
+
+// A WhatsApp ID photo is never this big; a larger image would only bloat the vision request.
+const MAX_ID_PHOTO_BYTES = 10 * 1024 * 1024;
 
 /** Israel-local stamp for Drive file names — ":" is unsafe in a file name, so "." separates. */
 function driveStamp(): string {
@@ -181,6 +173,7 @@ async function inspectIdPhoto(
   bytes: Buffer,
   mimeType: string,
 ): Promise<Awaited<ReturnType<typeof validateIdPhoto>> | null> {
+  if (bytes.byteLength > MAX_ID_PHOTO_BYTES) return null;
   try {
     return await validateIdPhoto(`data:${mimeType};base64,${bytes.toString("base64")}`);
   } catch (err) {

@@ -155,7 +155,13 @@ Drive upload). Button taps are extracted from `interactiveButtonsResponse.select
 `templateButtonReplyMessage.selectedId` / `buttonsResponseMessage.selectedButtonId` (all three shapes
 are checked in order against both the Zod-parsed payload and the raw body). Any other Meta type
 (audio/voice note, video, sticker, location, contacts, unknown) becomes `{kind:"other", label}` —
-stored with a Hebrew placeholder, mirrored to Chatwoot, and answered with the slot's normal re-prompt.
+audio/video/sticker also carry the Meta media id (+ mime, video caption, voice-note flag) — stored
+with its caption or else a Hebrew placeholder, mirrored to Chatwoot, and answered with the slot's
+normal re-prompt. **Chatwoot shows the real file (2026-10-13):** a lead's photo or sticker appears
+inline, a voice note / audio / video as a player, any other file as a card with its name, and the
+caption as the message text; the `[תמונה]`/`[מסמך]`/`[הודעה קולית]`/… placeholder (+ caption) is
+posted only when the download or the upload fails. Mirror posts are serialized per chat (arrival
+order kept; a new chat gets exactly one Chatwoot conversation).
 Template quick-reply taps (type `button`) are treated as button taps. Only `reaction`,
 `request_welcome` and `system` (Meta's notice that the lead changed number or identity) are
 ignored: they are not messages. A `system` notice is logged at info with its `wamid` and subtype

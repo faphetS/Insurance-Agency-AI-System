@@ -20,7 +20,13 @@ vi.mock("../../config/supabase.js", () => ({
   supabaseAdmin: { from: mockFromImpl },
 }));
 
-import { mirrorInbound, mirrorOutbound, resetChatwootCache } from "./chatwoot.service.js";
+import {
+  mirrorInbound,
+  mirrorInboundAttachment,
+  mirrorOutbound,
+  resetChatwootCache,
+  type ChatwootAttachment,
+} from "./chatwoot.service.js";
 import { logger } from "../../config/logger.js";
 
 function makeBuilder(result: unknown) {
@@ -338,5 +344,421 @@ describe("mirror — failure safety and truncation", () => {
     const [, msgInit] = mockFetch.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(msgInit.body as string) as { content: string };
     expect(body.content.length).toBe(4000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Attachments (lead photos, files, voice notes, video)
+// ---------------------------------------------------------------------------
+
+const CACHED_ROW = { data: { chatwoot_contact_id: 77, chatwoot_conversation_id: 88 }, error: null };
+const VOICE_BYTES = Buffer.from("OggS-voice-bytes");
+const CAPTION = "הרכב אחרי התאונה";
+const FILE_NAME = "דוח שמאי.pdf";
+
+function voiceNote(over: Partial<ChatwootAttachment> = {}): ChatwootAttachment {
+  return {
+    bytes: VOICE_BYTES,
+    fileName: "voice-note-2026-10-13_18-05-09.ogg",
+    contentType: "audio/ogg",
+    isVoice: true,
+    ...over,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+// A macrotask turn: every pending microtask (queued mirror steps) has run by then.
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+function initOf(mockFetch: ReturnType<typeof vi.fn>, call: number): RequestInit {
+  return (mockFetch.mock.calls[call] as [string, RequestInit])[1];
+}
+
+function allLogs(): string {
+  return JSON.stringify(
+    [logger.info, logger.warn, logger.error, logger.debug].map((fn) => vi.mocked(fn).mock.calls),
+  );
+}
+
+describe("mirrorInboundAttachment — multipart upload", () => {
+  it("voice note without a caption: no content, incoming, voice flag, one file part — and no JSON headers", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(CHAT, async () => voiceNote(), undefined, "[הודעה קולית]");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://cw.test/api/v1/accounts/1/conversations/88/messages");
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["api_access_token"]).toBe("bot-token");
+    expect(headers).not.toHaveProperty("Content-Type");
+
+    const form = init.body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect([...form.keys()].sort()).toEqual(["attachments[]", "is_voice_message", "message_type"]);
+    expect(form.get("message_type")).toBe("incoming");
+    expect(form.get("is_voice_message")).toBe("true");
+    const files = form.getAll("attachments[]") as File[];
+    expect(files).toHaveLength(1);
+    expect(files[0]!.name).toBe("voice-note-2026-10-13_18-05-09.ogg");
+    expect(files[0]!.type).toBe("audio/ogg");
+    expect(Buffer.from(await files[0]!.arrayBuffer()).equals(VOICE_BYTES)).toBe(true);
+  });
+
+  it("a caption becomes the trimmed message text; no voice flag for a document; Hebrew file name kept", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(
+      CHAT,
+      async () => ({ bytes: Buffer.from("%PDF"), fileName: FILE_NAME, contentType: "application/pdf" }),
+      `  ${CAPTION}  `,
+      `[מסמך]\n${CAPTION}`,
+    );
+
+    const form = initOf(mockFetch, 0).body as FormData;
+    expect(form.get("content")).toBe(CAPTION);
+    expect(form.has("is_voice_message")).toBe(false);
+    expect(form.has("private")).toBe(false);
+    const file = form.get("attachments[]") as File;
+    expect(file.name).toBe(FILE_NAME);
+    expect(file.type).toBe("application/pdf");
+  });
+
+  it("a blank caption is omitted; a long one is cut at 4000 chars", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(CHAT, async () => voiceNote(), "   ", "[הודעה קולית]");
+    await mirrorInboundAttachment(CHAT, async () => voiceNote(), "א".repeat(5000), "[הודעה קולית]");
+
+    expect((initOf(mockFetch, 0).body as FormData).has("content")).toBe(false);
+    expect(((initOf(mockFetch, 1).body as FormData).get("content") as string).length).toBe(4000);
+  });
+
+  it("a brand-new chat: contact + conversation are created first, then the file is uploaded", async () => {
+    setupFrom([makeBuilder(NO_IDS_ROW), makeBuilder({ data: null, error: null })]);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, contactCreateResponse))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 34 }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 99 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(CHAT, async () => voiceNote(), undefined, "[הודעה קולית]", "Dana");
+
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(initOf(mockFetch, 0).body as string)).toMatchObject({ name: "Dana" });
+    expect((mockFetch.mock.calls[2] as [string])[0]).toBe("https://cw.test/api/v1/accounts/1/conversations/34/messages");
+    expect(initOf(mockFetch, 2).body).toBeInstanceOf(FormData);
+  });
+
+  it("every Chatwoot call is time-bounded: 20s for the JSON calls, 120s for the upload", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      setupFrom([makeBuilder(NO_IDS_ROW), makeBuilder({ data: null, error: null })]);
+      const mockFetch = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(200, contactCreateResponse))
+        .mockResolvedValueOnce(jsonResponse(200, { id: 34 }))
+        .mockResolvedValue(jsonResponse(200, { id: 99 }));
+      vi.stubGlobal("fetch", mockFetch);
+
+      await mirrorInboundAttachment(CHAT, async () => voiceNote(), undefined, "[הודעה קולית]");
+      await mirrorOutbound(CHAT, "reply");
+
+      expect(timeoutSpy.mock.calls.map((c) => c[0])).toEqual([20_000, 20_000, 120_000, 20_000]);
+      for (let i = 0; i < 4; i++) {
+        expect(initOf(mockFetch, i).signal).toBe(timeoutSpy.mock.results[i]!.value);
+      }
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+});
+
+describe("mirrorInboundAttachment — 404 recovery", () => {
+  it("clears the ids, rebuilds the conversation once and re-uploads there", async () => {
+    setupFrom([
+      makeBuilder(CACHED_ROW),
+      makeBuilder({ data: null, error: null }), // clear ids
+      makeBuilder(NO_IDS_ROW), // re-read after clear
+      makeBuilder({ data: null, error: null }), // persist fresh ids
+    ]);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(404, { error: "Resource could not be found" }))
+      .mockResolvedValueOnce(jsonResponse(200, contactCreateResponse))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 90 }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 200 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(CHAT, async () => voiceNote(), undefined, "[הודעה קולית]");
+
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    const clearBuilder = mockFromImpl.mock.results[1]!.value as Record<string, unknown>;
+    expect(clearBuilder["update"]).toHaveBeenCalledWith({ chatwoot_contact_id: null, chatwoot_conversation_id: null });
+    expect((mockFetch.mock.calls[3] as [string])[0]).toContain("/conversations/90/messages");
+    expect(initOf(mockFetch, 3).body).toBeInstanceOf(FormData);
+  });
+
+  it("does not loop: when the retry fails too, the placeholder goes to the rebuilt conversation", async () => {
+    setupFrom([
+      makeBuilder(CACHED_ROW),
+      makeBuilder({ data: null, error: null }),
+      makeBuilder(NO_IDS_ROW),
+      makeBuilder({ data: null, error: null }),
+    ]);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(404, {}))
+      .mockResolvedValueOnce(jsonResponse(200, contactCreateResponse))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 91 }))
+      .mockResolvedValueOnce(jsonResponse(500, {}))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 201 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(CHAT, async () => voiceNote(), undefined, "[הודעה קולית]");
+
+    expect(mockFetch).toHaveBeenCalledTimes(5);
+    expect((mockFetch.mock.calls[4] as [string])[0]).toContain("/conversations/91/messages");
+    expect(JSON.parse(initOf(mockFetch, 4).body as string)).toEqual({
+      content: "[הודעה קולית]",
+      message_type: "incoming",
+      private: false,
+    });
+  });
+});
+
+describe("mirrorInboundAttachment — the placeholder fallback (nothing disappears)", () => {
+  it("Chatwoot rejects the upload (≥400) → the placeholder with the caption is posted as plain text", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(413, { error: "too large" }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(
+      CHAT,
+      async () => ({ bytes: Buffer.from("mp4"), fileName: FILE_NAME, contentType: "video/mp4" }),
+      CAPTION,
+      `[וידאו]\n${CAPTION}`,
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(initOf(mockFetch, 1).body as string)).toEqual({
+      content: `[וידאו]\n${CAPTION}`,
+      message_type: "incoming",
+      private: false,
+    });
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      { chatId: CHAT, status: 413, contentType: "video/mp4", size: 3 },
+      "chatwoot attachment upload failed — posting the placeholder",
+    );
+  });
+
+  it("an upload timeout or network error → placeholder posted, never a rejection", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn()
+      .mockRejectedValueOnce(new DOMException("The operation was aborted due to timeout", "TimeoutError"))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await expect(
+      mirrorInboundAttachment(CHAT, async () => voiceNote(), undefined, "[הודעה קולית]"),
+    ).resolves.toBeUndefined();
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(initOf(mockFetch, 1).body as string)).toMatchObject({ content: "[הודעה קולית]" });
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: CHAT, status: null }),
+      "chatwoot attachment upload failed — posting the placeholder",
+    );
+  });
+
+  it("the file could not be downloaded (loader → null) → placeholder posted exactly like a text mirror", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(CHAT, async () => null, CAPTION, `[תמונה]\n${CAPTION}`, "Dana");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(initOf(mockFetch, 0).body as string)).toEqual({
+      content: `[תמונה]\n${CAPTION}`,
+      message_type: "incoming",
+      private: false,
+    });
+  });
+
+  it("a loader that throws counts as no file → placeholder posted", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(
+      CHAT,
+      () => Promise.reject(new Error("import failed")),
+      undefined,
+      "[סטיקר]",
+    );
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(initOf(mockFetch, 0).body as string)).toMatchObject({ content: "[סטיקר]" });
+  });
+
+  it("blank env → the file is never even loaded; zero fetches, zero DB reads", async () => {
+    envMock.CHATWOOT_BOT_TOKEN = undefined;
+    const loader = vi.fn();
+    const mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(CHAT, loader, CAPTION, "[תמונה]");
+
+    expect(loader).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockFromImpl).not.toHaveBeenCalled();
+  });
+
+  it("logs never carry the caption, the file name or the bytes", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(500, { content: CAPTION }))
+      .mockRejectedValueOnce(new Error("ECONNRESET"));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(
+      CHAT,
+      async () => voiceNote({ fileName: FILE_NAME }),
+      CAPTION,
+      `[הודעה קולית]\n${CAPTION}`,
+    );
+
+    expect(vi.mocked(logger.warn)).toHaveBeenCalled();
+    expect(allLogs()).not.toContain(CAPTION);
+    expect(allLogs()).not.toContain(FILE_NAME);
+    expect(allLogs()).not.toContain("OggS");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-chat serial queue
+// ---------------------------------------------------------------------------
+
+describe("mirror — per-chat serial queue", () => {
+  it("a bot reply mirrored right after a slow attachment is posted AFTER it", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
+    vi.stubGlobal("fetch", mockFetch);
+    const download = deferred<ChatwootAttachment | null>();
+    const loader = vi.fn(() => download.promise);
+
+    const attachmentDone = mirrorInboundAttachment(CHAT, loader, undefined, "[תמונה]");
+    const replyDone = mirrorOutbound(CHAT, "תודה, קיבלנו");
+    await settle();
+
+    expect(loader).toHaveBeenCalledOnce();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    download.resolve({
+      bytes: Buffer.from("jpeg"),
+      fileName: "image-2026-10-13_18-05-09.jpg",
+      contentType: "image/jpeg",
+    });
+    await Promise.all([attachmentDone, replyDone]);
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(initOf(mockFetch, 0).body).toBeInstanceOf(FormData);
+    expect(JSON.parse(initOf(mockFetch, 1).body as string)).toMatchObject({
+      content: "תודה, קיבלנו",
+      message_type: "outgoing",
+    });
+  });
+
+  it("each returned promise settles when THAT post is done", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
+    vi.stubGlobal("fetch", mockFetch);
+    const download = deferred<ChatwootAttachment | null>();
+
+    let replySettled = false;
+    const attachmentDone = mirrorInboundAttachment(CHAT, () => download.promise, undefined, "[וידאו]");
+    const replyDone = mirrorOutbound(CHAT, "reply").then(() => {
+      replySettled = true;
+    });
+    await settle();
+    expect(replySettled).toBe(false);
+
+    download.resolve(voiceNote());
+    await attachmentDone;
+    await replyDone;
+    expect(replySettled).toBe(true);
+  });
+
+  it("different chats are not blocked by each other", async () => {
+    mockFromImpl.mockImplementation(() => makeBuilder(CACHED_ROW));
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
+    vi.stubGlobal("fetch", mockFetch);
+    const download = deferred<ChatwootAttachment | null>();
+
+    const slow = mirrorInboundAttachment(CHAT, () => download.promise, undefined, "[וידאו]");
+    await mirrorInbound("972509998877@c.us", "שלום מהצאט השני");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(initOf(mockFetch, 0).body as string)).toMatchObject({ content: "שלום מהצאט השני" });
+
+    download.resolve(voiceNote());
+    await slow;
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps working after a failed task, in order", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    const mockFetch = vi.fn()
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockResolvedValue(jsonResponse(200, { id: 2 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    const first = mirrorInbound(CHAT, "first");
+    const second = mirrorInbound(CHAT, "second");
+
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: CHAT }),
+      "chatwoot mirrorInbound failed — continuing",
+    );
+    expect(JSON.parse(initOf(mockFetch, 1).body as string)).toMatchObject({ content: "second" });
+
+    await mirrorOutbound(CHAT, "third");
+    expect(JSON.parse(initOf(mockFetch, 2).body as string)).toMatchObject({ content: "third" });
+  });
+
+  it("two mirrors racing for a brand-new chat create ONE Chatwoot conversation (the 2026-10-01 duplicate)", async () => {
+    setupFrom([makeBuilder(NO_IDS_ROW), makeBuilder({ data: null, error: null })]);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, contactCreateResponse))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 34 }))
+      .mockResolvedValue(jsonResponse(200, { id: 99 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await Promise.all([
+      mirrorInboundAttachment(CHAT, async () => voiceNote(), undefined, "[הודעה קולית]", "Dana"),
+      mirrorOutbound(CHAT, "היי, הגעתם לשקד"),
+    ]);
+
+    const urls = mockFetch.mock.calls.map((c) => (c as [string])[0]);
+    expect(urls).toEqual([
+      "https://cw.test/api/v1/accounts/1/contacts",
+      "https://cw.test/api/v1/accounts/1/conversations",
+      "https://cw.test/api/v1/accounts/1/conversations/34/messages",
+      "https://cw.test/api/v1/accounts/1/conversations/34/messages",
+    ]);
   });
 });

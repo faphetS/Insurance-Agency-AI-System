@@ -24,7 +24,26 @@ export function extFor(mimeType?: string | null, fileName?: string | null): stri
       case "image/webp": return "webp";
       case "image/heic": return "heic";
       case "image/heif": return "heif";
+      case "image/gif": return "gif";
       case "application/pdf": return "pdf";
+      case "audio/ogg": return "ogg";
+      case "audio/opus": return "opus";
+      case "audio/mpeg": return "mp3";
+      case "audio/mp4": return "m4a";
+      case "audio/aac": return "aac";
+      case "audio/amr": return "amr";
+      case "video/mp4": return "mp4";
+      case "video/3gpp": return "3gp";
+      case "video/quicktime": return "mov";
+      case "text/plain": return "txt";
+      case "text/csv": return "csv";
+      case "application/msword": return "doc";
+      case "application/vnd.ms-excel": return "xls";
+      case "application/vnd.ms-powerpoint": return "ppt";
+      case "application/vnd.openxmlformats-officedocument.wordprocessingml.document": return "docx";
+      case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": return "xlsx";
+      case "application/vnd.openxmlformats-officedocument.presentationml.presentation": return "pptx";
+      case "application/zip": return "zip";
     }
   }
 

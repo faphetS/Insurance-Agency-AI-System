@@ -346,6 +346,31 @@ describe("processInboundCustomerMessage — kind:other", () => {
     expect(inserted.body).toBe("[הודעה קולית]");
     expect(mockHandleIntake).toHaveBeenCalledWith("conv1", "client-1", LEAD_CHAT_ID, payload);
   });
+
+  it("a video with a caption stores the caption as the body (like images and documents)", async () => {
+    const msgBuilder = makeBuilder({ data: { id: "msg1" }, error: null });
+    setupFrom([
+      makeBuilder({ data: { id: "conv1" }, error: null }),
+      msgBuilder,
+      makeBuilder({ data: { id: "conv1", client_id: "client-1" }, error: null }),
+    ]);
+
+    const payload: MessagePayload = {
+      kind: "other",
+      subtype: "video",
+      label: "[וידאו]",
+      mediaId: "v1",
+      mimeType: "video/mp4",
+      caption: "הנזק לרכב",
+    };
+    await processInboundCustomerMessage(inbound(LEAD_CHAT_ID, payload, "meta"));
+
+    const inserted = (msgBuilder["insert"] as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { body: string };
+    expect(inserted.body).toBe("הנזק לרכב");
+    expect(mockHandleIntake).toHaveBeenCalledWith("conv1", "client-1", LEAD_CHAT_ID, payload);
+    // Voice notes / video / stickers are mirrored to Chatwoot but never archived to Drive.
+    expect(mockCaptureLeadFile).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

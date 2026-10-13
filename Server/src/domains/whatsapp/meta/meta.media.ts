@@ -6,7 +6,8 @@ import { logger } from "../../../config/logger.js";
 import { supabaseAdmin } from "../../../config/supabase.js";
 import { uploadMedia } from "./meta.transport.js";
 
-const MAX_BYTES = 15 * 1024 * 1024;
+// Meta's own ceiling for any Cloud API media (documents); images, audio and video are smaller.
+const MAX_BYTES = 100 * 1024 * 1024;
 
 interface MetaMediaInfo {
   url?: string;
@@ -20,6 +21,7 @@ function graphBase(): string {
 async function getMediaInfo(mediaId: string, token: string): Promise<MetaMediaInfo | null> {
   const res = await fetch(`${graphBase()}/${mediaId}`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -30,21 +32,16 @@ async function getMediaInfo(mediaId: string, token: string): Promise<MetaMediaIn
 }
 
 // Same AbortController/size-cap pattern as lib/storage's fetchRemoteFile, plus
-// the Bearer header Meta's CDN URLs require.
+// the Bearer header Meta's CDN URLs require. The timer runs until the body is
+// read: a stream that stalls after the headers must not hang the caller.
 async function fetchMediaBytes(url: string, token: string): Promise<Buffer | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60_000);
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20_000);
-
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
 
     if (!res.ok) {
       logger.warn({ status: res.status }, "downloadMetaMedia: media download failed");
@@ -53,14 +50,14 @@ async function fetchMediaBytes(url: string, token: string): Promise<Buffer | nul
 
     const contentLength = res.headers.get("Content-Length");
     if (contentLength && Number(contentLength) > MAX_BYTES) {
-      logger.warn({ contentLength }, "downloadMetaMedia: file exceeds 15MB limit");
+      logger.warn({ contentLength }, "downloadMetaMedia: file exceeds 100MB limit");
       return null;
     }
 
     const buf = Buffer.from(await res.arrayBuffer());
 
     if (buf.byteLength > MAX_BYTES) {
-      logger.warn({ size: buf.byteLength }, "downloadMetaMedia: downloaded file exceeds 15MB");
+      logger.warn({ size: buf.byteLength }, "downloadMetaMedia: downloaded file exceeds 100MB");
       return null;
     }
 
@@ -68,6 +65,8 @@ async function fetchMediaBytes(url: string, token: string): Promise<Buffer | nul
   } catch (err) {
     logger.warn({ err }, "downloadMetaMedia: unexpected download error");
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

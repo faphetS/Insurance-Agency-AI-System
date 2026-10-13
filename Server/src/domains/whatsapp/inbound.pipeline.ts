@@ -31,7 +31,7 @@ export async function processInboundCustomerMessage(
     payload.kind === "text"
       ? payload.text
       : payload.kind === "other"
-        ? payload.label
+        ? payload.caption ?? payload.label
         : payload.kind === "image"
           ? payload.caption ?? "[image]"
           : payload.caption ?? "[document]";
