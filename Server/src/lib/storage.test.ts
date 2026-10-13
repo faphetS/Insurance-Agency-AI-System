@@ -13,6 +13,7 @@ describe("extFor", () => {
     ["image/png", "png"],
     ["image/webp", "webp"],
     ["image/heic", "heic"],
+    ["image/heif", "heif"],
     ["image/gif", "gif"],
     ["application/pdf", "pdf"],
     ["audio/ogg", "ogg"],
@@ -42,8 +43,27 @@ describe("extFor", () => {
     expect(extFor("Video/MP4")).toBe("mp4");
   });
 
-  it("the mime type wins over the file name's extension", () => {
+  it("the original six mime types still win over the file name's extension", () => {
     expect(extFor("application/pdf", "scan.jpeg")).toBe("pdf");
+    expect(extFor("image/jpeg", "photo.png")).toBe("jpg");
+    expect(extFor("image/png", "x.gif")).toBe("png");
+    expect(extFor("image/webp", "sticker.bin")).toBe("webp");
+    expect(extFor("image/heic", "IMG_1.JPG")).toBe("heic");
+    expect(extFor("image/heif", "IMG_2.jpg")).toBe("heif");
+  });
+
+  it("the lead's own extension wins over the newer mappings, so Drive names are unchanged", () => {
+    expect(extFor("application/vnd.ms-excel", "leads.csv")).toBe("csv");
+    expect(extFor("text/plain", "server.LOG")).toBe("log");
+    expect(extFor("audio/mp4", "memo.aac")).toBe("aac");
+    expect(extFor("application/zip", "backup.7z")).toBe("7z");
+    expect(extFor("image/gif", "anim.GIF")).toBe("gif");
+  });
+
+  it("the newer mappings only replace what used to be bin", () => {
+    expect(extFor("application/vnd.ms-excel", "leads")).toBe("xls");
+    expect(extFor("video/mp4", "clip.")).toBe("mp4");
+    expect(extFor("audio/ogg; codecs=opus", null)).toBe("ogg");
   });
 
   it("an unknown mime falls back to the file name's extension, then to bin", () => {

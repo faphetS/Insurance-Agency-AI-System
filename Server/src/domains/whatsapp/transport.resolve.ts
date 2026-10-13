@@ -192,7 +192,9 @@ function cleanDocumentName(raw: string, ext: string): string | null {
   if (!name) return null;
 
   const dot = name.lastIndexOf(".");
-  const hasExt = dot > 0 && /^[A-Za-z0-9]{1,10}$/.test(name.slice(dot + 1));
+  const tail = name.slice(dot + 1);
+  // A real extension has a letter: the "2026" of "דוח 10.2026" is part of the name.
+  const hasExt = dot > 0 && /^[A-Za-z0-9]{1,10}$/.test(tail) && /[A-Za-z]/.test(tail);
   const base = hasExt ? name.slice(0, dot) : name;
   const suffix = hasExt ? name.slice(dot) : ext === "bin" ? "" : `.${ext}`;
 
@@ -209,7 +211,9 @@ function filePrefix(payload: FilePayload): string {
   return "file";
 }
 
-// The extension comes from the mime type alone: a lead's file name can end in anything.
+// A lead's document keeps its own extension and borrows the mime type's only when it has
+// none; generated names always take the mime type's. extFor gets no file name here, so an
+// odd suffix in the lead's name is never doubled.
 function mirrorFileName(payload: FilePayload, contentType: string): string {
   const ext = extFor(contentType);
   if (payload.kind === "document" && payload.fileName) {

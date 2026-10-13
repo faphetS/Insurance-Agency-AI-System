@@ -193,6 +193,38 @@ describe("mirrorInboundHook — attachment path", () => {
     expect(unknown.attachment!.fileName).toBe("חוזה");
   });
 
+  it.each([
+    ["Policy v2.0", "Policy v2.0.pdf"],
+    ["דוח 10.2026", "דוח 10.2026.pdf"],
+    ["scan.0", "scan.0.pdf"],
+  ])("a digits-only suffix is not an extension: %s → %s", async (fileName, expected) => {
+    const call = await attachmentCall(
+      { kind: "document", mediaId: "d1", mimeType: "application/pdf", fileName },
+      "application/pdf",
+    );
+
+    expect(call.attachment!.fileName).toBe(expected);
+  });
+
+  it.each([
+    ["x.3gp", "video/3gpp"],
+    ["x.7z", "application/x-7z-compressed"],
+    ["x.mp4", "video/mp4"],
+  ])("a real extension with digits is kept: %s", async (fileName, mime) => {
+    const call = await attachmentCall({ kind: "document", mediaId: "d1", mimeType: mime, fileName }, mime);
+
+    expect(call.attachment!.fileName).toBe(fileName);
+  });
+
+  it("the lead's own extension wins even when the mime type disagrees", async () => {
+    const call = await attachmentCall(
+      { kind: "document", mediaId: "d1", mimeType: "application/pdf", fileName: "scan.jpeg" },
+      "application/pdf",
+    );
+
+    expect(call.attachment).toMatchObject({ fileName: "scan.jpeg", contentType: "application/pdf" });
+  });
+
   it("a very long document name is capped at 150 characters, keeps its extension and never splits an emoji", async () => {
     const call = await attachmentCall(
       {

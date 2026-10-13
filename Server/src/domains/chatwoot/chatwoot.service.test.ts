@@ -25,6 +25,7 @@ import {
   mirrorInboundAttachment,
   mirrorOutbound,
   resetChatwootCache,
+  resolveConversationId,
   type ChatwootAttachment,
 } from "./chatwoot.service.js";
 import { logger } from "../../config/logger.js";
@@ -379,10 +380,31 @@ function initOf(mockFetch: ReturnType<typeof vi.fn>, call: number): RequestInit 
   return (mockFetch.mock.calls[call] as [string, RequestInit])[1];
 }
 
+function urlsOf(mockFetch: ReturnType<typeof vi.fn>): string[] {
+  return mockFetch.mock.calls.map((c) => (c as [string])[0]);
+}
+
+// JSON.stringify drops an Error's message; spell it out so it is checked too.
 function allLogs(): string {
   return JSON.stringify(
     [logger.info, logger.warn, logger.error, logger.debug].map((fn) => vi.mocked(fn).mock.calls),
+    (_key, value: unknown) => (value instanceof Error ? { name: value.name, message: value.message } : value),
   );
+}
+
+/** Counts the Blobs the service builds and keeps what each was built from. */
+function countBlobs(): unknown[] {
+  const sources: unknown[] = [];
+  vi.stubGlobal(
+    "Blob",
+    class extends Blob {
+      constructor(...args: ConstructorParameters<typeof Blob>) {
+        super(...args);
+        sources.push(args[0]?.[0]);
+      }
+    },
+  );
+  return sources;
 }
 
 describe("mirrorInboundAttachment — multipart upload", () => {
@@ -485,6 +507,77 @@ describe("mirrorInboundAttachment — multipart upload", () => {
   });
 });
 
+describe("mirrorInboundAttachment — the conversation comes before the download", () => {
+  it("a new lead's slow first file: the conversation exists (and is persisted) before the download ends", async () => {
+    setupFrom([makeBuilder(NO_IDS_ROW), makeBuilder({ data: null, error: null })]);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, contactCreateResponse))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 34 }))
+      .mockResolvedValue(jsonResponse(200, { id: 99 }));
+    vi.stubGlobal("fetch", mockFetch);
+    const download = deferred<ChatwootAttachment | null>();
+    const loader = vi.fn(() => download.promise);
+
+    const done = mirrorInboundAttachment(CHAT, loader, undefined, "[וידאו]", "Dana");
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
+
+    expect(urlsOf(mockFetch)).toEqual([
+      "https://cw.test/api/v1/accounts/1/contacts",
+      "https://cw.test/api/v1/accounts/1/conversations",
+    ]);
+    const persistBuilder = mockFromImpl.mock.results[1]!.value as Record<string, unknown>;
+    expect(persistBuilder["update"]).toHaveBeenCalledWith({ chatwoot_contact_id: 12, chatwoot_conversation_id: 34 });
+    // What a menu tap's auto-assign reads while the file is still downloading.
+    await expect(resolveConversationId(CHAT)).resolves.toBe(34);
+
+    download.resolve(voiceNote());
+    await done;
+    expect(urlsOf(mockFetch)[2]).toBe("https://cw.test/api/v1/accounts/1/conversations/34/messages");
+    expect(initOf(mockFetch, 2).body).toBeInstanceOf(FormData);
+  });
+
+  it("nowhere to post (the contact cannot be created) → the file is never downloaded", async () => {
+    setupFrom([makeBuilder(NO_IDS_ROW)]);
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(500, {}));
+    vi.stubGlobal("fetch", mockFetch);
+    const loader = vi.fn();
+
+    await mirrorInboundAttachment(CHAT, loader, CAPTION, `[תמונה]\n${CAPTION}`);
+
+    expect(loader).not.toHaveBeenCalled();
+    expect(urlsOf(mockFetch)).toEqual(["https://cw.test/api/v1/accounts/1/contacts"]);
+  });
+
+  it("download failed and the conversation was deleted → the placeholder goes to a rebuilt conversation", async () => {
+    setupFrom([
+      makeBuilder(CACHED_ROW),
+      makeBuilder({ data: null, error: null }), // clear ids
+      makeBuilder(NO_IDS_ROW), // re-read after clear
+      makeBuilder({ data: null, error: null }), // persist fresh ids
+    ]);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(404, {}))
+      .mockResolvedValueOnce(jsonResponse(200, contactCreateResponse))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 92 }))
+      .mockResolvedValueOnce(jsonResponse(200, { id: 300 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await mirrorInboundAttachment(CHAT, async () => null, CAPTION, `[תמונה]\n${CAPTION}`);
+
+    expect(urlsOf(mockFetch)).toEqual([
+      "https://cw.test/api/v1/accounts/1/conversations/88/messages",
+      "https://cw.test/api/v1/accounts/1/contacts",
+      "https://cw.test/api/v1/accounts/1/conversations",
+      "https://cw.test/api/v1/accounts/1/conversations/92/messages",
+    ]);
+    expect(JSON.parse(initOf(mockFetch, 3).body as string)).toEqual({
+      content: `[תמונה]\n${CAPTION}`,
+      message_type: "incoming",
+      private: false,
+    });
+  });
+});
+
 describe("mirrorInboundAttachment — 404 recovery", () => {
   it("clears the ids, rebuilds the conversation once and re-uploads there", async () => {
     setupFrom([
@@ -499,6 +592,7 @@ describe("mirrorInboundAttachment — 404 recovery", () => {
       .mockResolvedValueOnce(jsonResponse(200, { id: 90 }))
       .mockResolvedValueOnce(jsonResponse(200, { id: 200 }));
     vi.stubGlobal("fetch", mockFetch);
+    const blobSources = countBlobs();
 
     await mirrorInboundAttachment(CHAT, async () => voiceNote(), undefined, "[הודעה קולית]");
 
@@ -507,6 +601,14 @@ describe("mirrorInboundAttachment — 404 recovery", () => {
     expect(clearBuilder["update"]).toHaveBeenCalledWith({ chatwoot_contact_id: null, chatwoot_conversation_id: null });
     expect((mockFetch.mock.calls[3] as [string])[0]).toContain("/conversations/90/messages");
     expect(initOf(mockFetch, 3).body).toBeInstanceOf(FormData);
+
+    // One Blob for both uploads, built straight from the Buffer (no extra copy).
+    expect(blobSources).toHaveLength(1);
+    expect(blobSources[0]).toBe(VOICE_BYTES);
+    for (const call of [0, 3]) {
+      const file = (initOf(mockFetch, call).body as FormData).get("attachments[]") as File;
+      expect(Buffer.from(await file.arrayBuffer()).equals(VOICE_BYTES)).toBe(true);
+    }
   });
 
   it("does not loop: when the retry fails too, the placeholder goes to the rebuilt conversation", async () => {
@@ -641,9 +743,26 @@ describe("mirrorInboundAttachment — the placeholder fallback (nothing disappea
     );
 
     expect(vi.mocked(logger.warn)).toHaveBeenCalled();
+    // Error messages are part of what is checked: the placeholder post's network error is there.
+    expect(allLogs()).toContain("ECONNRESET");
     expect(allLogs()).not.toContain(CAPTION);
     expect(allLogs()).not.toContain(FILE_NAME);
     expect(allLogs()).not.toContain("OggS");
+  });
+
+  it("a loader error is logged by its message only — never the caption or file name", async () => {
+    setupFrom([makeBuilder(CACHED_ROW)]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { id: 2 })));
+
+    await mirrorInboundAttachment(
+      CHAT,
+      () => Promise.reject(new Error("inbound-media import failed")),
+      CAPTION,
+      `[מסמך]\n${CAPTION}`,
+    );
+
+    expect(allLogs()).toContain("inbound-media import failed");
+    expect(allLogs()).not.toContain(CAPTION);
   });
 });
 
@@ -661,9 +780,9 @@ describe("mirror — per-chat serial queue", () => {
 
     const attachmentDone = mirrorInboundAttachment(CHAT, loader, undefined, "[תמונה]");
     const replyDone = mirrorOutbound(CHAT, "תודה, קיבלנו");
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
     await settle();
 
-    expect(loader).toHaveBeenCalledOnce();
     expect(mockFetch).not.toHaveBeenCalled();
 
     download.resolve({
@@ -686,12 +805,14 @@ describe("mirror — per-chat serial queue", () => {
     const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
     vi.stubGlobal("fetch", mockFetch);
     const download = deferred<ChatwootAttachment | null>();
+    const loader = vi.fn(() => download.promise);
 
     let replySettled = false;
-    const attachmentDone = mirrorInboundAttachment(CHAT, () => download.promise, undefined, "[וידאו]");
+    const attachmentDone = mirrorInboundAttachment(CHAT, loader, undefined, "[וידאו]");
     const replyDone = mirrorOutbound(CHAT, "reply").then(() => {
       replySettled = true;
     });
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
     await settle();
     expect(replySettled).toBe(false);
 
@@ -706,8 +827,12 @@ describe("mirror — per-chat serial queue", () => {
     const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
     vi.stubGlobal("fetch", mockFetch);
     const download = deferred<ChatwootAttachment | null>();
+    const loader = vi.fn(() => download.promise);
 
-    const slow = mirrorInboundAttachment(CHAT, () => download.promise, undefined, "[וידאו]");
+    const slow = mirrorInboundAttachment(CHAT, loader, undefined, "[וידאו]");
+    // The other chat starts once this one is mid-download. (Starting both at once would race
+    // two dynamic imports of the mocked supabase module, which Vitest can resolve to the real one.)
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
     await mirrorInbound("972509998877@c.us", "שלום מהצאט השני");
 
     expect(mockFetch).toHaveBeenCalledOnce();
@@ -716,6 +841,25 @@ describe("mirror — per-chat serial queue", () => {
     download.resolve(voiceNote());
     await slow;
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("resetChatwootCache() also drops the queues, so a never-ending task cannot hold up the next test", async () => {
+    mockFromImpl.mockImplementation(() => makeBuilder(CACHED_ROW));
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 }));
+    vi.stubGlobal("fetch", mockFetch);
+    const download = deferred<ChatwootAttachment | null>();
+    const loader = vi.fn(() => download.promise);
+
+    const stuck = mirrorInboundAttachment(CHAT, loader, undefined, "[וידאו]");
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
+    resetChatwootCache();
+
+    await mirrorInbound(CHAT, "after the reset");
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(initOf(mockFetch, 0).body as string)).toMatchObject({ content: "after the reset" });
+
+    download.resolve(null);
+    await stuck;
   });
 
   it("keeps working after a failed task, in order", async () => {

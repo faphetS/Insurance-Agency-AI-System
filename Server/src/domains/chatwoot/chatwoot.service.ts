@@ -32,8 +32,10 @@ const idCache = new Map<string, ChatwootIds>();
 // (seen 2026-10-01), and a slow upload must not let the next message overtake it.
 const chatQueues = new Map<string, Promise<void>>();
 
+// Also forgets the mirror queues: a queued task that never settles cannot hold up later ones.
 export function resetChatwootCache(): void {
   idCache.clear();
+  chatQueues.clear();
 }
 
 // The returned promise never rejects and settles when THIS task is done.
@@ -255,17 +257,14 @@ async function postAttachment(
   chatId: string,
   ids: ChatwootIds,
   attachment: ChatwootAttachment,
+  file: Blob,
   content: string,
 ): Promise<number | null> {
   const form = new FormData();
   if (content) form.append("content", content);
   form.append("message_type", "incoming");
   if (attachment.isVoice) form.append("is_voice_message", "true");
-  form.append(
-    "attachments[]",
-    new Blob([new Uint8Array(attachment.bytes)], { type: attachment.contentType }),
-    attachment.fileName,
-  );
+  form.append("attachments[]", file, attachment.fileName);
   try {
     const res = await cwFetch(
       cfg,
@@ -285,22 +284,14 @@ function clip(text: string): string {
   return text.length > MAX_CONTENT_LENGTH ? text.slice(0, MAX_CONTENT_LENGTH) : text;
 }
 
-async function mirrorMessage(
+async function postText(
+  cfg: ChatwootConfig,
   chatId: string,
-  text: string,
+  ids: ChatwootIds,
+  content: string,
   direction: "incoming" | "outgoing",
-  senderName?: string,
+  senderName: string | undefined,
 ): Promise<void> {
-  const cfg = config();
-  if (!cfg) return;
-
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  const content = clip(trimmed);
-
-  const ids = await ensureIds(cfg, chatId, senderName);
-  if (!ids) return;
-
   const status = await postMessage(cfg, ids, content, direction);
   if (status === 404) {
     // Conversation deleted in Chatwoot — drop the cached ids and rebuild once.
@@ -318,6 +309,25 @@ async function mirrorMessage(
   }
 }
 
+async function mirrorMessage(
+  chatId: string,
+  text: string,
+  direction: "incoming" | "outgoing",
+  senderName?: string,
+): Promise<void> {
+  const cfg = config();
+  if (!cfg) return;
+
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const content = clip(trimmed);
+
+  const ids = await ensureIds(cfg, chatId, senderName);
+  if (!ids) return;
+
+  await postText(cfg, chatId, ids, content, direction, senderName);
+}
+
 // Logs carry ids, status, type and size only — never the caption, file name or bytes.
 async function mirrorAttachment(
   chatId: string,
@@ -329,6 +339,12 @@ async function mirrorAttachment(
   const cfg = config();
   if (!cfg) return;
 
+  // Ids before the download: a lead's first message may be a big file, and the conversation
+  // must already exist for a menu tap's auto-assign; with nowhere to post, nothing is fetched.
+  let ids = await ensureIds(cfg, chatId, senderName);
+  if (!ids) return;
+  const placeholder = clip(fallbackText.trim());
+
   let attachment: ChatwootAttachment | null = null;
   try {
     attachment = await loadAttachment();
@@ -337,21 +353,22 @@ async function mirrorAttachment(
     logger.warn({ err, chatId }, "chatwoot attachment load threw — posting the placeholder");
   }
   if (!attachment) {
-    await mirrorMessage(chatId, fallbackText, "incoming", senderName);
+    await postText(cfg, chatId, ids, placeholder, "incoming", senderName);
     return;
   }
 
   const content = clip(caption?.trim() ?? "");
-  const ids = await ensureIds(cfg, chatId, senderName);
-  if (!ids) return;
+  // One copy of the bytes, reused by the 404 retry. The cast only satisfies BlobPart's
+  // ArrayBuffer-only typing; these Buffers never sit on a SharedArrayBuffer.
+  const file = new Blob([attachment.bytes as Uint8Array<ArrayBuffer>], { type: attachment.contentType });
 
-  let status = await postAttachment(cfg, chatId, ids, attachment, content);
+  let status = await postAttachment(cfg, chatId, ids, attachment, file, content);
   if (status === 404) {
     // Conversation deleted in Chatwoot — drop the cached ids and rebuild once.
     await clearIds(chatId);
-    const freshIds = await ensureIds(cfg, chatId, senderName);
-    if (!freshIds) return;
-    status = await postAttachment(cfg, chatId, freshIds, attachment, content);
+    ids = await ensureIds(cfg, chatId, senderName);
+    if (!ids) return;
+    status = await postAttachment(cfg, chatId, ids, attachment, file, content);
   }
   if (status !== null && status < 400) return;
 
@@ -359,7 +376,7 @@ async function mirrorAttachment(
     { chatId, status, contentType: attachment.contentType, size: attachment.bytes.byteLength },
     "chatwoot attachment upload failed — posting the placeholder",
   );
-  await mirrorMessage(chatId, fallbackText, "incoming", senderName);
+  await postText(cfg, chatId, ids, placeholder, "incoming", senderName);
 }
 
 export async function mirrorInbound(
