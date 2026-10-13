@@ -15,13 +15,12 @@ import {
 import { isOpWeekday, isWithinOpWindow } from "./op-hours.js";
 import { notifyOwnerOps } from "./owner-notify.js";
 import { needsReplyFromDidi } from "./unanswered-wa.llm.js";
+import { getActiveAutoReplyText } from "./unanswered-wa.settings.js";
 
 // ---------------------------------------------------------------------------
-// Message texts (exact — see plan)
+// Auto-reply buttons (exact — see plan). The body text is owner-editable and lives
+// in unanswered-wa.settings.ts; only the buttons are fixed.
 // ---------------------------------------------------------------------------
-
-export const AUTO_REPLY_TEXT =
-  "היי זה דידי, אני בפגישה. אם מדובר במשהו שבמשרד יכולים לעזור, מוזמנים להתקשר או לשלוח וואטסאפ למספר 026244791";
 
 export const AUTO_REPLY_BUTTONS = [
   { buttonId: "ua_ok", buttonText: "תודה, אדבר עם המשרד" },
@@ -424,11 +423,12 @@ export async function sweepUnanswered(): Promise<{
           continue;
         }
 
+        const text = await getActiveAutoReplyText(new Date());
         if (env.UNANSWERED_WA_MODE === "send") {
-          await sendInteractiveButtonsWith(creds, row.chat_id, AUTO_REPLY_TEXT, AUTO_REPLY_BUTTONS);
+          await sendInteractiveButtonsWith(creds, row.chat_id, text, AUTO_REPLY_BUTTONS);
         } else {
           logger.info(
-            { chatId: row.chat_id, text: AUTO_REPLY_TEXT },
+            { chatId: row.chat_id, text },
             "unanswered-wa: [LOG MODE] auto-reply buttons suppressed — would have sent",
           );
         }

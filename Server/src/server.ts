@@ -38,6 +38,7 @@ import rateLimit from "express-rate-limit";
 const app = express();
 
 const assetsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../assets");
+const settingsPageDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/settings");
 
 // Trust the first reverse proxy (Render / Vercel) so req.ip + rate-limit key work.
 app.set("trust proxy", 1);
@@ -126,6 +127,7 @@ app.get("/health", (_req: Request, res: Response) => {
 app.use("/api", apiRoutes);
 app.use("/files", filesRouter);
 app.use("/assets", express.static(assetsDir));
+app.use("/settings", express.static(settingsPageDir));
 
 // --- 404 handler for unmatched routes ---
 app.use((_req: Request, _res: Response) => {

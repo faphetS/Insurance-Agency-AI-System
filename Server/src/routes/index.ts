@@ -6,6 +6,7 @@ import timelessRoutes from "../domains/integrations/timeless/timeless.routes.js"
 import googleRoutes from "../domains/integrations/google/google.routes.js";
 import operationsRoutes from "../domains/operations/operations.routes.js";
 import zadarmaRoutes from "../domains/zadarma/zadarma.routes.js";
+import settingsRoutes from "../domains/settings/settings.routes.js";
 
 const router = express.Router();
 
@@ -16,6 +17,7 @@ router.use("/integrations/timeless", timelessRoutes);
 router.use("/integrations/google", googleRoutes);
 router.use("/operations", operationsRoutes);
 router.use("/zadarma", zadarmaRoutes);
+router.use("/settings", settingsRoutes);
 
 // Future domain routes:
 // router.use("/policies", policyRoutes);
