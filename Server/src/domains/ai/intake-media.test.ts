@@ -253,7 +253,8 @@ describe("captureLeadFile", () => {
     mockExtFor.mockReturnValue("pdf");
     const { builders } = setupTables(clientData());
 
-    await captureLeadFile(CLIENT_ID, GREEN_DOC);
+    // A fresh object: downloads are shared per payload object, and GREEN_DOC was fetched above.
+    await captureLeadFile(CLIENT_ID, { ...GREEN_DOC });
 
     expect(mockValidateIdPhoto).not.toHaveBeenCalled();
     expect(mockFetchRemoteFile).toHaveBeenCalledWith("https://green.example/file.pdf");
@@ -291,7 +292,8 @@ describe("captureLeadFile", () => {
   it("media download fails → no OCR, no Drive upload, no mirror", async () => {
     mockDownloadMetaMedia.mockResolvedValue(null);
     setupTables(clientData());
-    await captureLeadFile(CLIENT_ID, META_IMAGE);
+    // A fresh object: downloads are shared per payload object, and META_IMAGE was fetched above.
+    await captureLeadFile(CLIENT_ID, { ...META_IMAGE });
     expect(mockValidateIdPhoto).not.toHaveBeenCalled();
     expect(mockUploadLeadDocument).not.toHaveBeenCalled();
     expect(mockMirrorLeadToSheet).not.toHaveBeenCalled();
@@ -380,6 +382,27 @@ describe("captureLeadFile", () => {
     );
     expect(allLogs()).not.toContain("123456782");
     expect(allLogs()).not.toContain("ישראל ישראלי");
+  });
+
+  it("an image over 10 MB skips the ID check and is archived as a plain file", async () => {
+    mockDownloadMetaMedia.mockResolvedValue({ bytes: Buffer.alloc(10 * 1024 * 1024 + 1), mimeType: "image/jpeg" });
+    const { builders } = setupTables(clientData());
+
+    await captureLeadFile(CLIENT_ID, { ...IMAGE_AS_FILE });
+
+    expect(mockValidateIdPhoto).not.toHaveBeenCalled();
+    expect(mockUploadLeadDocument).toHaveBeenCalledOnce();
+    expect(builders["documents"]!["insert"].mock.calls[0][0]).toMatchObject({ type: "other" });
+    expect(builders["clientsUpdate"]!["update"]).not.toHaveBeenCalled();
+  });
+
+  it("an image of exactly 10 MB is still checked", async () => {
+    mockDownloadMetaMedia.mockResolvedValue({ bytes: Buffer.alloc(10 * 1024 * 1024), mimeType: "image/jpeg" });
+    setupTables(clientData());
+
+    await captureLeadFile(CLIENT_ID, { ...META_IMAGE });
+
+    expect(mockValidateIdPhoto).toHaveBeenCalledOnce();
   });
 
   it("falls back to the phone digits when full_name is just the phone", async () => {

@@ -38,6 +38,23 @@ const metaMessageSchema = z
       })
       .passthrough()
       .optional(),
+    // Deliberately loose: a parse failure here drops the whole webhook, so an odd
+    // field type must degrade to the placeholder instead.
+    audio: z
+      .object({ id: z.unknown().optional(), mime_type: z.unknown().optional(), voice: z.unknown().optional() })
+      .passthrough()
+      .optional()
+      .catch(undefined),
+    video: z
+      .object({ id: z.unknown().optional(), mime_type: z.unknown().optional(), caption: z.unknown().optional() })
+      .passthrough()
+      .optional()
+      .catch(undefined),
+    sticker: z
+      .object({ id: z.unknown().optional(), mime_type: z.unknown().optional() })
+      .passthrough()
+      .optional()
+      .catch(undefined),
     button: z
       .object({ payload: z.string().optional(), text: z.string().optional() })
       .passthrough()
@@ -173,6 +190,24 @@ export function extractMetaPayload(msg: MetaMessage): MessagePayload | null {
       mimeType: msg.document.mime_type,
       fileName: msg.document.filename,
       caption: msg.document.caption,
+    };
+  }
+
+  if (msg.type === "audio" || msg.type === "video" || msg.type === "sticker") {
+    const media = msg[msg.type];
+    const label = OTHER_LABELS[msg.type]!;
+    const id = media?.id;
+    if (typeof id !== "string" || !id.trim()) return { kind: "other", subtype: msg.type, label };
+    const mimeType = media?.mime_type;
+    const caption = msg.type === "video" ? msg.video?.caption : undefined;
+    return {
+      kind: "other",
+      subtype: msg.type,
+      label,
+      mediaId: id,
+      ...(typeof mimeType === "string" && mimeType.trim() ? { mimeType } : {}),
+      ...(typeof caption === "string" && caption.trim() ? { caption } : {}),
+      ...(msg.type === "audio" && msg.audio?.voice === true ? { isVoice: true } : {}),
     };
   }
 

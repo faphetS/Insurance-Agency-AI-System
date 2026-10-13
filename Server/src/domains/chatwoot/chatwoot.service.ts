@@ -12,14 +12,42 @@ interface ChatwootIds {
   conversationId: number;
 }
 
+export interface ChatwootAttachment {
+  bytes: Buffer;
+  fileName: string;
+  contentType: string;
+  isVoice?: boolean;
+}
+
 const MAX_CONTENT_LENGTH = 4000;
+const REQUEST_TIMEOUT_MS = 20_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
 
 // Warm cache in front of the conversations-row read; the DB columns stay the
 // source of truth (this map just saves a roundtrip per message).
 const idCache = new Map<string, ChatwootIds>();
 
+// Tail of each chat's mirror queue: posts for one chat run one at a time, in call
+// order. Two racing first posts for a new chat each created a Chatwoot conversation
+// (seen 2026-10-01), and a slow upload must not let the next message overtake it.
+const chatQueues = new Map<string, Promise<void>>();
+
+// Also forgets the mirror queues: a queued task that never settles cannot hold up later ones.
 export function resetChatwootCache(): void {
   idCache.clear();
+  chatQueues.clear();
+}
+
+// The returned promise never rejects and settles when THIS task is done.
+function enqueue(chatId: string, failureMessage: string, task: () => Promise<void>): Promise<void> {
+  const run = (chatQueues.get(chatId) ?? Promise.resolve()).then(task).catch((err: unknown) => {
+    logger.warn({ err, chatId }, failureMessage);
+  });
+  chatQueues.set(chatId, run);
+  void run.then(() => {
+    if (chatQueues.get(chatId) === run) chatQueues.delete(chatId);
+  });
+  return run;
 }
 
 function config(): ChatwootConfig | null {
@@ -35,19 +63,23 @@ function config(): ChatwootConfig | null {
   };
 }
 
+// A FormData body goes as multipart: fetch sets the Content-Type itself (it carries the boundary).
 async function cwFetch(
   cfg: ChatwootConfig,
   method: string,
   path: string,
   body?: unknown,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<{ status: number; data: unknown }> {
+  const isForm = body instanceof FormData;
   const res = await fetch(`${cfg.apiBase}${path}`, {
     method,
     headers: {
       api_access_token: cfg.token,
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(body !== undefined && !isForm ? { "Content-Type": "application/json" } : {}),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: isForm ? body : body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const data: unknown = await res.json().catch(() => null);
   return { status: res.status, data };
@@ -219,23 +251,47 @@ async function postMessage(
   return res.status;
 }
 
-async function mirrorMessage(
+// null = no answer at all (timeout or network error).
+async function postAttachment(
+  cfg: ChatwootConfig,
   chatId: string,
-  text: string,
+  ids: ChatwootIds,
+  attachment: ChatwootAttachment,
+  file: Blob,
+  content: string,
+): Promise<number | null> {
+  const form = new FormData();
+  if (content) form.append("content", content);
+  form.append("message_type", "incoming");
+  if (attachment.isVoice) form.append("is_voice_message", "true");
+  form.append("attachments[]", file, attachment.fileName);
+  try {
+    const res = await cwFetch(
+      cfg,
+      "POST",
+      `/conversations/${ids.conversationId}/messages`,
+      form,
+      UPLOAD_TIMEOUT_MS,
+    );
+    return res.status;
+  } catch (err) {
+    logger.warn({ err, chatId }, "chatwoot attachment upload got no answer");
+    return null;
+  }
+}
+
+function clip(text: string): string {
+  return text.length > MAX_CONTENT_LENGTH ? text.slice(0, MAX_CONTENT_LENGTH) : text;
+}
+
+async function postText(
+  cfg: ChatwootConfig,
+  chatId: string,
+  ids: ChatwootIds,
+  content: string,
   direction: "incoming" | "outgoing",
-  senderName?: string,
+  senderName: string | undefined,
 ): Promise<void> {
-  const cfg = config();
-  if (!cfg) return;
-
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  const content =
-    trimmed.length > MAX_CONTENT_LENGTH ? trimmed.slice(0, MAX_CONTENT_LENGTH) : trimmed;
-
-  const ids = await ensureIds(cfg, chatId, senderName);
-  if (!ids) return;
-
   const status = await postMessage(cfg, ids, content, direction);
   if (status === 404) {
     // Conversation deleted in Chatwoot — drop the cached ids and rebuild once.
@@ -253,24 +309,107 @@ async function mirrorMessage(
   }
 }
 
+async function mirrorMessage(
+  chatId: string,
+  text: string,
+  direction: "incoming" | "outgoing",
+  senderName?: string,
+): Promise<void> {
+  const cfg = config();
+  if (!cfg) return;
+
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const content = clip(trimmed);
+
+  const ids = await ensureIds(cfg, chatId, senderName);
+  if (!ids) return;
+
+  await postText(cfg, chatId, ids, content, direction, senderName);
+}
+
+// Logs carry ids, status, type and size only — never the caption, file name or bytes.
+async function mirrorAttachment(
+  chatId: string,
+  loadAttachment: () => Promise<ChatwootAttachment | null>,
+  caption: string | undefined,
+  fallbackText: string,
+  senderName: string | undefined,
+): Promise<void> {
+  const cfg = config();
+  if (!cfg) return;
+
+  // Ids before the download: a lead's first message may be a big file, and the conversation
+  // must already exist for a menu tap's auto-assign; with nowhere to post, nothing is fetched.
+  let ids = await ensureIds(cfg, chatId, senderName);
+  if (!ids) return;
+  const placeholder = clip(fallbackText.trim());
+
+  let attachment: ChatwootAttachment | null = null;
+  try {
+    attachment = await loadAttachment();
+    if (!attachment) logger.warn({ chatId }, "chatwoot attachment unavailable — posting the placeholder");
+  } catch (err) {
+    logger.warn({ err, chatId }, "chatwoot attachment load threw — posting the placeholder");
+  }
+  if (!attachment) {
+    await postText(cfg, chatId, ids, placeholder, "incoming", senderName);
+    return;
+  }
+
+  const content = clip(caption?.trim() ?? "");
+  // One copy of the bytes, reused by the 404 retry. The cast only satisfies BlobPart's
+  // ArrayBuffer-only typing; these Buffers never sit on a SharedArrayBuffer.
+  const file = new Blob([attachment.bytes as Uint8Array<ArrayBuffer>], { type: attachment.contentType });
+
+  let status = await postAttachment(cfg, chatId, ids, attachment, file, content);
+  if (status === 404) {
+    // Conversation deleted in Chatwoot — drop the cached ids and rebuild once.
+    await clearIds(chatId);
+    ids = await ensureIds(cfg, chatId, senderName);
+    if (!ids) return;
+    status = await postAttachment(cfg, chatId, ids, attachment, file, content);
+  }
+  if (status !== null && status < 400) return;
+
+  logger.warn(
+    { chatId, status, contentType: attachment.contentType, size: attachment.bytes.byteLength },
+    "chatwoot attachment upload failed — posting the placeholder",
+  );
+  await postText(cfg, chatId, ids, placeholder, "incoming", senderName);
+}
+
 export async function mirrorInbound(
   chatId: string,
   text: string,
   senderName?: string,
 ): Promise<void> {
-  try {
-    await mirrorMessage(chatId, text, "incoming", senderName);
-  } catch (err) {
-    logger.warn({ err, chatId }, "chatwoot mirrorInbound failed — continuing");
-  }
+  return enqueue(chatId, "chatwoot mirrorInbound failed — continuing", () =>
+    mirrorMessage(chatId, text, "incoming", senderName),
+  );
 }
 
 export async function mirrorOutbound(chatId: string, text: string): Promise<void> {
-  try {
-    await mirrorMessage(chatId, text, "outgoing");
-  } catch (err) {
-    logger.warn({ err, chatId }, "chatwoot mirrorOutbound failed — continuing");
-  }
+  return enqueue(chatId, "chatwoot mirrorOutbound failed — continuing", () =>
+    mirrorMessage(chatId, text, "outgoing"),
+  );
+}
+
+/**
+ * Mirror an inbound file as a real Chatwoot attachment (photo inline, audio/video player,
+ * anything else a file card), the caption as the message text. When the file cannot be
+ * loaded or the upload fails, `fallbackText` is posted instead so the message never vanishes.
+ */
+export async function mirrorInboundAttachment(
+  chatId: string,
+  loadAttachment: () => Promise<ChatwootAttachment | null>,
+  caption: string | undefined,
+  fallbackText: string,
+  senderName?: string,
+): Promise<void> {
+  return enqueue(chatId, "chatwoot mirrorInboundAttachment failed — continuing", () =>
+    mirrorAttachment(chatId, loadAttachment, caption, fallbackText, senderName),
+  );
 }
 
 // Best-effort private note (e.g. template-send failure surfaced to the agent) posted

@@ -108,11 +108,84 @@ describe("extractMetaPayload", () => {
     });
   });
 
-  it("voice note (audio) → kind:other with the voice label", () => {
-    expect(extractMetaPayload(msg({ type: "audio", audio: { id: "m1", voice: true } }))).toEqual({
+  it("voice note (audio, voice:true) → kind:other with the voice label, media id, mime and isVoice", () => {
+    expect(
+      extractMetaPayload(
+        msg({ type: "audio", audio: { id: "m1", mime_type: "audio/ogg; codecs=opus", sha256: "abc", voice: true } }),
+      ),
+    ).toEqual({
       kind: "other",
       subtype: "audio",
       label: "[הודעה קולית]",
+      mediaId: "m1",
+      mimeType: "audio/ogg; codecs=opus",
+      isVoice: true,
+    });
+  });
+
+  it("audio that is not a voice note → no isVoice", () => {
+    expect(extractMetaPayload(msg({ type: "audio", audio: { id: "m2", mime_type: "audio/mpeg", voice: false } }))).toEqual({
+      kind: "other",
+      subtype: "audio",
+      label: "[הודעה קולית]",
+      mediaId: "m2",
+      mimeType: "audio/mpeg",
+    });
+  });
+
+  it("video with a caption → media id, mime and caption", () => {
+    expect(
+      extractMetaPayload(msg({ type: "video", video: { id: "v1", mime_type: "video/mp4", caption: "הרכב אחרי התאונה" } })),
+    ).toEqual({
+      kind: "other",
+      subtype: "video",
+      label: "[וידאו]",
+      mediaId: "v1",
+      mimeType: "video/mp4",
+      caption: "הרכב אחרי התאונה",
+    });
+  });
+
+  it("video with an empty / blank caption → no caption field", () => {
+    expect(extractMetaPayload(msg({ type: "video", video: { id: "v1", mime_type: "video/mp4", caption: "" } }))).not.toHaveProperty(
+      "caption",
+    );
+    expect(extractMetaPayload(msg({ type: "video", video: { id: "v1", caption: "   " } }))).not.toHaveProperty("caption");
+  });
+
+  it("sticker with an id → media id + image/webp, never a caption or isVoice", () => {
+    expect(
+      extractMetaPayload(msg({ type: "sticker", sticker: { id: "s1", mime_type: "image/webp", animated: false, caption: "x" } })),
+    ).toEqual({
+      kind: "other",
+      subtype: "sticker",
+      label: "[סטיקר]",
+      mediaId: "s1",
+      mimeType: "image/webp",
+    });
+  });
+
+  it("audio / video / sticker without a usable id → exactly the label-only payload", () => {
+    const labelOnly = (subtype: string, label: string) => ({ kind: "other", subtype, label });
+    expect(extractMetaPayload(msg({ type: "audio", audio: { mime_type: "audio/ogg", voice: true } }))).toEqual(
+      labelOnly("audio", "[הודעה קולית]"),
+    );
+    expect(extractMetaPayload(msg({ type: "video", video: { id: "", caption: "hi" } }))).toEqual(labelOnly("video", "[וידאו]"));
+    expect(extractMetaPayload(msg({ type: "sticker", sticker: { id: "   " } }))).toEqual(labelOnly("sticker", "[סטיקר]"));
+    expect(extractMetaPayload(msg({ type: "audio", audio: { id: 12345, voice: true } }))).toEqual(
+      labelOnly("audio", "[הודעה קולית]"),
+    );
+  });
+
+  it("odd field types next to a valid id are dropped, not trusted", () => {
+    expect(
+      extractMetaPayload(msg({ type: "audio", audio: { id: "m3", mime_type: 7, voice: "true" } })),
+    ).toEqual({ kind: "other", subtype: "audio", label: "[הודעה קולית]", mediaId: "m3" });
+    expect(extractMetaPayload(msg({ type: "video", video: { id: "v3", caption: { text: "x" } } }))).toEqual({
+      kind: "other",
+      subtype: "video",
+      label: "[וידאו]",
+      mediaId: "v3",
     });
   });
 
@@ -208,6 +281,60 @@ describe("metaWebhookSchema", () => {
     if (parsed.success) {
       expect(parsed.data.entry?.[0]?.changes?.[0]?.value.messages?.[0]?.id).toBe("wamid.X");
     }
+  });
+
+  function envelope(messages: unknown[]) {
+    return {
+      object: "whatsapp_business_account",
+      entry: [{ id: "1", changes: [{ field: "messages", value: { messaging_product: "whatsapp", messages } }] }],
+    };
+  }
+
+  it("parses real-shaped voice note, video and sticker messages and keeps their media fields", () => {
+    const parsed = metaWebhookSchema.safeParse(
+      envelope([
+        {
+          from: "972500000000",
+          id: "wamid.A",
+          type: "audio",
+          audio: { id: "m1", mime_type: "audio/ogg; codecs=opus", sha256: "h", voice: true },
+        },
+        { from: "972500000000", id: "wamid.V", type: "video", video: { id: "v1", mime_type: "video/mp4", sha256: "h", caption: "צילום" } },
+        { from: "972500000000", id: "wamid.S", type: "sticker", sticker: { id: "s1", mime_type: "image/webp", sha256: "h", animated: true } },
+      ]),
+    );
+
+    expect(parsed.success).toBe(true);
+    const messages = parsed.success ? parsed.data.entry![0]!.changes![0]!.value.messages! : [];
+    expect(messages.map(extractMetaPayload)).toEqual([
+      { kind: "other", subtype: "audio", label: "[הודעה קולית]", mediaId: "m1", mimeType: "audio/ogg; codecs=opus", isVoice: true },
+      { kind: "other", subtype: "video", label: "[וידאו]", mediaId: "v1", mimeType: "video/mp4", caption: "צילום" },
+      { kind: "other", subtype: "sticker", label: "[סטיקר]", mediaId: "s1", mimeType: "image/webp" },
+    ]);
+  });
+
+  it("odd audio / video / sticker shapes never fail the whole webhook — they fall back to the label", () => {
+    const odd = [
+      { from: "972500000000", id: "wamid.1", type: "audio", audio: "not-an-object" },
+      { from: "972500000000", id: "wamid.2", type: "video", video: null },
+      { from: "972500000000", id: "wamid.3", type: "sticker", sticker: [1, 2] },
+      { from: "972500000000", id: "wamid.4", type: "audio", audio: { id: 42, mime_type: ["x"], voice: "yes" } },
+      { from: "972500000000", id: "wamid.5", type: "video", video: { caption: 9 } },
+      { from: "972500000000", id: "wamid.6", type: "text", text: { body: "still delivered" } },
+    ];
+
+    const parsed = metaWebhookSchema.safeParse(envelope(odd));
+
+    expect(parsed.success).toBe(true);
+    const messages = parsed.success ? parsed.data.entry![0]!.changes![0]!.value.messages! : [];
+    expect(messages.map(extractMetaPayload)).toEqual([
+      { kind: "other", subtype: "audio", label: "[הודעה קולית]" },
+      { kind: "other", subtype: "video", label: "[וידאו]" },
+      { kind: "other", subtype: "sticker", label: "[סטיקר]" },
+      { kind: "other", subtype: "audio", label: "[הודעה קולית]" },
+      { kind: "other", subtype: "video", label: "[וידאו]" },
+      { kind: "text", text: "still delivered" },
+    ]);
   });
 
   it("parses a statuses-only envelope", () => {
