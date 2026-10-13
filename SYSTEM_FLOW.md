@@ -570,25 +570,45 @@ from v4 until 2026-07-14, when v4.1 re-enabled it — see the table above.)
 
 Note: the **call reminder** is not independently scheduled — it ships inside the 09:00 digest.
 
-### 6a. Unanswered WA messages (new pillar 2026-07-10; session-model rework same day) — `operations/unanswered-wa.service.ts`
-Watches Didi's own line (944) via its webhook (token now REQUIRED — see §9): incoming private-chat message
-07:00–20:00 Israel with no reply for 1h → **LLM closer gate** (`unanswered-wa.llm.ts`: gemini-2.5-flash reads
-the chat's last 4 messages with `[DD/MM HH:MM]` Israel-time labels; "תודה"-type closers resolve silently,
-fail-open on error) → auto-reply from 944 as Didi (office number 026244791); anyone replying cancels;
-2nd same-day episode is suppressed-but-tracked (no repeat auto-reply, still gets next-day buttons);
-next day 09:00 → 2-button follow-up (`ua_ok` = silent resolve / `ua_callback` → 🔔 alert to Didi via the
-NOTIFY instance); untapped buttons expire at midnight Israel (daily session reset). Caps: 1 auto-reply/chat/day,
-20 auto-replies/day, 40 follow-ups/day; 20s pacing. Env `UNANSWERED_WINDOW_DISABLED` bypasses the watch window
-(testing only). Table `wa_unanswered`. Full spec: `.claude/OPERATIONAL_BOT.md` §2b.
+### 6a. Unanswered WA messages (pillar 2026-07-10; reworked `b63ec95` 2026-07-23; editable text 2026-10-13) — `operations/unanswered-wa.service.ts`
+Watches Didi's own line (944) via its webhook (token now REQUIRED — see §9). A private-chat message that Didi
+hasn't answered for **10 min** (the timer re-anchors on each new customer message; sweeper every 2 min), only
+**Sun–Thu 09:00–18:00 Israel** (rows still watching at close expire), goes to the **LLM closer gate**
+(`unanswered-wa.llm.ts`: gemini-2.5-flash reads the chat's last 4 messages with `[DD/MM HH:MM]` Israel-time
+labels; "תודה"-type closers resolve silently, fail-open on error). If it passes, ONE interactive-buttons auto-reply
+goes out from 944 as Didi:
+- its **text is owner-editable** (see below)
+- its buttons are fixed: `ua_ok` "תודה, אדבר עם המשרד" = silent resolve; `ua_callback` "אשמח שתחזור אליי" =
+  aggregated into one 🔔 owner reminder via the NOTIFY instance at the next business day's 09:00 (Fri/Sat roll to
+  Sunday).
+
+Anyone replying cancels. Caps: 1 auto-reply/chat/day, 20/day; 20s pacing. `UNANSWERED_WA_MODE` is
+`off`/`log`/`send` (live: `send`); `OP_EXCLUDED_PHONES` exempts personal contacts; `UNANSWERED_WINDOW_DISABLED`
+bypasses the window (testing only). Table `wa_unanswered`. Full spec: `.claude/OPERATIONAL_BOT.md` §2b.
+
+**Editable auto-reply text (2026-10-13)** — `operations/unanswered-wa.settings.ts`.
+- **Page:** `Server/public/settings/`, served at `/settings/`. **API:** `/api/settings/auto-reply`
+  (`settings/` domain), authenticated with Bearer `SETTINGS_PASSWORD`; when unset, the page is disabled (503).
+- **Saved list:** table `auto_reply_messages`, max 50. The built-in original is listed first.
+  - It can be deleted, which hides it via `system_settings.unanswered_wa_reply_original_hidden`, and restored with
+    one tap; re-saving its exact text also restores it.
+  - Hiding never changes what the bot sends: with nothing set, the bot still sends the original.
+- **Using a message:**
+  - **permanently** writes `system_settings.unanswered_wa_reply_permanent` and also ends a running temporary
+  - **temporarily until an Israel date/time** writes `unanswered_wa_reply_temporary` = JSON `{text, until}`;
+    afterwards the permanent text returns on its own (lazy expiry, no cron)
+  - Using copies the text, so deleting a saved message never changes what is sent.
+- **Send path:** resolves the text per send via `getActiveAutoReplyText()`, which never throws — a read error or
+  malformed value falls back to the built-in original. It never reads `auto_reply_messages`.
 
 ---
 
 ## 7. Data model & where everything is saved (`db/schema.sql` + filesystem/Drive)
 
-**Tables (15):** `staff`, `clients`, `meetings`, `documents`, `audit_logs`, `conversations`, `messages`,
+**Tables (16):** `staff`, `clients`, `meetings`, `documents`, `audit_logs`, `conversations`, `messages`,
 `bot_settings`, `system_settings`, `whatsapp_instances`, `timeless_unmatched_meetings`, `commitments`,
-`call_events`, `email_staff_mentions`, `wa_unanswered` (new 2026-07-10, §6a). **No `tasks`,
-`notifications`, `gmail_integrations`, or `v_client_pipeline`.**
+`call_events`, `email_staff_mentions`, `wa_unanswered` (new 2026-07-10, §6a), `auto_reply_messages`
+(new 2026-10-13, §6a). **No `tasks`, `notifications`, `gmail_integrations`, or `v_client_pipeline`.**
 
 - `clients`: `pipeline_stage`, `complexity` (dormant since v4), `id_number`, `policy_number`,
   `client_type` (`new`/`old`), `assigned_to` / `assigned_handler_id` (handler preferred),
@@ -623,7 +643,12 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
 - `system_settings`: key/value store — keys include `google_calendar_last_sync`, `op_self_chat_id`,
   `commitment_self_chat_id`/`commitment_bot_chat_id`, `google_ws_refresh_token`,
   `timeless_webhook_id`/`timeless_webhook_secret`/`timeless_last_event_at`/`timeless_last_poll_at`,
-  `leads_sheet_tab_resolved:<tab>`.
+  `leads_sheet_tab_resolved:<tab>`, and the auto-reply settings (§6a):
+  - `unanswered_wa_reply_permanent`: plain text
+  - `unanswered_wa_reply_temporary`: JSON `{text, until}`
+  - `unanswered_wa_reply_original_hidden`: the original was deleted from the list; page only, the bot ignores it
+- `auto_reply_messages`: Didi's saved auto-reply texts for the `/settings/` page (`text` UNIQUE, 1–1000
+  chars, max 50 rows). Read only by the page; the bot reads the two `system_settings` keys above.
 
 ### Storage backends
 - **Postgres** (self-hosted on the VPS) — all structured data, via the `supabaseAdmin` shim / raw `pool`.
@@ -705,8 +730,10 @@ NOTIFY instance); untapped buttons expire at midnight Israel (daily session rese
   `LEADS_DRIVE_FOLDER_ID`, `LEADS_MIRROR_ENABLED` — all have defaults in `env.ts`.
 - **Provider toggles:** `EMAIL_PROVIDER`, `WHATSAPP_PROVIDER` (`stub`/`live`); `STAFF_EMAIL_NOTIFY_MODE`
   (`log` default / `send`). (No `BAFI_PROVIDER` — BAFI is dropped.)
+- **Settings page:** `SETTINGS_PASSWORD` (optional, min 12 chars; blank = unset) — the owner's password for
+  `/settings/` (§6a). Deliberately separate from `ADMIN_API_TOKEN`, which can fire every ops cron.
 - `.env` lives on the VPS (not carried by the deploy workflow). Admin/ops endpoints use the static
-  `ADMIN_API_TOKEN`.
+  `ADMIN_API_TOKEN`. Request logs redact `Authorization` and `Cookie` headers (`config/logger.ts`).
 
 ---
 

@@ -316,6 +316,21 @@ CREATE TABLE public.system_settings (
 );
 
 -- ============================================================
+-- 10. AUTO_REPLY_MESSAGES
+--     Added 2026-10-13.
+--     The owner's saved WhatsApp auto-reply messages for the unanswered-WA
+--     pillar, managed from the /settings/ page. Using a message copies its
+--     text into system_settings (keys unanswered_wa_reply_permanent /
+--     unanswered_wa_reply_temporary), so the bot never reads this table at
+--     send time. UNIQUE (text) = identical text is never saved twice.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.auto_reply_messages (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  text       text        NOT NULL UNIQUE CHECK (char_length(text) BETWEEN 1 AND 1000),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ============================================================
 -- 12. TIMELESS_UNMATCHED_MEETINGS
 --     Added by 20260521090000_timeless_integration.
 --     candidate_meeting_ids is a uuid[] array column.

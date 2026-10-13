@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#f0f2f5">
+  <title>הודעה אוטומטית בוואטסאפ</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="banner" class="banner" role="alert" hidden>
+    <p id="banner-text" class="banner-text"></p>
+    <button type="button" class="banner-close" data-action="banner-close" aria-label="סגירה">&times;</button>
+  </div>
+
+  <main class="page">
+    <section id="view-loading" class="view view-center">
+      <div class="spinner" aria-hidden="true"></div>
+      <p class="muted">טוען…</p>
+    </section>
+
+    <section id="view-retry" class="view view-center" hidden>
+      <p id="retry-error" class="inline-error" role="alert"></p>
+      <button type="button" class="btn btn-primary" data-action="retry">נסו שוב</button>
+    </section>
+
+    <section id="view-login" class="view view-login" hidden>
+      <form id="login-form" class="card login-card" method="post" novalidate>
+        <h1 class="page-title">הודעה אוטומטית בוואטסאפ</h1>
+        <div class="field">
+          <label class="field-label" for="login-password">סיסמה</label>
+          <input id="login-password" class="field-input" name="password" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="login-error">
+        </div>
+        <p id="login-error" class="inline-error" role="alert" hidden></p>
+        <button id="login-submit" type="submit" class="btn btn-primary btn-block">כניסה</button>
+      </form>
+    </section>
+
+    <div id="view-main" class="view" hidden>
+      <header class="page-header">
+        <div class="page-header-row">
+          <h1 class="page-title">הודעה אוטומטית בוואטסאפ</h1>
+          <button type="button" class="btn btn-quiet btn-small" data-action="sign-out">יציאה</button>
+        </div>
+        <p class="subtitle">ההודעה שנשלחת ללקוח כשדידי לא עונה תוך 10 דקות</p>
+        <p class="note">ההודעה נשלחת בימים א׳–ה׳, בין 09:00 ל־18:00.</p>
+      </header>
+
+      <section class="card status-card" aria-labelledby="status-title">
+        <div class="status-head">
+          <h2 id="status-title" class="card-title">ההודעה שנשלחת כעת</h2>
+          <span id="status-badge" class="badge"></span>
+        </div>
+        <div class="chat">
+          <p id="status-text" class="bubble" dir="auto"></p>
+        </div>
+        <div id="status-returning" class="returning" hidden>
+          <p class="returning-label">בסיום תחזור ההודעה:</p>
+          <p id="status-returning-text" class="returning-text" dir="auto"></p>
+          <button type="button" class="btn btn-secondary btn-block" data-action="end-temporary">סיים הודעה זמנית עכשיו</button>
+        </div>
+      </section>
+
+      <section class="composer">
+        <button id="compose-open" type="button" class="btn btn-add btn-block" data-action="compose-open">+ הודעה חדשה</button>
+        <div id="composer" class="card" hidden>
+          <div class="field">
+            <label class="field-label" for="compose-text">הודעה חדשה</label>
+            <textarea id="compose-text" class="field-input field-textarea" rows="5" maxlength="1000" placeholder="כתבו כאן את ההודעה…" dir="auto" aria-describedby="compose-count"></textarea>
+          </div>
+          <p id="compose-count" class="counter">0/1000</p>
+          <div class="composer-actions">
+            <button type="button" class="btn btn-primary" data-action="compose-permanent">השתמש כקבועה</button>
+            <button type="button" class="btn btn-secondary" data-action="compose-temporary">השתמש כזמנית</button>
+            <button type="button" class="btn btn-secondary" data-action="compose-save">שמור בלבד</button>
+            <button type="button" class="btn btn-quiet" data-action="compose-cancel">ביטול</button>
+          </div>
+          <p id="compose-error" class="inline-error" role="alert" hidden></p>
+        </div>
+      </section>
+
+      <section class="saved" aria-labelledby="saved-title">
+        <h2 id="saved-title" class="section-title">הודעות שמורות</h2>
+        <p id="saved-empty" class="empty-state" hidden>אין הודעות שמורות</p>
+        <ul id="message-list" class="message-list" role="list"></ul>
+        <button id="restore-original" type="button" class="btn btn-soft btn-block" data-action="restore-original" hidden><span aria-hidden="true">↩</span> שחזר את ההודעה המקורית</button>
+      </section>
+    </div>
+  </main>
+
+  <div id="toast" class="toast-region" role="status" aria-live="polite" aria-atomic="true">
+    <p id="toast-text" class="toast"></p>
+  </div>
+
+  <template id="tpl-card">
+    <li class="card message-card">
+      <div class="message-head">
+        <div class="badges">
+          <span class="badge" data-slot="builtin">מקורית</span>
+          <span class="badge badge-live" data-slot="active">בשימוש כעת</span>
+        </div>
+        <button type="button" class="btn btn-danger btn-small" data-action="delete-message">מחק</button>
+      </div>
+      <p class="message-text" dir="auto" data-slot="text"></p>
+      <div class="message-actions">
+        <button type="button" class="btn btn-secondary" data-action="use-permanent">השתמש כקבועה</button>
+        <button type="button" class="btn btn-secondary" data-action="use-temporary">השתמש כזמנית</button>
+      </div>
+    </li>
+  </template>
+
+  <template id="tpl-picker">
+    <div class="picker" role="group" aria-labelledby="picker-title">
+      <p id="picker-title" class="picker-title">עד מתי?</p>
+      <div class="picker-fields">
+        <div class="field">
+          <label class="field-label" for="picker-date">תאריך</label>
+          <input id="picker-date" class="field-input" type="date">
+        </div>
+        <div class="field">
+          <label class="field-label" for="picker-time">שעה</label>
+          <input id="picker-time" class="field-input" type="time" value="09:00">
+        </div>
+      </div>
+      <p class="hint">שעון ישראל</p>
+      <p class="inline-error" role="alert" hidden></p>
+      <div class="picker-actions">
+        <button type="button" class="btn btn-primary" data-action="picker-confirm">אישור</button>
+        <button type="button" class="btn btn-quiet" data-action="picker-cancel">ביטול</button>
+      </div>
+    </div>
+  </template>
+</body>
+</html>

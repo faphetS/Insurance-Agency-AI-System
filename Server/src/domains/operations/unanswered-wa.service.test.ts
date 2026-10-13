@@ -86,10 +86,11 @@ import {
   handleOpInstanceEvent,
   sweepUnanswered,
   sendCallbackReminders,
-  AUTO_REPLY_TEXT,
   AUTO_REPLY_BUTTONS,
 } from "./unanswered-wa.service.js";
+import { DEFAULT_AUTO_REPLY_TEXT } from "./unanswered-wa.settings.js";
 import { isWithinOpWindow as isWithinWatchWindow } from "./op-hours.js";
+import { logger } from "../../config/logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — supabaseAdmin builder stub (mirrors other test files' pattern)
@@ -670,7 +671,7 @@ describe("sweepUnanswered", () => {
     expect(mockSendInteractiveButtonsWith).toHaveBeenCalledWith(
       CREDS,
       "972501111111@c.us",
-      AUTO_REPLY_TEXT,
+      DEFAULT_AUTO_REPLY_TEXT,
       AUTO_REPLY_BUTTONS,
     );
     const updateCall = mockPoolQuery.mock.calls.find(
@@ -829,7 +830,7 @@ describe("sweepUnanswered", () => {
     expect(mockSendInteractiveButtonsWith).toHaveBeenCalledWith(
       CREDS,
       "972501111111@c.us",
-      AUTO_REPLY_TEXT,
+      DEFAULT_AUTO_REPLY_TEXT,
       AUTO_REPLY_BUTTONS,
     );
   });
@@ -855,6 +856,119 @@ describe("sweepUnanswered", () => {
     expect(resolveCall![1]).toEqual(["row-1"]);
   });
 
+  describe("auto-reply body text from settings", () => {
+    const CHAT = "972501111111@c.us";
+    const minutesFromNow = (m: number) => new Date(WITHIN_WINDOW_NOW.getTime() + m * 60_000);
+
+    function settingsRows(opts: { permanent?: string; temporary?: { text: string; until: Date } }) {
+      const rows: { key: string; value: string }[] = [];
+      if (opts.permanent) rows.push({ key: "unanswered_wa_reply_permanent", value: opts.permanent });
+      if (opts.temporary) {
+        rows.push({
+          key: "unanswered_wa_reply_temporary",
+          value: JSON.stringify({ text: opts.temporary.text, until: opts.temporary.until.toISOString() }),
+        });
+      }
+      return { rows };
+    }
+
+    // The usual single-row happy path, with the system_settings read under test's control.
+    function mockSweep(
+      settings: () => Promise<unknown>,
+      rows: { id: string; chat_id: string }[] = [{ id: "row-1", chat_id: CHAT }],
+    ) {
+      mockPoolQuery.mockImplementation((sql: string) => {
+        if (sql.includes("system_settings")) return settings();
+        if (sql.includes("state = 'watching'")) return Promise.resolve({ rows });
+        if (sql.includes("count(*)::int")) return Promise.resolve({ rows: [{ c: 0 }] });
+        if (sql.includes("SELECT state FROM")) return Promise.resolve({ rows: [{ state: "watching" }] });
+        if (sql.includes("SELECT 1 FROM public.wa_unanswered")) return Promise.resolve({ rows: [], rowCount: 0 });
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      });
+    }
+
+    it("sends an active temporary text with the unchanged buttons", async () => {
+      mockSweep(() =>
+        Promise.resolve(
+          settingsRows({ permanent: "טקסט קבוע", temporary: { text: "טקסט זמני", until: minutesFromNow(60) } }),
+        ),
+      );
+
+      const result = await sweepUnanswered();
+
+      expect(result.autoReplied).toBe(1);
+      expect(mockSendInteractiveButtonsWith).toHaveBeenCalledTimes(1);
+      expect(mockSendInteractiveButtonsWith).toHaveBeenCalledWith(CREDS, CHAT, "טקסט זמני", AUTO_REPLY_BUTTONS);
+    });
+
+    it("falls back to the permanent text once the temporary one has expired", async () => {
+      mockSweep(() =>
+        Promise.resolve(
+          settingsRows({ permanent: "טקסט קבוע", temporary: { text: "טקסט זמני", until: minutesFromNow(-1) } }),
+        ),
+      );
+
+      await sweepUnanswered();
+
+      expect(mockSendInteractiveButtonsWith).toHaveBeenCalledWith(CREDS, CHAT, "טקסט קבוע", AUTO_REPLY_BUTTONS);
+    });
+
+    it("sends the original text when the settings read fails — the reply is never blocked", async () => {
+      mockSweep(() => Promise.reject(new Error("db down")));
+
+      const result = await sweepUnanswered();
+
+      expect(result.autoReplied).toBe(1);
+      expect(mockSendInteractiveButtonsWith).toHaveBeenCalledWith(
+        CREDS,
+        CHAT,
+        DEFAULT_AUTO_REPLY_TEXT,
+        AUTO_REPLY_BUTTONS,
+      );
+    });
+
+    it("evaluates expiry at send time: a temporary that lapses during pacing no longer applies to the next chat", async () => {
+      mockSweep(
+        () =>
+          Promise.resolve(
+            settingsRows({ permanent: "טקסט קבוע", temporary: { text: "טקסט זמני", until: minutesFromNow(0.2) } }),
+          ),
+        [
+          { id: "row-1", chat_id: "972501111111@c.us" },
+          { id: "row-2", chat_id: "972502222222@c.us" },
+        ],
+      );
+      // Each pacing sleep advances the faked clock by its duration (20s > the 12s of life left).
+      mockSleep.mockImplementation(async (ms: number) => {
+        vi.setSystemTime(new Date(Date.now() + ms));
+      });
+
+      const result = await sweepUnanswered();
+
+      expect(result.autoReplied).toBe(2);
+      expect(mockSendInteractiveButtonsWith).toHaveBeenNthCalledWith(
+        1,
+        CREDS,
+        "972501111111@c.us",
+        "טקסט זמני",
+        AUTO_REPLY_BUTTONS,
+      );
+      expect(mockSendInteractiveButtonsWith).toHaveBeenNthCalledWith(
+        2,
+        CREDS,
+        "972502222222@c.us",
+        "טקסט קבוע",
+        AUTO_REPLY_BUTTONS,
+      );
+    });
+
+    it("keeps the auto-reply buttons exactly as before", () => {
+      expect(AUTO_REPLY_BUTTONS).toEqual([
+        { buttonId: "ua_ok", buttonText: "תודה, אדבר עם המשרד" },
+        { buttonId: "ua_callback", buttonText: "אשמח שתחזור אליי" },
+      ]);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1100,6 +1214,34 @@ describe("sweepUnanswered — mode=log", () => {
     );
     expect(updateCall).toBeDefined();
     expect(updateCall![1]).toEqual(["row-1"]);
+  });
+
+  it("logs the active auto-reply text it would have sent", async () => {
+    const until = new Date("2026-07-05T11:00:00Z").toISOString(); // an hour after the mocked now
+    mockPoolQuery.mockImplementation((sql: string) => {
+      if (sql.includes("system_settings")) {
+        return Promise.resolve({
+          rows: [
+            { key: "unanswered_wa_reply_temporary", value: JSON.stringify({ text: "טקסט זמני", until }) },
+          ],
+        });
+      }
+      if (sql.includes("state = 'watching'")) {
+        return Promise.resolve({ rows: [{ id: "row-1", chat_id: "972501111111@c.us" }] });
+      }
+      if (sql.includes("count(*)::int")) return Promise.resolve({ rows: [{ c: 0 }] });
+      if (sql.includes("SELECT state FROM")) return Promise.resolve({ rows: [{ state: "watching" }] });
+      if (sql.includes("SELECT 1 FROM public.wa_unanswered")) return Promise.resolve({ rows: [], rowCount: 0 });
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+
+    await sweepUnanswered();
+
+    expect(mockSendInteractiveButtonsWith).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      { chatId: "972501111111@c.us", text: "טקסט זמני" },
+      expect.stringContaining("[LOG MODE]"),
+    );
   });
 });
 

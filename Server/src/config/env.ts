@@ -169,6 +169,14 @@ const envSchema = z.object({
   // (full pipeline, sends become log lines); "send" = real sends.
   UNANSWERED_WA_MODE: z.enum(["off", "log", "send"]).default("off"),
 
+  // Password for the owner's auto-reply settings page (/settings/) — sent as a Bearer token.
+  // Optional: unset disables the page (503), a missing key must never crash boot. Blank = unset
+  // (dotenv turns `KEY=` into "", which min(12) would otherwise reject and process.exit(1)).
+  SETTINGS_PASSWORD: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(12).optional(),
+  ),
+
   // Welcome-image URL sent as a second bubble after the opening intake message.
   // Blank string disables the feature; unset falls back to <BACKEND_URL>/assets/brand.jpeg.
   WELCOME_IMAGE_URL: z.string().optional(),
