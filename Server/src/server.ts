@@ -138,7 +138,14 @@ app.use((_req: Request, _res: Response) => {
 app.use(globalErrorHandler);
 
 // --- Graceful shutdown ---
-const server = app.listen(env.PORT, () => {
+const server = app.listen(env.PORT, (error) => {
+  // Express 5 also calls this on listen errors (EADDRINUSE). A copy that can't own the port
+  // must not run the schedulers: it would double every scheduled send.
+  if (error) {
+    logger.fatal({ err: error, port: env.PORT }, "HTTP server failed to start — exiting before any scheduler starts");
+    process.exit(1);
+  }
+
   logger.info(`Server running on ${env.BACKEND_URL} [${env.NODE_ENV}]`);
 
   // Ensure Supabase Storage bucket for client documents exists (best-effort, unconditional).
